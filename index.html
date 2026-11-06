@@ -125,6 +125,10 @@ body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-to
 .expand-exit-wrap{display:none}
 body.map-expanded .expand-exit-wrap{display:block}
 body.map-fs .expand-exit-wrap{display:block}
+.map-stage:fullscreen{position:relative;width:100%;height:100%;background:#05070a;align-items:stretch}
+.map-stage:fullscreen .map-side{display:flex;flex-direction:column}
+.map-stage:fullscreen .apoc-map{flex:1 1 auto;height:100%;min-height:0}
+.map-stage:fullscreen .fs-tools{position:absolute;left:50%;transform:translateX(-50%);bottom:10px;z-index:1200;max-width:94vw;background:hsla(222,20%,10%,.55);border:1px solid hsl(220 16% 34%);border-radius:12px;padding:6px 10px}
 #gmBtn{opacity:.48;filter:saturate(.3);transition:opacity .18s ease,filter .18s ease}
 #gmBtn.holding{opacity:.85;filter:saturate(.7)}
 #gmBtn[aria-pressed="true"]{opacity:1;filter:none}
@@ -1387,7 +1391,7 @@ setInterval(loadSharedEntries, 60000);
        fullscreen is unavailable or refused. */
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
     if (document.body.classList.contains("map-expanded")) { setExpanded(false); return; }
-    const el = $("apocMap");
+    const el = document.querySelector(".map-stage");
     let started = false;
     try {
       if (el.requestFullscreen) { const r = el.requestFullscreen(); started = true; if (r && r.catch) r.catch(() => setExpanded(true)); }
@@ -1406,10 +1410,35 @@ setInterval(loadSharedEntries, 60000);
     return d;
   };
   expandExitCtl.addTo(map);
+  /* When the map is maximized (the stage is the fullscreen element), the
+     art utensils come along: the Draw & paint row floats at the bottom
+     edge of the fullscreen map, translucent, nothing over the middle of
+     the play area (Shaun's standing fullscreen spec, restated 2026-11-06).
+     On exit the row goes back to its exact home below the map. */
+  let fsToolsHome = null;
+  function fsToolsIn(){
+    const row = $("drawStatus") ? $("drawStatus").closest(".map-tools") : null;
+    const stage = document.querySelector(".map-stage");
+    if (!row || !stage || fsToolsHome) return;
+    fsToolsHome = { parent: row.parentNode, next: row.nextSibling };
+    row.classList.add("fs-tools");
+    stage.appendChild(row);
+  }
+  function fsToolsOut(){
+    if (!fsToolsHome) return;
+    const row = document.querySelector(".map-tools.fs-tools");
+    if (row) {
+      row.classList.remove("fs-tools");
+      if (fsToolsHome.next && fsToolsHome.next.parentNode === fsToolsHome.parent) fsToolsHome.parent.insertBefore(row, fsToolsHome.next);
+      else fsToolsHome.parent.appendChild(row);
+    }
+    fsToolsHome = null;
+  }
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && document.body.classList.contains("map-expanded")) setExpanded(false);
-    const mapFs = !!document.fullscreenElement && document.fullscreenElement.id === "apocMap";
+    const mapFs = !!document.fullscreenElement && document.fullscreenElement.classList.contains("map-stage");
     document.body.classList.toggle("map-fs", mapFs);
+    if (mapFs) fsToolsIn(); else fsToolsOut();
     if (!document.body.classList.contains("map-expanded")) $("mapExpandBtn").textContent = mapFs ? "⛶ Exit full screen" : "⛶ Expand map";
     setTimeout(() => map.invalidateSize(), 200);
   });
@@ -3129,7 +3158,7 @@ setInterval(loadSharedEntries, 60000);
      to fullscreen the whole panel/page; he wants the map itself) ---- */
   $("fsBtn").addEventListener("click", () => {
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
-    const el = $("apocMap");
+    const el = document.querySelector(".map-stage");
     try { if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(() => {}); } }
     catch(err) { /* fullscreen unavailable here — the Expand view still works */ }
   });
