@@ -233,7 +233,7 @@ body.bg-animated::before{animation:none}
 .map-stage{display:flex;gap:14px;align-items:flex-start;margin-top:12px}
 .map-stage .map-side{flex:1 1 auto;min-width:0}
 .map-repo{flex:0 0 300px;min-width:0}
-.map-repo:has(> .lib-panel[hidden]):not(:has(> .lib-panel:not([hidden]))){display:none}
+.map-repo:has(.lib-panel[hidden]):not(:has(.lib-panel:not([hidden]))){display:none}
 .map-repo .lib-panel{margin:0}
 @media (max-width:820px){
 .map-stage{flex-direction:column}
@@ -263,7 +263,7 @@ input,select,textarea{font-size:16px}
 @media (max-width:820px){
   .map-stage{flex-direction:row}
   .map-repo{position:fixed;top:0;right:0;height:100dvh;width:min(320px,86vw);flex:none;z-index:1500;background:var(--background);overflow-y:auto;padding:10px;box-shadow:-14px 0 34px rgba(0,0,0,.45)}
-  .map-repo:has(> #tokenLib[hidden]){display:none}
+  .map-repo:has(#tokenLib[hidden]){display:none}
   #repoTab{display:block;position:fixed;right:0;top:42%;z-index:1400;writing-mode:vertical-rl;padding:16px 9px;border-radius:12px 0 0 12px;min-height:120px}
 }
 .stamp-picked{border-color:var(--primary) !important;color:var(--primary)}
@@ -387,6 +387,24 @@ body.displaying .init-strip{font-size:1.05rem}
 .mr-sub{display:block;font-size:.72rem;opacity:.75}
 .mr-del{flex:none;min-width:36px;min-height:36px;border-radius:8px;border:1px solid hsl(0 40% 40%);background:transparent;color:#e08a8a;cursor:pointer}
 .mr-folder{font-size:.78rem;font-weight:700;margin:8px 0 2px;opacity:.85}
+
+/* ---- v1.11: Art Library nesting (Shaun) — everything art-related sits
+   nested under its own header, and those headers nest under ONE parent
+   header, "Art Library", in the right-edge rail. Headers are minimized
+   by default and expand on tap (Shaun's nested pattern); item grids and
+   lists exist only inside an expanded header. Transparent throughout. */
+.artlib{border:1px solid hsl(222 18% 26%);border-radius:12px;padding:2px 8px 8px;background:transparent}
+.artlib .lib-panel{border:0;border-radius:0;padding:0;margin:0;background:transparent}
+.nest{border:1px solid hsl(222 18% 28%);border-radius:10px;margin:8px 0;background:transparent}
+.nest-head{display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;background:transparent;border:0;border-radius:10px;color:inherit;font:inherit;font-weight:700;text-align:left;padding:8px 10px;min-height:44px;cursor:pointer}
+.nest-head::after{content:"▸";color:var(--primary);flex:none;font-weight:700}
+.nest.open > .nest-head::after{content:"▾"}
+.nest-body{display:none;padding:2px 8px 10px}
+.nest.open > .nest-body{display:block}
+.artlib-head{font-size:1.08rem;padding:10px}
+.mr-nest{margin:6px 0}
+.mr-folder-head{font-size:.82rem;min-height:40px;padding:6px 10px}
+.mr-body{padding:2px 4px 8px}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -612,8 +630,10 @@ body.displaying .init-strip{font-size:1.05rem}
       <button type="button" class="btn primary" id="drawFinish" hidden>Finish shape</button>
     </div>
     <div class="lib-panel" id="stampLib" hidden>
-      <p class="lib-head">Stamps</p>
-      <div class="lib-grid" id="stampGrid"></div>
+      <div class="nest">
+        <button type="button" class="nest-head" aria-expanded="false">Stamps</button>
+        <div class="nest-body"><div class="lib-grid" id="stampGrid"></div></div>
+      </div>
     </div>
     <div class="lib-panel" id="tplLib" hidden>
       <p class="lib-head">Bursts — radius</p>
@@ -670,31 +690,58 @@ body.displaying .init-strip{font-size:1.05rem}
         <div id="placeCard" class="place-card" hidden></div>
         <p class="map-status muted small" id="mapStatus">Loading the shared markers…</p>
       </div>
-      <aside class="map-repo" aria-label="Token repository">
-        <div class="lib-panel" id="tokenLib" hidden>
-          <div class="field" style="max-width:280px">
-            <label for="libName">Name for the next token (optional)</label>
-            <input id="libName" type="text" autocomplete="off" placeholder="e.g. Goblin 3">
+      <aside class="map-repo" aria-label="Art Library">
+        <div class="nest artlib" id="artLibrary">
+          <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
+          <div class="nest-body">
+            <div class="lib-panel" id="tokenLib" hidden>
+              <div class="nest">
+                <button type="button" class="nest-head" aria-expanded="false">Tokens</button>
+                <div class="nest-body">
+                  <div class="field" style="max-width:280px">
+                    <label for="libName">Name for the next token (optional)</label>
+                    <input id="libName" type="text" autocomplete="off" placeholder="e.g. Goblin 3">
+                  </div>
+                  <div class="nest">
+                    <button type="button" class="nest-head" aria-expanded="false">Symbols</button>
+                    <div class="nest-body"><div class="lib-grid" id="libSymbols"></div></div>
+                  </div>
+                  <div class="nest">
+                    <button type="button" class="nest-head" aria-expanded="false">Discs &amp; numbers</button>
+                    <div class="nest-body"><div class="lib-grid" id="libDiscs"></div></div>
+                  </div>
+                  <div class="nest">
+                    <button type="button" class="nest-head" aria-expanded="false">Artwork — Saint James &amp; Cody's gallery</button>
+                    <div class="nest-body"><div class="lib-grid" id="libArt"></div></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="nest" id="monsterNest">
+              <button type="button" class="nest-head" aria-expanded="false">Monsters</button>
+              <div class="nest-body">
+                <div class="lib-grid" id="libMonsters"></div>
+                <p class="muted small" id="monsterLibNote">Nothing here yet — the DM monster repository lands under this header when it is populated.</p>
+              </div>
+            </div>
+            <div class="lib-panel" id="mapRepo">
+              <div class="nest" id="mapsNest">
+                <button type="button" class="nest-head" aria-expanded="false"><span>Maps repository <span class="muted small" id="mapRepoCount"></span></span></button>
+                <div class="nest-body">
+                  <div class="field">
+                    <label for="mapRepoSearch">Search maps</label>
+                    <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
+                  </div>
+                  <div class="mr-list" id="mapRepoList"><p class="muted small">Loading the repository…</p></div>
+                  <p class="muted small" id="mapRepoStatus"></p>
+                </div>
+              </div>
+            </div>
           </div>
-          <p class="lib-head">Symbols</p>
-          <div class="lib-grid" id="libSymbols"></div>
-          <p class="lib-head">Discs &amp; numbers</p>
-          <div class="lib-grid" id="libDiscs"></div>
-          <p class="lib-head">Artwork — Saint James &amp; Cody's gallery</p>
-          <div class="lib-grid" id="libArt"></div>
-        </div>
-        <div class="lib-panel" id="mapRepo">
-          <p class="lib-head">Maps repository <span class="muted small" id="mapRepoCount"></span></p>
-          <div class="field">
-            <label for="mapRepoSearch">Search maps</label>
-            <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
-          </div>
-          <div class="mr-list" id="mapRepoList"><p class="muted small">Loading the repository…</p></div>
-          <p class="muted small" id="mapRepoStatus"></p>
         </div>
       </aside>
     </div>
-    <button type="button" class="btn primary" id="repoTab">Repository</button>
+    <button type="button" class="btn primary" id="repoTab">Art Library</button>
     <form id="markerForm" class="marker-form" hidden>
       <div class="form-grid">
         <div class="field">
@@ -1483,7 +1530,11 @@ setInterval(loadSharedEntries, 60000);
     const p = $("tokenLib");
     p.hidden = !p.hidden;
     $("libBtn").setAttribute("aria-pressed", String(!p.hidden));
-    if (!p.hidden) p.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    if (!p.hidden) {
+      const al = $("artLibrary");
+      if (al && !al.classList.contains("open")) { al.classList.add("open"); const ah = al.querySelector(":scope > .nest-head"); if (ah) ah.setAttribute("aria-expanded", "true"); }
+      p.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   });
 
   $("tokenCancel").addEventListener("click", closeTokenEditor);
@@ -3983,6 +4034,19 @@ setInterval(loadSharedEntries, 60000);
    shelf is identical on every screen and every map keeps its
    per-map VTT state, projection and Push-to-TV display. */
 (function(){
+  /* v1.11: nested Art Library headers — ONE delegated toggle for every
+     .nest-head on the page (static rail sections, Stamps, and the
+     dynamic map-folder groups built by render() alike). A header tap
+     expands/collapses its own nest only. Registered here, outside the
+     listEl guard, so it covers the whole rail. */
+  document.addEventListener("click", function(e){
+    var h = e.target && e.target.closest ? e.target.closest(".nest-head") : null;
+    if (!h) return;
+    var nest = h.parentElement;
+    if (!nest || !nest.classList.contains("nest")) return;
+    var open = nest.classList.toggle("open");
+    h.setAttribute("aria-expanded", open ? "true" : "false");
+  });
   var listEl = document.getElementById("mapRepoList");
   if (!listEl) return;
   var countEl = document.getElementById("mapRepoCount");
@@ -4048,6 +4112,20 @@ setInterval(loadSharedEntries, 60000);
     }
     return row;
   }
+  /* v1.11: each folder group renders as a nested header (minimized by
+     default; a live search auto-expands the groups that hold matches). */
+  function groupNest(title, startOpen){
+    var wrap = document.createElement("div");
+    wrap.className = "nest mr-nest" + (startOpen ? " open" : "");
+    var h = document.createElement("button");
+    h.type = "button"; h.className = "nest-head mr-folder-head";
+    h.setAttribute("aria-expanded", startOpen ? "true" : "false");
+    h.textContent = title;
+    var body = document.createElement("div");
+    body.className = "nest-body mr-body";
+    wrap.appendChild(h); wrap.appendChild(body);
+    return { wrap: wrap, body: body };
+  }
   function render(force){
     var recs = (typeof dropMaps !== "undefined" && Array.isArray(dropMaps)) ? dropMaps : [];
     var sig = recs.length + "|" + recs.map(function(r){ return r.id; }).join(",") + "|" + currentMapId + "|" + filter;
@@ -4057,13 +4135,12 @@ setInterval(loadSharedEntries, 60000);
     var match = function(n){ return !f || n.toLowerCase().indexOf(f) >= 0; };
     listEl.innerHTML = "";
     var shown = 0;
-    var bh = document.createElement("p"); bh.className = "mr-folder"; bh.textContent = "Built-in maps";
-    var bFrag = document.createDocumentFragment(); var bCount = 0;
+    var bNest = groupNest("Built-in maps", !!f); var bCount = 0;
     BUILTINS.forEach(function(b){
       if (!match(b.name)) return;
-      bFrag.appendChild(itemRow({ id: b.id, name: b.name, thumbUrl: b.thumb, w: b.w, h: b.h, note: "built-in" })); bCount++;
+      bNest.body.appendChild(itemRow({ id: b.id, name: b.name, thumbUrl: b.thumb, w: b.w, h: b.h, note: "built-in" })); bCount++;
     });
-    if (bCount) { listEl.appendChild(bh); listEl.appendChild(bFrag); shown += bCount; }
+    if (bCount) { listEl.appendChild(bNest.wrap); shown += bCount; }
     var groups = {};
     recs.forEach(function(r){
       var g = r.id.indexOf("drop-") === 0 ? "drop" : (r.folder || "drop");
@@ -4073,11 +4150,9 @@ setInterval(loadSharedEntries, 60000);
       var items = groups[g].filter(function(r){ return match(r.name || r.id); });
       if (!items.length) return;
       items.sort(function(a, b){ return (a.name || "").localeCompare(b.name || ""); });
-      var h = document.createElement("p"); h.className = "mr-folder";
-      h.textContent = (FOLDERS[g] || g) + " (" + items.length + ")";
-      listEl.appendChild(h);
+      var gn = groupNest((FOLDERS[g] || g) + " (" + items.length + ")", !!f);
       items.forEach(function(r){
-        listEl.appendChild(itemRow({
+        gn.body.appendChild(itemRow({
           id: r.id, name: r.name || r.id,
           thumbUrl: r.thumb ? pub(r.thumb) : pub(r.path),
           w: r.w, h: r.h,
@@ -4085,6 +4160,7 @@ setInterval(loadSharedEntries, 60000);
           rec: r
         }));
       });
+      listEl.appendChild(gn.wrap);
       shown += items.length;
     });
     if (!shown) listEl.innerHTML = "<p class=\"muted small\">No maps match.</p>";
@@ -4093,7 +4169,20 @@ setInterval(loadSharedEntries, 60000);
   var deb = null;
   if (searchEl) searchEl.addEventListener("input", function(){
     clearTimeout(deb);
-    deb = setTimeout(function(){ filter = searchEl.value || ""; render(true); }, 150);
+    deb = setTimeout(function(){
+      filter = searchEl.value || "";
+      if (filter.trim()) {
+        ["artLibrary", "mapsNest"].forEach(function(id){
+          var n = document.getElementById(id);
+          if (n && !n.classList.contains("open")) {
+            n.classList.add("open");
+            var hd = n.querySelector(":scope > .nest-head");
+            if (hd) hd.setAttribute("aria-expanded", "true");
+          }
+        });
+      }
+      render(true);
+    }, 150);
   });
   render(true);
   setInterval(function(){ render(false); }, 3000);
@@ -4131,7 +4220,7 @@ setInterval(loadSharedEntries, 60000);
   def(document.getElementById("lightControls"), "tools-light", "Lighting & walls");
   def(rows[4], "tools-draw", "Draw & paint");
   def(rows[5], "tools-layers", "Layers");
-  def(repo, "repo", "Repository");
+  def(repo, "repo", "Art Library");
   def(cols[0], "dice", "Dice");
   def(cols[1], "init", "Initiative");
   var byId = {};
