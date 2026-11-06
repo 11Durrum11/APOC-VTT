@@ -407,6 +407,9 @@ body.displaying .init-strip{font-size:1.05rem}
 .mr-nest{margin:6px 0}
 .mr-folder-head{font-size:.82rem;min-height:40px;padding:6px 10px}
 .mr-body{padding:2px 4px 8px}
+/* ---- map generator ---- */
+#genNest{flex:1 1 100%}
+.gen-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:4px 2px}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -484,6 +487,7 @@ body.displaying .init-strip{font-size:1.05rem}
         </div>
       </aside>
     </div>
+    
     <div class="map-tools">
       <div class="field">
         <input id="placeSearch" type="text" autocomplete="off" aria-label="Find a place" placeholder="Search — e.g. Silverymoon, Candlekeep, Waterdeep">
@@ -691,6 +695,56 @@ body.displaying .init-strip{font-size:1.05rem}
       </div>
       <button type="button" class="btn primary" id="drawFinish" hidden>Finish shape</button>
     </div>
+    <div class="map-tools">
+      <div class="nest" id="genNest">
+        <button type="button" class="nest-head" aria-expanded="false">Generate map</button>
+        <div class="nest-body">
+          <div class="gen-row">
+            <div class="field" style="flex:0 1 auto">
+              <label for="genType">Place</label>
+              <select id="genType">
+                <option value="tavern">Tavern</option>
+                <option value="dungeon" selected>Dungeon rooms</option>
+                <option value="crypt">Crypt</option>
+                <option value="cave">Cave</option>
+                <option value="prison">Prison</option>
+                <option value="shop">Shop</option>
+                <option value="temple">Temple</option>
+                <option value="warehouse">Warehouse</option>
+                <option value="forest">Forest clearing</option>
+              </select>
+            </div>
+            <div class="field" style="flex:0 1 auto">
+              <label for="genSize">Size</label>
+              <select id="genSize">
+                <option value="small">Small — 14×11</option>
+                <option value="medium" selected>Medium — 20×15</option>
+                <option value="large">Large — 26×19</option>
+                <option value="huge">Huge — 32×24</option>
+              </select>
+            </div>
+            <div class="field" style="flex:0 1 auto">
+              <label for="genTheme">Floor</label>
+              <select id="genTheme">
+                <option value="stone" selected>Stone flags</option>
+                <option value="wood">Wood planks</option>
+                <option value="dirt">Dirt &amp; rock</option>
+                <option value="marble">Marble</option>
+                <option value="darkstone">Dark stone</option>
+                <option value="grass">Grass &amp; dirt</option>
+              </select>
+            </div>
+            <div class="field" style="flex:1 1 180px">
+              <label for="genNotes">Notes (optional)</label>
+              <input id="genNotes" type="text" autocomplete="off" placeholder="e.g. the sunken chapel under the Bastion">
+            </div>
+            <button type="button" class="btn primary" id="genBtn">Generate map</button>
+            <button type="button" class="btn" id="genRerollBtn" title="New layout for the generated map currently loaded, same place, size and floor">Re-roll layout</button>
+            <span class="muted small" id="genStatus"></span>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="lib-panel" id="tplLib" hidden>
       <p class="lib-head">Bursts — radius</p>
       <div class="lib-grid" id="tplBursts"></div>
@@ -740,6 +794,7 @@ body.displaying .init-strip{font-size:1.05rem}
         <span class="muted small" id="ashMeta"></span>
       </div>
     </div>
+    
     
     <button type="button" class="btn primary" id="repoTab">Art Library</button>
     <form id="markerForm" class="marker-form" hidden>
@@ -3024,7 +3079,7 @@ setInterval(loadSharedEntries, 60000);
   const dropCell = (w, h) => Math.max(10, Math.round(Math.max(w, h) / 60));
   function dropPublicUrl(path){ return `${SUPABASE_URL}/storage/v1/object/public/${DROP_BUCKET}/${path}`; }
   function registerDropMap(rec, localUrl){
-    MAPS[rec.id] = { name: rec.name, img: localUrl || dropPublicUrl(rec.path), w: rec.w, h: rec.h, cell: dropCell(rec.w, rec.h), drop: true };
+    MAPS[rec.id] = { name: rec.name, img: localUrl || dropPublicUrl(rec.path), w: rec.w, h: rec.h, cell: rec.cell || dropCell(rec.w, rec.h), drop: true };
     let opt = $("mapSelect").querySelector(`option[value="${rec.id}"]`);
     if (!opt) { opt = document.createElement("option"); opt.value = rec.id; $("mapSelect").appendChild(opt); }
     opt.textContent = rec.name;
@@ -3922,6 +3977,540 @@ setInterval(loadSharedEntries, 60000);
     else if (k === "r") $("rulerBtn").click();
     else if (k === "g") $("gridToggle").click();
   });
+
+  /* ================= v1.13: Dungeon Alchemist-style map generator =================
+     Pick a place type, a size and a floor theme; the generator lays
+     out connected rooms, writes real walls + doors into the map's
+     lighting layer (dynamic lighting works immediately), furnishes
+     the rooms with props from the Art Library symbol set (ordinary
+     stamp drawings afterwards — select, move, duplicate, delete like
+     anything else), and places light sources from the usual presets.
+     The floor is a canvas texture uploaded like any dropped map, so
+     the generated map registers in the same shared vtt_dropmaps
+     registry and appears in the Maps repository. Generation data
+     (rooms, wall heights, props) is stored per map under
+     vtt_gen_<mapId> — the 3D view builds on it.
+     APOC screening: no summoning circles or planar dressing in any
+     prop table (summoning does not work in the APOC). */
+/* APOC-VTT map generator core — pure layout logic (no DOM), unit-tested
+   in node, then inlined into index.html. Grid space: cells [gx, gy]. */
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+const GEN_TYPES = {
+  tavern:    { label: "Tavern",          rooms: [5, 7],  roomW: [4, 9], roomH: [3, 7], theme: "wood"  },
+  dungeon:   { label: "Dungeon rooms",   rooms: [7, 11], roomW: [3, 7], roomH: [3, 6], theme: "stone" },
+  crypt:     { label: "Crypt",           rooms: [5, 8],  roomW: [3, 7], roomH: [3, 6], theme: "darkstone" },
+  prison:    { label: "Prison",          rooms: [0, 0],  roomW: [3, 3], roomH: [3, 3], theme: "stone" },
+  shop:      { label: "Shop",            rooms: [2, 3],  roomW: [5, 9], roomH: [4, 7], theme: "wood"  },
+  temple:    { label: "Temple",          rooms: [3, 5],  roomW: [4, 9], roomH: [4, 8], theme: "marble" },
+  warehouse: { label: "Warehouse",       rooms: [2, 3],  roomW: [6, 11], roomH: [5, 8], theme: "wood" },
+  cave:      { label: "Cave",            rooms: [0, 0],  roomW: [0, 0], roomH: [0, 0], theme: "dirt"  },
+  forest:    { label: "Forest clearing", rooms: [0, 0],  roomW: [0, 0], roomH: [0, 0], theme: "grass" }
+};
+/* APOC screening: no summoning circles, no planar/extra-dimensional
+   dressing anywhere in the prop tables. */
+const PROP_DEFS = {
+  table:     { sym: "🟫", color: "amber", size: 2, fw: 2, fh: 2 },
+  chair:     { sym: "🪑", color: "amber", size: 1, fw: 1, fh: 1 },
+  barrel:    { sym: "🛢️", color: "amber", size: 1, fw: 1, fh: 1 },
+  crate:     { sym: "📦", color: "amber", size: 1, fw: 1, fh: 1 },
+  bed:       { sym: "🛏️", color: "grey",  size: 2, fw: 2, fh: 2 },
+  chest:     { sym: "🧰", color: "amber", size: 1, fw: 1, fh: 1 },
+  shelf:     { sym: "📚", color: "amber", size: 1, fw: 1, fh: 1 },
+  altar:     { sym: "†",  color: "gold",  size: 2, fw: 2, fh: 2 },
+  coffin:    { sym: "⚰️", color: "grey",  size: 2, fw: 2, fh: 2 },
+  fireplace: { sym: "🔥", color: "red",   size: 1, fw: 1, fh: 1 },
+  brazier:   { sym: "🔥", color: "red",   size: 1, fw: 1, fh: 1 },
+  candle:    { sym: "🕯️", color: "gold",  size: 1, fw: 1, fh: 1 },
+  statue:    { sym: "🗿", color: "grey",  size: 1, fw: 1, fh: 1 },
+  counter:   { sym: "🟫", color: "amber", size: 2, fw: 2, fh: 2 },
+  throne:    { sym: "👑", color: "gold",  size: 1, fw: 1, fh: 1 },
+  tree:      { sym: "🌲", color: "green", size: 2, fw: 2, fh: 2 },
+  rock:      { sym: "🪨", color: "grey",  size: 1, fw: 1, fh: 1 },
+  bush:      { sym: "🌿", color: "green", size: 1, fw: 1, fh: 1 },
+  stump:     { sym: "🪵", color: "amber", size: 1, fw: 1, fh: 1 },
+  tent:      { sym: "⛺", color: "amber", size: 2, fw: 2, fh: 2 },
+  rubble:    { sym: "🪨", color: "grey",  size: 1, fw: 1, fh: 1 }
+};
+const LIB_HEX_KEYS = ["amber", "red", "blue", "green", "violet", "grey", "gold"];
+/* note: "gold" is not in the site's LIB_HEX — map gold->amber at emit time */
+
+function genLayout(typeKey, cols, rows, seed){
+  const rng = mulberry32(seed);
+  const def = GEN_TYPES[typeKey] || GEN_TYPES.dungeon;
+  const grid = Array.from({ length: rows }, () => new Array(cols).fill(0)); /* 0 void, 1 floor */
+  const roomAt = Array.from({ length: rows }, () => new Array(cols).fill(-1));
+  const rooms = [];
+  const ri = (a, b) => a + Math.floor(rng() * (b - a + 1));
+
+  if (typeKey === "forest") {
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) grid[y][x] = 1;
+    const cx = cols / 2, cy = rows / 2, rx = cols * 0.30, ry = rows * 0.30;
+    const clearing = new Set();
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      const dx = (x + 0.5 - cx) / rx, dy = (y + 0.5 - cy) / ry;
+      if (dx * dx + dy * dy <= 1) clearing.add(x + "," + y);
+    }
+    return finish(typeKey, cols, rows, grid, roomAt, rooms, new Set(), rng, { clearing, noWalls: true });
+  }
+
+  if (typeKey === "cave") {
+    let g = Array.from({ length: rows }, (_, y) => Array.from({ length: cols }, (_, x) =>
+      (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) ? 0 : (rng() < 0.45 ? 0 : 1)));
+    for (let it = 0; it < 4; it++) {
+      const n = g.map(row => row.slice());
+      for (let y = 1; y < rows - 1; y++) for (let x = 1; x < cols - 1; x++) {
+        let wall = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (!g[y + dy][x + dx]) wall++;
+        n[y][x] = g[y][x] ? (wall >= 5 ? 0 : 1) : (wall >= 4 ? 1 : 0);
+      }
+      g = n;
+    }
+    /* keep the largest connected floor region */
+    const seen = Array.from({ length: rows }, () => new Array(cols).fill(false));
+    let best = [];
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      if (!g[y][x] || seen[y][x]) continue;
+      const comp = [], q = [[x, y]]; seen[y][x] = true;
+      while (q.length) { const [qx, qy] = q.pop(); comp.push([qx, qy]);
+        for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) { const nx = qx + dx, ny = qy + dy;
+          if (nx >= 0 && ny >= 0 && nx < cols && ny < rows && g[ny][nx] && !seen[ny][nx]) { seen[ny][nx] = true; q.push([nx, ny]); } } }
+      if (comp.length > best.length) best = comp;
+    }
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) grid[y][x] = 0;
+    for (const [x, y] of best) grid[y][x] = 1;
+    return finish(typeKey, cols, rows, grid, roomAt, rooms, new Set(), rng, {});
+  }
+
+  if (typeKey === "prison") {
+    const midY = Math.floor(rows / 2);
+    for (let x = 1; x < cols - 1; x++) { grid[midY][x] = 2; if (midY + 1 < rows) grid[midY + 1][x] = 2; }
+    const cellW = 3, cellH = 3;
+    for (const topY of [midY - cellH, midY + 2]) {
+      if (topY < 1 || topY + cellH > rows - 1) continue;
+      for (let x = 1; x + cellW <= cols - 1; x += cellW + 1) {
+        const room = { x, y: topY, w: cellW, h: cellH, kind: "cell" };
+        rooms.push(room);
+        for (let y = topY; y < topY + cellH; y++) for (let xx = x; xx < x + cellW; xx++) { grid[y][xx] = 1; roomAt[y][xx] = rooms.length - 1; }
+      }
+    }
+    return finish(typeKey, cols, rows, grid, roomAt, rooms, new Set(), rng, { prison: true });
+  }
+
+  /* generic room packer */
+  const target = ri(def.rooms[0], def.rooms[1]);
+  let attempts = 0;
+  while (rooms.length < target && attempts < 300) {
+    attempts++;
+    const w = ri(def.roomW[0], def.roomW[1]), h = ri(def.roomH[0], def.roomH[1]);
+    const x = ri(1, cols - w - 1), y = ri(1, rows - h - 1);
+    let ok = true;
+    for (const r of rooms) if (x < r.x + r.w + 1 && x + w + 1 > r.x && y < r.y + r.h + 1 && y + h + 1 > r.y) { ok = false; break; }
+    if (!ok) continue;
+    const room = { x, y, w, h, kind: "generic" };
+    rooms.push(room);
+    for (let yy = y; yy < y + h; yy++) for (let xx = x; xx < x + w; xx++) { grid[yy][xx] = 1; roomAt[yy][xx] = rooms.length - 1; }
+  }
+  /* room kinds: largest room is the feature room */
+  let big = 0;
+  rooms.forEach((r, i) => { if (r.w * r.h > rooms[big].w * rooms[big].h) big = i; });
+  rooms.forEach((r, i) => {
+    if (i === big) r.kind = { tavern: "common", temple: "sanctum", shop: "shopfloor", warehouse: "store", crypt: "burial", dungeon: "lair" }[typeKey] || "generic";
+    else r.kind = { tavern: rng() < 0.4 ? "bedroom" : "kitchen", temple: "chapel", shop: "storage", warehouse: "office", crypt: "burial", dungeon: rng() < 0.5 ? "storage" : "generic" }[typeKey] || "generic";
+  });
+  /* corridors: chain room centers, L paths (value 2 = corridor floor) */
+  const centers = rooms.map(r => [r.x + Math.floor(r.w / 2), r.y + Math.floor(r.h / 2)]);
+  const order = centers.map((_, i) => i).sort((a, b) => centers[a][0] - centers[b][0]);
+  for (let k = 1; k < order.length; k++) {
+    let [x, y] = centers[order[k - 1]];
+    const [tx, ty] = centers[order[k]];
+    const carve = (cx, cy) => { if (grid[cy][cx] === 0) grid[cy][cx] = 2; };
+    const horizFirst = rng() < 0.5;
+    const legH = () => { while (x !== tx) { carve(x, y); x += Math.sign(tx - x); } carve(x, y); };
+    const legV = () => { while (y !== ty) { carve(x, y); y += Math.sign(ty - y); } carve(x, y); };
+    if (horizFirst) { legH(); legV(); } else { legV(); legH(); }
+  }
+  return finish(typeKey, cols, rows, grid, roomAt, rooms, new Set(), rng, {});
+}
+
+function finish(typeKey, cols, rows, grid, roomAt, rooms, _unused, rng, extra){
+  const isFloor = (x, y) => x >= 0 && y >= 0 && x < cols && y < rows && grid[y][x] > 0;
+  const inRoom = (x, y) => x >= 0 && y >= 0 && x < cols && y < rows && roomAt[y][x] >= 0;
+  /* --- door edges: between a room cell and a non-room floor cell.
+     Straight-through rule: the non-room cell must continue in the
+     same direction (floor beyond it, not a room corner cell) — so a
+     door never lands on a corner. --- */
+  const edgeKey = (x1, y1, x2, y2) => [x1, y1, x2, y2].join(",");
+  const doorEdges = new Map(); /* key -> {a:[x,y],b:[x,y]} in corner coords */
+  const fillEdges = new Set(); /* room/corridor adjacencies that are NOT doors -> wall fills the opening */
+  const cornerOf = (cx, cy, dir) => dir === "E" ? [cx + 1, cy, cx + 1, cy + 1]
+    : dir === "W" ? [cx, cy, cx, cy + 1]
+    : dir === "S" ? [cx, cy + 1, cx + 1, cy + 1] : [cx, cy, cx + 1, cy];
+  const dirs = { E: [1, 0], W: [-1, 0], S: [0, 1], N: [0, -1] };
+  const roomDoorCount = new Map();
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+    if (!inRoom(x, y)) continue;
+    const rid = roomAt[y][x];
+    for (const d of Object.keys(dirs)) {
+      const [dx, dy] = dirs[d], nx = x + dx, ny = y + dy;
+      if (!isFloor(nx, ny) || inRoom(nx, ny)) continue;
+      /* corridor cell (nx,ny); straight-through: cell beyond it along d is floor and this edge is not at the room's corner row/col extremity beyond the corridor's width */
+      const bx = nx + dx, by = ny + dy;
+      const straight = isFloor(bx, by);
+      const e = cornerOf(x, y, d), key = edgeKey(...e);
+      if (doorEdges.has(key) || fillEdges.has(key)) continue;
+      const cnt = roomDoorCount.get(rid) || 0;
+      if (straight && cnt < 2 && rng() < 0.85) { doorEdges.set(key, { a: [e[0], e[1]], b: [e[2], e[3]] }); roomDoorCount.set(rid, cnt + 1); }
+      else fillEdges.add(key);
+    }
+  }
+  /* every room must end up with at least one door if it touches corridor */
+  for (let i = 0; i < rooms.length; i++) {
+    if ((roomDoorCount.get(i) || 0) > 0) continue;
+    const r = rooms[i];
+    outer: for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++) {
+      for (const d of Object.keys(dirs)) {
+        const [dx, dy] = dirs[d], nx = x + dx, ny = y + dy;
+        if (isFloor(nx, ny) && !inRoom(nx, ny)) {
+          const e = cornerOf(x, y, d), key = edgeKey(...e);
+          fillEdges.delete(key); doorEdges.set(key, { a: [e[0], e[1]], b: [e[2], e[3]] });
+          roomDoorCount.set(i, 1); break outer;
+        }
+      }
+    }
+  }
+  /* keep-clear cells: both cells touching a door edge */
+  const doorCells = new Set();
+  for (const { a, b } of doorEdges.values()) {
+    /* edge from corner a to corner b; the two cells share that edge */
+    if (a[0] === b[0]) { doorCells.add((a[0] - 1) + "," + a[1]); doorCells.add(a[0] + "," + a[1]); }
+    else { doorCells.add(a[0] + "," + (a[1] - 1)); doorCells.add(a[0] + "," + a[1]); }
+  }
+  /* --- wall unit edges: floor against void/outside --- */
+  const wallUnit = new Set();
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+    if (!isFloor(x, y)) continue;
+    for (const d of Object.keys(dirs)) {
+      const [dx, dy] = dirs[d];
+      if (!isFloor(x + dx, y + dy)) wallUnit.add(edgeKey(...cornerOf(x, y, d)));
+    }
+  }
+  for (const k of fillEdges) wallUnit.add(k);
+  for (const k of doorEdges.keys()) wallUnit.delete(k);
+  if (extra.noWalls) wallUnit.clear();
+  /* --- merge collinear unit edges into segments (corner coords) --- */
+  const segs = [];
+  const used = new Set();
+  for (const k of wallUnit) {
+    if (used.has(k)) continue;
+    const [x1, y1, x2, y2] = k.split(",").map(Number);
+    let ex = x2, ey = y2;
+    if (y1 === y2) { /* horizontal: extend +x */
+      while (wallUnit.has(edgeKey(ex, y1, ex + 1, y1)) && !used.has(edgeKey(ex, y1, ex + 1, y1))) { used.add(edgeKey(ex, y1, ex + 1, y1)); ex++; }
+    } else { /* vertical: extend +y */
+      while (wallUnit.has(edgeKey(x1, ey, x1, ey + 1)) && !used.has(edgeKey(x1, ey, x1, ey + 1))) { used.add(edgeKey(x1, ey, x1, ey + 1)); ey++; }
+    }
+    used.add(k);
+    segs.push({ a: [x1, y1], b: [ex, ey] });
+  }
+  return { grid, roomAt, rooms, walls: segs, doors: [...doorEdges.values()], doorCells, clearing: extra.clearing || null, prison: !!extra.prison };
+}
+
+/* connectivity check: all floor reachable from first floor cell */
+function floorConnected(L, cols, rows){
+  let start = null, total = 0;
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) if (L.grid[y][x] > 0) { total++; if (!start) start = [x, y]; }
+  if (!start) return false;
+  const seen = new Set([start.join(",")]); const q = [start];
+  while (q.length) { const [x, y] = q.pop();
+    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) { const nx = x + dx, ny = y + dy, k = nx + "," + ny;
+      if (nx >= 0 && ny >= 0 && nx < cols && ny < rows && L.grid[ny][nx] > 0 && !seen.has(k)) { seen.add(k); q.push([nx, ny]); } } }
+  return seen.size === total;
+}
+
+
+  const GEN_PX = 72; /* canvas pixels per square; also the map's CELL */
+  const GEN_SIZES = { small: [14, 11], medium: [20, 15], large: [26, 19], huge: [32, 24] };
+  const GEN_THEMES = {
+    stone:     { label: "Stone flags",  floor: "#6e6b64", floor2: "#76736b", line: "rgba(0,0,0,.30)", void: "#101013" },
+    wood:      { label: "Wood planks",  floor: "#7a5a38", floor2: "#84643f", line: "rgba(0,0,0,.30)", void: "#0e0c0a" },
+    dirt:      { label: "Dirt & rock",  floor: "#6b5a44", floor2: "#72614c", line: "rgba(0,0,0,.22)", void: "#0c0a08" },
+    marble:    { label: "Marble",       floor: "#b3afa2", floor2: "#bcb8ac", line: "rgba(60,60,70,.35)", void: "#131318" },
+    darkstone: { label: "Dark stone",   floor: "#484852", floor2: "#50505a", line: "rgba(0,0,0,.40)", void: "#08080b" },
+    grass:     { label: "Grass & dirt", floor: "#5d6c4b", floor2: "#647450", line: "rgba(0,0,0,.16)", void: "#4c5a40" }
+  };
+  PROP_DEFS.campfire = { sym: "🔥", color: "red", size: 1, fw: 1, fh: 1 };
+  const genKey = id => `vtt_gen_${id}`;
+  const genStatusEl = $("genStatus");
+
+  function placeProps(L, typeKey, cols, rows, rng){
+    const props = [];
+    const occupied = new Set();
+    const ck = (x, y) => x + "," + y;
+    function free(x, y, s){
+      for (let yy = y; yy < y + s; yy++) for (let xx = x; xx < x + s; xx++) {
+        if (xx < 0 || yy < 0 || xx >= cols || yy >= rows) return false;
+        if (!L.grid[yy][xx] || occupied.has(ck(xx, yy)) || L.doorCells.has(ck(xx, yy))) return false;
+      }
+      return true;
+    }
+    function put(propKey, gx, gy){
+      const d = PROP_DEFS[propKey], s = d.size;
+      for (let yy = gy; yy < gy + s; yy++) for (let xx = gx; xx < gx + s; xx++) occupied.add(ck(xx, yy));
+      props.push({ prop: propKey, gx: gx + (s - 1) / 2, gy: gy + (s - 1) / 2 });
+    }
+    function shuffle(a){ for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); const t = a[i]; a[i] = a[j]; a[j] = t; } return a; }
+    function tryPut(propKey, cells){ for (const [x, y] of cells) if (free(x, y, PROP_DEFS[propKey].size)) { put(propKey, x, y); return true; } return false; }
+    function roomCells(r, edgeOnly){
+      const out = [];
+      for (let y = r.y; y < r.y + r.h; y++) for (let x = r.x; x < r.x + r.w; x++)
+        if (!edgeOnly || x === r.x || y === r.y || x === r.x + r.w - 1 || y === r.y + r.h - 1) out.push([x, y]);
+      return out;
+    }
+    function furnRoom(r){
+      const edge = shuffle(roomCells(r, true)), all = shuffle(roomCells(r, false));
+      const mid = [[r.x + Math.floor(r.w / 2) - 1, r.y + Math.floor(r.h / 2) - 1], [r.x + Math.floor(r.w / 2), r.y + Math.floor(r.h / 2) - 1], [r.x + Math.floor(r.w / 2) - 1, r.y + Math.floor(r.h / 2)]];
+      const n = (key, count, cells) => { for (let i = 0; i < count; i++) tryPut(key, cells); };
+      switch (r.kind) {
+        case "common":
+          tryPut("fireplace", edge);
+          n("counter", 1, edge); n("table", Math.max(1, Math.floor(r.w * r.h / 14)), mid.concat(all));
+          n("chair", 4, all); n("barrel", 2, edge); n("crate", 1, edge); break;
+        case "bedroom": n("bed", r.w >= 4 ? 2 : 1, edge); n("chest", 1, edge); n("chair", 1, all); break;
+        case "kitchen": n("counter", 1, edge); n("table", 1, mid); n("barrel", 2, edge); n("crate", 1, edge); break;
+        case "storage": n("crate", 4, edge.concat(all)); n("barrel", 3, edge); n("shelf", 2, edge); break;
+        case "shopfloor": n("counter", 1, edge); n("shelf", 3, edge); n("table", 1, mid); n("crate", 1, edge); n("barrel", 1, edge); break;
+        case "office": n("table", 1, mid); n("chair", 1, all); n("shelf", 1, edge); n("chest", 1, edge); break;
+        case "sanctum":
+          tryPut("altar", [[r.x + Math.floor(r.w / 2) - 1, r.y], [r.x + Math.floor(r.w / 2) - 1, r.y + r.h - 2]]);
+          n("statue", 2, edge); n("candle", 2, all); n("chair", 3, all); break;
+        case "chapel": tryPut("altar", edge); n("candle", 2, all); n("chair", 2, all); break;
+        case "burial": n("coffin", Math.max(1, Math.floor(r.w * r.h / 10)), all); n("candle", 2, all); n("chest", 1, edge); break;
+        case "lair": n("chest", 2, edge); n("brazier", 1, all); n("rubble", 2, all); n("crate", 1, edge); n("barrel", 1, edge); break;
+        case "cell": n("bed", 1, edge); break;
+        default: n("rubble", 1, all); n("crate", 1, edge); n("barrel", 1, edge); if (rng() < 0.35) tryPut("brazier", all); break;
+      }
+    }
+    if (typeKey === "forest") {
+      const cl = L.clearing || new Set();
+      const inClear = (x, y) => cl.has(x + "," + y);
+      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+        if (inClear(x, y)) continue;
+        if (rng() < 0.30) tryPut("tree", [[x, y]]);
+        else if (rng() < 0.10) tryPut("bush", [[x, y]]);
+        else if (rng() < 0.05) tryPut("rock", [[x, y]]);
+      }
+      const cx = Math.floor(cols / 2), cy = Math.floor(rows / 2);
+      tryPut("campfire", [[cx, cy], [cx - 1, cy], [cx, cy - 1]]);
+      tryPut("tent", shuffle([...cl].map(k => k.split(",").map(Number)).filter(([x, y]) => Math.hypot(x - cx, y - cy) > 3)));
+      n_shuffle_stumps: { let c = 0; for (const k of shuffle([...cl])) { if (c >= 3) break; if (tryPut("stump", [k.split(",").map(Number)])) c++; } }
+    } else if (typeKey === "cave") {
+      const floors = [];
+      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) if (L.grid[y][x]) floors.push([x, y]);
+      shuffle(floors);
+      let rocks = 0; for (const c of floors) { if (rocks >= 9) break; if (tryPut("rock", [c])) rocks++; }
+      let rub = 0; for (const c of floors) { if (rub >= 5) break; if (tryPut("rubble", [c])) rub++; }
+      tryPut("brazier", floors.slice(0, 40)); tryPut("brazier", floors.slice(40, 80));
+      if (rng() < 0.6) tryPut("chest", floors.slice(-40));
+    } else {
+      for (const r of L.rooms) furnRoom(r);
+    }
+    return props;
+  }
+
+  function placeLights(L, typeKey, cols, rows, props){
+    const lights = [];
+    const add = (presetKey, name, gx, gy) => {
+      const p = LIGHT_PRESETS[presetKey];
+      lights.push({ id: newId(), name, x: (gx + 0.5) / cols * 100, y: (gy + 0.5) / rows * 100, bright: p.bright, dim: p.dim, color: p.color, flame: p.flame });
+    };
+    if (typeKey === "forest") {
+      const cf = props.find(p => p.prop === "campfire") || props.find(p => p.prop === "fireplace");
+      if (cf) add("torch", "Campfire", cf.gx, cf.gy);
+      return lights;
+    }
+    for (const pr of props) {
+      if (pr.prop === "fireplace") add("lantern", "Hearth", pr.gx, pr.gy);
+      else if (pr.prop === "brazier") add("torch", "Brazier", pr.gx, pr.gy);
+      else if (pr.prop === "candle") add("candle", "Candle", pr.gx, pr.gy);
+    }
+    for (const r of L.rooms) {
+      const area = r.w * r.h;
+      if (area < 12 || r.kind === "cell") continue;
+      add("torch", "Torch", r.x, r.y);
+      if (area >= 30) add("torch", "Torch", r.x + r.w - 1, r.y + r.h - 1);
+    }
+    for (const pr of props) if (pr.prop === "table" && lights.length < 15) add("candle", "Candle", pr.gx, pr.gy);
+    return lights.slice(0, 16);
+  }
+
+  function paintFloor(L, typeKey, themeKey, cols, rows, seed){
+    const th = GEN_THEMES[themeKey] || GEN_THEMES.stone;
+    const rng = mulberry32(seed ^ 0x9e3779b9);
+    const cv = document.createElement("canvas");
+    cv.width = cols * GEN_PX; cv.height = rows * GEN_PX;
+    const g = cv.getContext("2d");
+    g.fillStyle = th.void; g.fillRect(0, 0, cv.width, cv.height);
+    /* void texture: dark speckle so unexcavated space is not flat */
+    for (let i = 0; i < cols * rows * 6; i++) {
+      g.fillStyle = `rgba(255,255,255,${0.02 + rng() * 0.03})`;
+      g.fillRect(rng() * cv.width, rng() * cv.height, 2, 2);
+    }
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      if (!L.grid[y][x]) continue;
+      const px = x * GEN_PX, py = y * GEN_PX;
+      g.fillStyle = rng() < 0.5 ? th.floor : th.floor2;
+      g.fillRect(px, py, GEN_PX, GEN_PX);
+      if (L.roomAt && L.roomAt[y][x] >= 0) { g.fillStyle = "rgba(255,255,255,0.055)"; g.fillRect(px, py, GEN_PX, GEN_PX); }
+      if (themeKey === "wood") {
+        g.strokeStyle = "rgba(0,0,0,.35)"; g.lineWidth = 2;
+        for (const off of [GEN_PX / 3, 2 * GEN_PX / 3]) { g.beginPath(); g.moveTo(px, py + off); g.lineTo(px + GEN_PX, py + off); g.stroke(); }
+        g.strokeStyle = "rgba(0,0,0,.12)";
+        for (let i = 0; i < 3; i++) { const gy = py + rng() * GEN_PX; g.beginPath(); g.moveTo(px + rng() * 20, gy); g.lineTo(px + GEN_PX - rng() * 20, gy + (rng() - 0.5) * 6); g.stroke(); }
+      } else if (themeKey === "marble") {
+        if (rng() < 0.4) { g.strokeStyle = "rgba(90,90,110,.35)"; g.lineWidth = 1.5; g.beginPath(); let vx = px + rng() * GEN_PX, vy = py; g.moveTo(vx, vy); while (vy < py + GEN_PX) { vx += (rng() - 0.5) * 22; vy += 12 + rng() * 14; g.lineTo(vx, vy); } g.stroke(); }
+      } else if (themeKey === "dirt" || themeKey === "grass") {
+        for (let i = 0; i < 5; i++) { g.fillStyle = `rgba(0,0,0,${0.05 + rng() * 0.08})`; g.beginPath(); g.arc(px + rng() * GEN_PX, py + rng() * GEN_PX, 3 + rng() * 9, 0, 7); g.fill(); }
+        if (themeKey === "grass" && !(L.clearing && L.clearing.has(x + "," + y)))
+          for (let i = 0; i < 6; i++) { g.strokeStyle = "rgba(30,40,22,.5)"; const gx = px + rng() * GEN_PX, gy = py + rng() * GEN_PX; g.beginPath(); g.moveTo(gx, gy); g.lineTo(gx + (rng() - 0.5) * 6, gy - 5 - rng() * 6); g.stroke(); }
+      } else {
+        for (let i = 0; i < 4; i++) { g.fillStyle = `rgba(0,0,0,${0.04 + rng() * 0.06})`; g.fillRect(px + rng() * GEN_PX, py + rng() * GEN_PX, 3 + rng() * 8, 2 + rng() * 4); }
+        if (rng() < 0.15) { g.strokeStyle = "rgba(0,0,0,.3)"; g.lineWidth = 1; g.beginPath(); let cx0 = px + rng() * GEN_PX, cy0 = py + rng() * GEN_PX; g.moveTo(cx0, cy0); for (let k = 0; k < 3; k++) { cx0 += (rng() - 0.5) * 30; cy0 += (rng() - 0.5) * 30; g.lineTo(cx0, cy0); } g.stroke(); }
+      }
+      g.strokeStyle = th.line; g.lineWidth = 2; g.strokeRect(px + 1, py + 1, GEN_PX - 2, GEN_PX - 2);
+    }
+    return cv;
+  }
+
+  async function upsertKey(key, value){
+    const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    return !error;
+  }
+
+  async function runGeneration(opts){
+    const typeKey = opts.type, themeKey = opts.theme, sizeKey = opts.size;
+    const [cols, rows] = GEN_SIZES[sizeKey] || GEN_SIZES.medium;
+    const seed = opts.seed;
+    const L = genLayout(typeKey, cols, rows, seed);
+    if (!L.walls.length && typeKey !== "forest" && !L.rooms.length && typeKey !== "cave") throw new Error("layout came up empty");
+    const rng = mulberry32(seed ^ 0x51ab);
+    const props = placeProps(L, typeKey, cols, rows, rng);
+    const lights = placeLights(L, typeKey, cols, rows, props);
+    const wallH = typeKey === "cave" ? 8 : 10;
+    const walls = [
+      ...L.walls.map(s => ({ id: newId(), kind: "wall", a: [s.a[0] / cols * 100, s.a[1] / rows * 100], b: [s.b[0] / cols * 100, s.b[1] / rows * 100], h: wallH })),
+      ...L.doors.map(s => ({ id: newId(), kind: "door", a: [s.a[0] / cols * 100, s.a[1] / rows * 100], b: [s.b[0] / cols * 100, s.b[1] / rows * 100], open: false, h: 7 }))
+    ];
+    const cv = paintFloor(L, typeKey, themeKey, cols, rows, seed);
+    const blob = await new Promise(res => cv.toBlob(res, "image/png"));
+    if (!blob) throw new Error("floor render failed");
+    const w = cv.width, h = cv.height;
+    const id = opts.id || ("gen-" + Date.now().toString(36));
+    const name = opts.name || `${(GEN_TYPES[typeKey] || {}).label || "Generated"} — ${(GEN_THEMES[themeKey] || {}).label || ""} ${cols}×${rows}`;
+    const path = `vtt-maps/${id}.png`;
+    let shared = false;
+    try { const up = await db.storage.from(DROP_BUCKET).upload(path, blob, { contentType: "image/png", upsert: !!opts.id }); shared = !up.error; } catch (e) { shared = false; }
+    const stampItems = props.map(p => {
+      const d = PROP_DEFS[p.prop];
+      return { type: "stamp", x: Math.round((p.gx + 0.5) / cols * 10000) / 100, y: Math.round((p.gy + 0.5) / rows * 10000) / 100,
+        size: d.size, rot: 0, sym: d.sym, color: d.color === "gold" ? "amber" : d.color, layer: "shared", gm: false,
+        prop: p.prop, fw: d.fw, fh: d.fh };
+    });
+    const genData = { v: 1, type: typeKey, theme: themeKey, size: sizeKey, cols, rows, seed, notes: opts.notes || "",
+      wallH, rooms: L.rooms, props: props.map(p => ({ prop: p.prop, gx: p.gx, gy: p.gy, fw: PROP_DEFS[p.prop].fw, fh: PROP_DEFS[p.prop].fh })),
+      created: new Date().toISOString() };
+    const suffix = `_${id}`;
+    await upsertKey("vtt_light" + suffix, { enabled: true, walls, lights });
+    await upsertKey("vtt_draw" + suffix, { items: stampItems, layers: DEFAULT_DRAW_LAYERS.map(l => ({ ...l })) });
+    await upsertKey("vtt_settings" + suffix, { feetPerSquare: 5, unit: "ft", gridType: "square" });
+    await upsertKey(genKey(id), genData);
+    let regOk = true;
+    if (!opts.id) {
+      const rec = { id, name, w, h, path, cell: GEN_PX, folder: "gen", gen: true };
+      if (shared) {
+        dropMaps = [...dropMaps.filter(m => m.id !== id), rec];
+        regOk = await saveDropRegistry();
+        registerDropMap(rec);
+      } else {
+        await idbPut({ id, name, w, h, blob });
+        localOnlyIds.add(id);
+        registerDropMap(rec, URL.createObjectURL(blob));
+      }
+    } else {
+      const rec = dropMaps.find(m => m.id === id);
+      if (rec) { rec.name = name; await saveDropRegistry(); }
+      else if (shared) { /* a local-only map whose re-roll upload landed joins the shared registry */
+        const rec2 = { id, name, w, h, path, cell: GEN_PX, folder: "gen", gen: true };
+        dropMaps = [...dropMaps, rec2];
+        await saveDropRegistry();
+        registerDropMap(rec2);
+      }
+      if (MAPS[id]) MAPS[id].img = dropPublicUrl(path) + "?t=" + Date.now();
+    }
+    switchMap(id);
+    await saveActiveMap();
+    loadDraw(true); loadLighting(true);
+    return { id, name, shared, regOk, walls: walls.length, doors: L.doors.length, lights: lights.length, props: stampItems.length, rooms: L.rooms.length };
+  }
+
+  $("genType").addEventListener("change", () => {
+    const t = GEN_TYPES[$("genType").value];
+    if (t && GEN_THEMES[t.theme]) $("genTheme").value = t.theme;
+  });
+  $("genBtn").addEventListener("click", async () => {
+    if (isProjecting()) return;
+    const btn = $("genBtn"); btn.disabled = true;
+    genStatusEl.textContent = "Generating…";
+    try {
+      const r = await runGeneration({ type: $("genType").value, theme: $("genTheme").value, size: $("genSize").value,
+        notes: $("genNotes").value.trim(), seed: (Date.now() % 2000000000) + Math.floor(Math.random() * 100000) });
+      genStatusEl.textContent = `"${r.name}" generated and loaded: ${r.rooms} rooms, ${r.walls} wall/door segments (${r.doors} doors), ${r.props} props, ${r.lights} lights — dynamic lighting is on for it.${r.shared ? "" : " (Floor image lives on this device only — the shared upload didn't go through.)"}${r.regOk === false ? " (The Maps repository save didn't go through — the map works here, but may not list for everybody yet.)" : ""}`;
+    } catch (e) { genStatusEl.textContent = "Generation failed: " + (e && e.message || e); }
+    btn.disabled = false;
+  });
+  $("genRerollBtn").addEventListener("click", async () => {
+    if (isProjecting()) return;
+    const rec = dropMaps.find(m => m.id === currentMapId);
+    if (!(rec && rec.gen) && !currentMapId.startsWith("gen-")) { genStatusEl.textContent = "Re-roll works on a generated map — load one (or generate one) first."; return; }
+    const curName = (rec && rec.name) || (MAPS[currentMapId] && MAPS[currentMapId].name) || "Generated map";
+    const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", genKey(currentMapId)).maybeSingle();
+    const gd = data && data.value;
+    if (!gd || !gd.type) { genStatusEl.textContent = "This map has no generation data to re-roll from."; return; }
+    const btn = $("genRerollBtn"); btn.disabled = true;
+    genStatusEl.textContent = "Re-rolling the layout…";
+    try {
+      const r = await runGeneration({ id: currentMapId, name: curName, type: gd.type, theme: gd.theme, size: gd.size || "medium",
+        notes: gd.notes || "", seed: (Date.now() % 2000000000) + Math.floor(Math.random() * 100000) });
+      genStatusEl.textContent = `Re-rolled "${r.name}": ${r.rooms} rooms, ${r.walls} wall/door segments (${r.doors} doors), ${r.props} props, ${r.lights} lights.`;
+    } catch (e) { genStatusEl.textContent = "Re-roll failed: " + (e && e.message || e); }
+    btn.disabled = false;
+  });
+
+  /* ---- Shelf bridge: the Maps repository script (v1.08) lives
+     outside this closure, so it reads the registry through here.
+     (Its bare references to the closure's MAPS / dropMaps /
+     currentMapId threw ReferenceError and the shelf never listed a
+     registry map; this bridge is the fix.) ---- */
+  window.__apocShelf = {
+    recs: () => dropMaps,
+    setRecs: v => { dropMaps = v; },
+    def: id => MAPS[id],
+    delDef: id => { delete MAPS[id]; },
+    current: () => currentMapId,
+    saveRegistry: () => saveDropRegistry(),
+    removeFiles: async paths => { try { await db.storage.from(DROP_BUCKET).remove(paths); } catch (e) { /* registry removal already unshares it */ } },
+    idbDel: id => idbDel(id),
+    loadFaerun: async () => { switchMap("faerun"); await saveActiveMap(); }
+  };
+
 })();
 </script>
 <script>
@@ -4117,7 +4706,7 @@ setInterval(loadSharedEntries, 60000);
   var searchEl = document.getElementById("mapRepoSearch");
   var FOLDERS = { "arkenforge": "Arkenforge", "my-campaign-a-maps": "Campaign maps",
     "dungeon-alchemist-onedrive": "Dungeon Alchemist", "dropbox-maps": "Dropbox maps",
-    "dropbox-transfer-unique": "Dropbox transfer", "loose": "Loose maps", "drop": "Dropped at the table" };
+    "dropbox-transfer-unique": "Dropbox transfer", "loose": "Loose maps", "gen": "Generated maps", "drop": "Dropped at the table" };
   var BUILTINS = [
     { id: "faerun", name: "Faerûn — World Map", thumb: "assets/maps/faerun-3e.webp", w: 4763, h: 3185 },
     { id: "saint-james", name: "Arcanic Rendez-Vous — Saint James's floors", thumb: "assets/maps/saint-james-floors.webp", w: 1662, h: 1077 }
@@ -4137,33 +4726,32 @@ setInterval(loadSharedEntries, 60000);
   function loadMap(id){
     var sel = document.getElementById("mapSelect");
     if (!sel) return;
-    if (!MAPS[id]) { statusEl.textContent = "That map is still loading — try again in a moment."; return; }
+    if (!window.__apocShelf || !window.__apocShelf.def(id)) { statusEl.textContent = "That map is still loading — try again in a moment."; return; }
     sel.value = id;
     sel.dispatchEvent(new Event("change"));
     statusEl.textContent = "";
     render(true);
   }
   async function removeMap(rec){
-    var def = MAPS[rec.id];
+    var def = window.__apocShelf ? window.__apocShelf.def(rec.id) : null;
     var nm = rec.name || (def && def.name) || rec.id;
     if (!confirm("Remove the map \"" + nm + "\" from the repository? It leaves the shelf for everybody; its tokens, fog and drawings stay in the shared store under its key.")) return;
-    dropMaps = dropMaps.filter(function(m){ return m.id !== rec.id; });
-    await saveDropRegistry();
+    if (window.__apocShelf) { window.__apocShelf.setRecs(window.__apocShelf.recs().filter(function(m){ return m.id !== rec.id; })); await window.__apocShelf.saveRegistry(); }
     var paths = [rec.path, rec.thumb].filter(Boolean);
-    if (paths.length && db) { try { await db.storage.from(DROP_BUCKET).remove(paths); } catch(e) {} }
+    if (paths.length && window.__apocShelf) await window.__apocShelf.removeFiles(paths);
     var sel = document.getElementById("mapSelect");
     var opt = sel && sel.querySelector("option[value=\"" + rec.id + "\"]");
     if (opt) opt.remove();
-    delete MAPS[rec.id];
-    if (typeof idbDel === "function") idbDel(rec.id);
-    if (currentMapId === rec.id) { switchMap("faerun"); await saveActiveMap(); }
+    if (window.__apocShelf) window.__apocShelf.delDef(rec.id);
+    if (window.__apocShelf) window.__apocShelf.idbDel(rec.id);
+    if (window.__apocShelf && window.__apocShelf.current() === rec.id) await window.__apocShelf.loadFaerun();
     lastSig = "";
     render(true);
     statusEl.textContent = "\"" + nm + "\" removed from the repository.";
   }
   function itemRow(o){
     var row = document.createElement("div");
-    row.className = "mr-item" + (currentMapId === o.id ? " mr-current" : "");
+    row.className = "mr-item" + ((window.__apocShelf && window.__apocShelf.current() === o.id) ? " mr-current" : "");
     var img = document.createElement("img");
     img.loading = "lazy"; img.decoding = "async"; img.alt = "";
     img.src = o.thumbUrl;
@@ -4233,8 +4821,8 @@ setInterval(loadSharedEntries, 60000);
     body.appendChild(st.content);
   }, true);
   function render(force){
-    var recs = (typeof dropMaps !== "undefined" && Array.isArray(dropMaps)) ? dropMaps : [];
-    var sig = recs.length + "|" + recs.map(function(r){ return r.id; }).join(",") + "|" + currentMapId + "|" + filter;
+    var recs = (window.__apocShelf && window.__apocShelf.recs()) || [];
+    var sig = recs.length + "|" + recs.map(function(r){ return r.id; }).join(",") + "|" + (window.__apocShelf ? window.__apocShelf.current() : "") + "|" + filter;
     if (!force && sig === lastSig) return;
     lastSig = sig;
     var f = filter.trim().toLowerCase();
@@ -4284,7 +4872,7 @@ setInterval(loadSharedEntries, 60000);
     });
     Object.keys(rowEls).forEach(function(id){ if (!inDom[id]) delete rowEls[id]; });
     Object.keys(rowEls).forEach(function(id){
-      rowEls[id].classList.toggle("mr-current", id === currentMapId);
+      rowEls[id].classList.toggle("mr-current", window.__apocShelf && id === window.__apocShelf.current());
     });
     if (!shown) listEl.innerHTML = "<p class=\"muted small\">No maps match.</p>";
     if (countEl) countEl.textContent = "— " + (BUILTINS.length + recs.length) + " maps";
@@ -4343,6 +4931,7 @@ setInterval(loadSharedEntries, 60000);
   def(document.getElementById("lightControls"), "tools-light", "Lighting & walls");
   def(rows[4], "tools-draw", "Draw & paint");
   def(rows[5], "tools-layers", "Layers");
+  def(rows[6], "tools-gen", "Generate map");
   def(repo, "repo", "Art Library");
   def(cols[0], "dice", "Dice");
   def(cols[1], "init", "Initiative");
