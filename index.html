@@ -125,7 +125,8 @@ body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-to
 .expand-exit-wrap{display:none}
 body.map-expanded .expand-exit-wrap{display:block}
 body.map-fs .expand-exit-wrap{display:block}
-#gmBtn{opacity:.48;filter:saturate(.3)}
+#gmBtn{opacity:.48;filter:saturate(.3);transition:opacity .18s ease,filter .18s ease}
+#gmBtn.holding{opacity:.85;filter:saturate(.7)}
 #gmBtn[aria-pressed="true"]{opacity:1;filter:none}
 .tk-icon{background:none;border:none}
 .tk{position:relative}
@@ -1830,12 +1831,35 @@ setInterval(loadSharedEntries, 60000);
     $("lightControls").hidden = !gmView;
     renderFog(); drawTokens(); renderDraw();
   }
-  $("gmBtn").addEventListener("click", () => {
-    gmView = !gmView;
-    if (gmView) sessionStorage.setItem("apocGm", "1");
-    else sessionStorage.removeItem("apocGm");
-    applyGmUi();
-  });
+  /* Hold-to-toggle (Shaun, 2026-11-06): he doesn't want to hit GM view by
+     accident, so a plain click does nothing — the button must be HELD for
+     ~0.8 seconds to switch. The grayed look is the warning label. */
+  (() => {
+    const btn = $("gmBtn");
+    btn.title = "Hold for a second to switch GM view on or off — a plain click does nothing, so it can't be hit by accident";
+    let timer = null;
+    const start = () => {
+      btn.classList.add("holding");
+      timer = setTimeout(() => {
+        timer = null;
+        btn.classList.remove("holding");
+        gmView = !gmView;
+        if (gmView) sessionStorage.setItem("apocGm", "1");
+        else sessionStorage.removeItem("apocGm");
+        applyGmUi();
+      }, 800);
+    };
+    const cancel = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      btn.classList.remove("holding");
+    };
+    btn.addEventListener("pointerdown", start);
+    btn.addEventListener("pointerup", cancel);
+    btn.addEventListener("pointerleave", cancel);
+    btn.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && !e.repeat) { e.preventDefault(); start(); } });
+    btn.addEventListener("keyup", (e) => { if (e.key === "Enter" || e.key === " ") cancel(); });
+    btn.addEventListener("click", (e) => e.preventDefault());
+  })();
   /* The GM view button appears only on screens marked as the GM's — in
      practice Shaun's laptop (his offer, 2026-11-06). Mark a screen once by
      opening the site with ?gmhere=1; the mark lives in that browser only.
