@@ -435,10 +435,6 @@ body.displaying .init-strip{font-size:1.05rem}
           <option value="saint-james">Arcanic Rendez-Vous — Saint James</option>
         </select>
       </div>
-      <label class="atlas-toggle"><input type="checkbox" id="atlasToggle" checked> Atlas places</label>
-      <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
-      <label class="atlas-toggle"><input type="checkbox" id="drawToggle" checked> Drawings</label>
-      <label class="atlas-toggle"><input type="checkbox" id="tokensToggle" checked> Tokens</label>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
     </div>
     <div class="map-tools">
@@ -454,6 +450,10 @@ body.displaying .init-strip{font-size:1.05rem}
         <label for="scaleFeet">Scale — per square/hex (shared)</label>
         <span style="display:flex;gap:6px;align-items:center"><input id="scaleFeet" class="scale-input" type="number" min="0.1" step="any" value="5"><select id="scaleUnit" aria-label="Scale unit"><option value="ft">feet</option><option value="mi">miles</option></select></span>
       </div>
+      <label class="atlas-toggle"><input type="checkbox" id="atlasToggle" checked> Atlas places</label>
+      <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
+      <label class="atlas-toggle"><input type="checkbox" id="drawToggle" checked> Drawings</label>
+      <label class="atlas-toggle"><input type="checkbox" id="tokensToggle" checked> Tokens</label>
       <button type="button" class="btn" id="rulerBtn" aria-pressed="false">Ruler</button>
       <button type="button" class="btn" id="pingBtn" aria-pressed="false">Ping</button>
       <button type="button" class="btn" id="libBtn" aria-pressed="false">Token repository</button>
@@ -603,8 +603,8 @@ body.displaying .init-strip{font-size:1.05rem}
         <input id="stampRot" type="range" min="0" max="360" step="5" value="0" style="width:110px">
       </div>
       <div class="field" style="flex:1 1 100%">
-        <label>Paint palette</label>
-        <div class="paint-pal" id="paintPalette"></div>
+        <button type="button" class="btn" id="paintPalHead" aria-expanded="false" title="Show or hide the paint palette">Paint palette ▸</button>
+        <div class="paint-pal" id="paintPalette" hidden></div>
       </div>
       <button type="button" class="btn" id="drawUndo">Undo drawing</button>
       <button type="button" class="btn" id="drawRedo">Redo</button>
@@ -3457,6 +3457,13 @@ setInterval(loadSharedEntries, 60000);
   const PAINT28 = ["#000000", "#808080", "#800000", "#808000", "#008000", "#008080", "#000080", "#800080", "#808040", "#004040", "#0080ff", "#004080", "#8000ff", "#804000", "#ffffff", "#c0c0c0", "#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff", "#ffff80", "#00ff80", "#80ffff", "#8080ff", "#ff0080", "#ff8040"];
   $("paintPalette").innerHTML = PAINT28.map(c => `<button type="button" class="pal-swatch" data-pal="${c}" style="background:${c}" title="${c}" aria-label="Paint colour ${c}"></button>`).join("");
   $("paintPalette").querySelectorAll("[data-pal]").forEach(b => b.addEventListener("click", () => setDrawColor(b.dataset.pal)));
+  /* Paint palette stays minimized under its header until clicked (Shaun). */
+  $("paintPalHead").addEventListener("click", () => {
+    const pal = $("paintPalette"), open = pal.hidden;
+    pal.hidden = !open;
+    $("paintPalHead").setAttribute("aria-expanded", String(open));
+    $("paintPalHead").textContent = open ? "Paint palette ▾" : "Paint palette ▸";
+  });
   $("drawFrontBtn").addEventListener("click", async () => {
     if (!selItem) return;
     drawItems = drawItems.filter(it => it !== selItem); drawItems.push(selItem);
