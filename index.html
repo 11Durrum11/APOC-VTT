@@ -629,12 +629,6 @@ body.displaying .init-strip{font-size:1.05rem}
       </div>
       <button type="button" class="btn primary" id="drawFinish" hidden>Finish shape</button>
     </div>
-    <div class="lib-panel" id="stampLib" hidden>
-      <div class="nest">
-        <button type="button" class="nest-head" aria-expanded="false">Stamps</button>
-        <div class="nest-body"><div class="lib-grid" id="stampGrid"></div></div>
-      </div>
-    </div>
     <div class="lib-panel" id="tplLib" hidden>
       <p class="lib-head">Bursts — radius</p>
       <div class="lib-grid" id="tplBursts"></div>
@@ -696,25 +690,22 @@ body.displaying .init-strip{font-size:1.05rem}
           <div class="nest-body">
             <div class="lib-panel" id="tokenLib" hidden>
               <div class="nest">
-                <button type="button" class="nest-head" aria-expanded="false">Tokens</button>
+                <button type="button" class="nest-head" aria-expanded="false">Symbols</button>
+                <div class="nest-body"><div class="lib-grid" id="libSymbols"></div></div>
+              </div>
+              <div class="nest">
+                <button type="button" class="nest-head" aria-expanded="false">Tokens — discs &amp; numbers</button>
                 <div class="nest-body">
                   <div class="field" style="max-width:280px">
                     <label for="libName">Name for the next token (optional)</label>
                     <input id="libName" type="text" autocomplete="off" placeholder="e.g. Goblin 3">
                   </div>
-                  <div class="nest">
-                    <button type="button" class="nest-head" aria-expanded="false">Symbols</button>
-                    <div class="nest-body"><div class="lib-grid" id="libSymbols"></div></div>
-                  </div>
-                  <div class="nest">
-                    <button type="button" class="nest-head" aria-expanded="false">Discs &amp; numbers</button>
-                    <div class="nest-body"><div class="lib-grid" id="libDiscs"></div></div>
-                  </div>
-                  <div class="nest">
-                    <button type="button" class="nest-head" aria-expanded="false">Artwork — Saint James &amp; Cody's gallery</button>
-                    <div class="nest-body"><div class="lib-grid" id="libArt"></div></div>
-                  </div>
+                  <div class="lib-grid" id="libDiscs"></div>
                 </div>
+              </div>
+              <div class="nest">
+                <button type="button" class="nest-head" aria-expanded="false">Artwork — Saint James &amp; Cody's gallery</button>
+                <div class="nest-body"><div class="lib-grid" id="libArt"></div></div>
               </div>
             </div>
             <div class="nest" id="monsterNest">
@@ -735,6 +726,12 @@ body.displaying .init-strip{font-size:1.05rem}
                   <div class="mr-list" id="mapRepoList"><p class="muted small">Loading the repository…</p></div>
                   <p class="muted small" id="mapRepoStatus"></p>
                 </div>
+              </div>
+            </div>
+            <div class="lib-panel" id="stampLib" hidden>
+              <div class="nest" id="stampsNest">
+                <button type="button" class="nest-head" aria-expanded="false">Stamps</button>
+                <div class="nest-body"><div class="lib-grid" id="stampGrid"></div></div>
               </div>
             </div>
           </div>
@@ -2628,6 +2625,14 @@ setInterval(loadSharedEntries, 60000);
     const t = $("drawTool").value;
     $("stampLib").hidden = t !== "stamp";
     $("stampSizeField").hidden = $("stampRotField").hidden = t !== "stamp";
+    if (t === "stamp") {
+      /* v1.12: stamps live inside the Art Library now — open the parent
+         and the Stamps nest so the picker is on screen when picked. */
+      ["artLibrary", "stampsNest"].forEach(id => {
+        const n = $(id);
+        if (n && !n.classList.contains("open")) { n.classList.add("open"); const hd = n.querySelector(":scope > .nest-head"); if (hd) hd.setAttribute("aria-expanded", "true"); }
+      });
+    }
     if (t !== "select") clearSelection();
   });
   function placeStamp(p){
