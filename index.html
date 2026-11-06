@@ -67,6 +67,7 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
     border-radius:var(--radius);padding:10px;margin-top:8px;
     box-shadow:0 14px 32px rgba(0,0,0,.18);
   }
+#mapPanel{position:relative}
 .panel h2{margin:0 0 6px;font-size:clamp(1.3rem,3.4vw,1.7rem);font-weight:500}
 .panel h3{font-weight:500}
 .muted{color:var(--muted-foreground)}
@@ -113,14 +114,20 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .mk-altered .mk-dot{background:#57b8a2}
 .apoc-on .leaflet-image-layer{filter:grayscale(.55) sepia(.14) brightness(.93) contrast(1.03)}
 #apocMap:fullscreen{height:100%;width:100%;border:none;border-radius:0}
-body.projecting #apocMap{position:fixed;inset:0;width:100vw;height:100vh;z-index:2000;border:none;border-radius:0}
+body.projecting #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2000;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px;margin:0;border-radius:0}
+body.projecting .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
+body.projecting .apoc-map{height:100%;min-height:0}
+body.projecting .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
 body.projecting .mk-label{font-size:1.12rem;padding:4px 12px}
 body.projecting .mk-dot{width:22px;height:22px}
 body.projecting .atlas-dot{width:14px;height:14px}
 .proj-exit-wrap{display:none}
 body.projecting .proj-exit-wrap{display:block}
 body.map-expanded{overflow:hidden}
-body.map-expanded #apocMap{position:fixed;inset:0;width:100vw;height:100vh;z-index:1600;border:none;border-radius:0}
+body.map-expanded #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:1600;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px;margin:0;border-radius:0}
+body.map-expanded .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
+body.map-expanded .apoc-map{height:100%;min-height:0}
+body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
 #apocMap:fullscreen{height:100%;width:100%;border:none;border-radius:0}
 .expand-exit-wrap{display:none}
 body.map-expanded .expand-exit-wrap{display:block}
@@ -277,14 +284,50 @@ input,select,textarea{font-size:16px}
    steps aside, every control stays — docked along the edges (toolbars
    top, dice/initiative bottom, repository beside the map) and
    transparent like everywhere else on the APOC sites, over the scene. */
-#mapPanel:fullscreen{display:flex;flex-direction:column;height:100%;overflow:hidden;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px}
-#mapPanel:fullscreen .eyebrow,#mapPanel:fullscreen .map-note,#mapPanel:fullscreen>p.muted{display:none}
+#mapPanel:fullscreen{display:flex;flex-direction:column;height:100%;overflow-y:auto;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px}
 #mapPanel:fullscreen .map-tools{flex:none}
 #mapPanel:fullscreen .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
 #mapPanel:fullscreen .apoc-map{height:100%;min-height:0}
-#mapPanel:fullscreen .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0}
+#mapPanel:fullscreen .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
 #mapPanel:fullscreen .marker-form{flex:none;max-height:44vh;overflow-y:auto}
 #mapPanel:fullscreen .btn,#mapPanel:fullscreen .vtt-col,#mapPanel:fullscreen .lib-panel,#mapPanel:fullscreen input,#mapPanel:fullscreen select,#mapPanel:fullscreen textarea{background:transparent}
+
+/* ---- v1.06: perimeter-always + movable groups (Shaun) ----
+   Desktop/table: every functionality lives around the edges of the
+   table at ALL times — tools top, repository right, dice/initiative
+   bottom, map clean in the middle — in normal view, Full screen,
+   Expand and Project alike: nothing hides, collapses or relocates.
+   Groups can be dragged by their grip to any edge of the panel; they
+   re-orient (top/bottom = horizontal row, left/right = vertical
+   stack) and stay transparent. Arrangement persists per device in
+   localStorage key "apocVttPerimeterV1". Phones keep the drawer. */
+.per-grip{display:none}
+@media (min-width:821px){
+  .per-grip{display:inline-flex;align-items:center;gap:6px;flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border:1px dashed hsl(220 16% 34%);border-radius:8px;padding:4px 10px;min-height:36px;font-size:.8rem;color:var(--muted-foreground);background:transparent;white-space:nowrap}
+  .per-grip:active{cursor:grabbing}
+  .map-repo .per-grip{display:flex;margin:0 0 8px}
+  .vtt-col .per-grip{margin:0 0 8px}
+  .per-group{scrollbar-width:thin}
+  .per-parked{position:absolute !important;z-index:900;background:transparent !important;backdrop-filter:none;max-width:calc(100% - 12px)}
+  .per-parked.per-h{flex-direction:row !important;flex-wrap:wrap;align-items:flex-end}
+  .map-tools.per-parked.per-h{max-height:46%;overflow-y:auto}
+  .per-parked.per-v{flex-direction:column !important;flex-wrap:nowrap;align-items:stretch;width:min(272px,42vw);max-height:calc(100% - 12px);overflow-y:auto;overflow-x:hidden}
+  .per-parked.per-v .field{flex:none !important;width:100%}
+  .per-parked.per-v .btn{width:100%}
+  .per-parked.per-v .atlas-toggle{width:100%}
+  .map-repo.per-parked{flex:none}
+  .map-repo.per-parked.per-v{width:min(300px,44vw)}
+  .map-repo.per-parked.per-h{width:auto;max-width:calc(100% - 12px)}
+  .map-repo.per-parked.per-h .lib-grid{flex-wrap:nowrap;overflow-x:auto}
+  .vtt-col.per-parked{z-index:950;padding:10px}
+  .vtt-col.per-parked.per-v{width:min(320px,44vw);max-height:calc(100% - 12px);overflow-y:auto}
+  .vtt-col.per-parked.per-h{width:auto;max-height:52%;overflow-y:auto}
+  .per-dragging{position:fixed !important;z-index:2600 !important;opacity:.94;outline:2px dashed var(--primary);outline-offset:2px;background:transparent !important;box-shadow:none;pointer-events:auto}
+}
+
+/* v1.06 fix: Delete Layer at half width, label stacked on two lines
+   ("Delete" over "Layer"); height stays a full 44px tap target. */
+#layerDelBtn{flex:0 0 68px;width:68px;min-width:68px;max-width:68px;padding:5px 4px;line-height:1.05;text-align:center;white-space:normal}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -293,6 +336,7 @@ input,select,textarea{font-size:16px}
     <h1>APOC VTT</h1>
     <span class="muted small" id="siteVersion" hidden></span>
     <button class="btn" id="ambBtn" type="button" aria-pressed="false" title="Toggle animated scenes and ambient sound">🔇 Ambience off</button>
+    <button class="btn" id="layoutResetBtn" type="button" title="Restore the default perimeter layout">Reset layout</button>
   </header>
   <section class="panel" id="mapPanel" aria-label="The VTT — Maps">
     <p class="eyebrow">Campaign map</p>
@@ -484,7 +528,7 @@ input,select,textarea{font-size:16px}
       <span id="drawLayerChips" class="layer-chips"></span>
       <button type="button" class="btn" id="drawAddLayer">Add layer</button>
       <button type="button" class="btn" id="layerRenameBtn">Rename layer</button>
-      <button type="button" class="btn danger" id="layerDelBtn">Delete layer</button>
+      <button type="button" class="btn danger" id="layerDelBtn" aria-label="Delete layer" title="Delete layer">Delete<br>Layer</button>
       <div class="field" style="flex:0 1 auto">
         <label for="layerOpacity">Layer opacity</label>
         <input id="layerOpacity" type="range" min="0.1" max="1" step="0.05" value="1" style="width:110px">
@@ -996,7 +1040,7 @@ setInterval(loadSharedEntries, 60000);
         treatment (Shaun's standing rule, 2026-11-05: any map he has or will have).
         A new map surface calls makeProjectable(itsMap, itsContainerId, itsButtonId)
         and inherits full-screen landscape projection, big room-readable labels
-        (the global body.projecting CSS), hidden editing chrome, simple exit. ---- */
+        (the global body.projecting CSS), the full perimeter of controls stays at the edges, simple exit. ---- */
   function makeProjectable(lmap, containerId, buttonId){
     const setP = on => { document.body.classList.toggle("projecting", on); setTimeout(() => lmap.invalidateSize(), 260); };
     $(buttonId).addEventListener("click", () => {
@@ -1021,14 +1065,14 @@ setInterval(loadSharedEntries, 60000);
     exitCtl.addTo(lmap);
     return setP;
   }
-  makeProjectable(map, "apocMap", "projBtn");
+  makeProjectable(map, "mapPanel", "projBtn");
 
   /* Expand map: the button stays in the tools row, but it opens the MAP
      WINDOW itself (#apocMap) full screen — Shaun's correction, 2026-11-05.
      Fullscreen on the map element where supported; a full-viewport fixed
      overlay is the fallback. Dragging markers/tokens, drawing, fog and the
-     ruler all work on the map in this view; the editing forms live outside
-     the window, so taps show in-map popups here instead. Exit: the on-map
+     ruler all work on the map in this view; the perimeter of controls
+     (and the editing forms) stays around the edges. Exit: the on-map
      Exit button or Esc. */
   function setExpanded(on){
     document.body.classList.toggle("map-expanded", on);
@@ -1038,7 +1082,7 @@ setInterval(loadSharedEntries, 60000);
   $("mapExpandBtn").addEventListener("click", () => {
     const on = !document.body.classList.contains("map-expanded");
     setExpanded(on);
-    const el = $("apocMap");
+    const el = $("mapPanel");
     if (on) {
       try {
         if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(() => {}); }
@@ -3482,6 +3526,144 @@ setInterval(loadSharedEntries, 60000);
   if (on) { document.body.classList.add('bg-animated'); if (btn) { btn.setAttribute('aria-pressed','true'); btn.textContent='🔊 Ambience on'; }
     var arm = function(){ startAudio(); window.removeEventListener('pointerdown', arm); window.removeEventListener('keydown', arm); };
     window.addEventListener('pointerdown', arm); window.addEventListener('keydown', arm); }
+})();
+</script>
+
+<script>
+"use strict";
+/* ================= v1.06: perimeter-always, movable groups =================
+   Desktop/table only (phones keep the right-edge repository drawer).
+   Default arrangement is the page flow itself: toolbars across the
+   top, the repository docked at the right of the map, dice and
+   initiative along the bottom — and Full screen / Expand / Project
+   now carry that same perimeter (see the CSS), so nothing hides,
+   collapses or relocates when the view is maximized.
+   Shaun can drag any group by its grip ("⠿" handle) to any edge of
+   the table panel: top/bottom park it as a horizontal row, left/
+   right as a vertical stack. Groups stay whole and transparent.
+   The arrangement persists per device in localStorage under
+   "apocVttPerimeterV1" as {groupId:{edge,along}}; "Reset layout"
+   in the header clears it and restores the defaults. */
+(function(){
+  var KEY = "apocVttPerimeterV1";
+  var mq = window.matchMedia("(min-width: 821px)");
+  var panel = document.getElementById("mapPanel");
+  if (!panel) return;
+  var rows = panel.querySelectorAll(":scope > .map-tools");
+  var cols = panel.querySelectorAll(":scope > .vtt-panel > .vtt-col");
+  var repo = panel.querySelector(":scope > .map-stage > .map-repo");
+  var defs = [];
+  function def(el, id, label){ if (el) defs.push({ el: el, id: id, label: label }); }
+  def(rows[0], "tools-main", "Search & map");
+  def(rows[1], "tools-grid", "Grid & ruler");
+  def(rows[2], "tools-gm", "GM");
+  def(document.getElementById("fogControls"), "tools-fog", "Fog");
+  def(rows[4], "tools-draw", "Draw & paint");
+  def(rows[5], "tools-layers", "Layers");
+  def(repo, "repo", "Repository");
+  def(cols[0], "dice", "Dice");
+  def(cols[1], "init", "Initiative");
+  var byId = {};
+  defs.forEach(function(d){
+    d.el.dataset.perGroup = d.id;
+    d.el.classList.add("per-group");
+    byId[d.id] = d;
+    var grip = document.createElement("span");
+    grip.className = "per-grip";
+    grip.textContent = "⠿ " + d.label;
+    grip.title = "Drag to move the " + d.label + " group to any edge";
+    d.el.insertBefore(grip, d.el.firstChild);
+    d.grip = grip;
+  });
+
+  /* Repository open by default on desktop — part of the perimeter. */
+  function repoDefault(){
+    if (!mq.matches) return;
+    var lib = document.getElementById("tokenLib");
+    var btn = document.getElementById("libBtn");
+    if (lib && lib.hidden) { lib.hidden = false; if (btn) btn.setAttribute("aria-pressed", "true"); }
+  }
+  repoDefault();
+
+  function load(){
+    try { return JSON.parse(window.localStorage.getItem(KEY) || "{}") || {}; }
+    catch(e) { return {}; }
+  }
+  function save(state){
+    try { window.localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) {}
+  }
+  function applyPark(d, park){
+    var el = d.el;
+    el.classList.remove("per-parked", "per-h", "per-v");
+    el.style.left = el.style.right = el.style.top = el.style.bottom = "";
+    if (!park || !mq.matches) return;
+    var pr = panel.getBoundingClientRect();
+    var w = el.offsetWidth, h = el.offsetHeight;
+    var along = Math.max(0, Number(park.along) || 0);
+    el.classList.add("per-parked", (park.edge === "left" || park.edge === "right") ? "per-v" : "per-h");
+    if (park.edge === "top") { el.style.top = "6px"; el.style.left = Math.min(along, Math.max(0, pr.width - w - 6)) + "px"; }
+    else if (park.edge === "bottom") { el.style.bottom = "6px"; el.style.left = Math.min(along, Math.max(0, pr.width - w - 6)) + "px"; }
+    else if (park.edge === "left") { el.style.left = "6px"; el.style.top = Math.min(along, Math.max(0, pr.height - h - 6)) + "px"; }
+    else if (park.edge === "right") { el.style.right = "6px"; el.style.top = Math.min(along, Math.max(0, pr.height - h - 6)) + "px"; }
+  }
+  function applyAll(){
+    var state = load();
+    defs.forEach(function(d){ applyPark(d, state[d.id]); });
+  }
+  applyAll();
+
+  /* Drag by the grip only — buttons, inputs and links keep working. */
+  defs.forEach(function(d){
+    d.grip.addEventListener("pointerdown", function(ev){
+      if (!mq.matches || ev.button > 0) return;
+      ev.preventDefault();
+      var el = d.el, r = el.getBoundingClientRect();
+      var grabDX = ev.clientX - r.left, grabDY = ev.clientY - r.top;
+      el.classList.add("per-dragging");
+      el.style.width = r.width + "px";
+      el.style.left = r.left + "px"; el.style.top = r.top + "px";
+      el.style.right = el.style.bottom = "";
+      try { d.grip.setPointerCapture(ev.pointerId); } catch(e) {}
+      function move(e2){
+        el.style.left = (e2.clientX - grabDX) + "px";
+        el.style.top = (e2.clientY - grabDY) + "px";
+      }
+      function up(e2){
+        d.grip.removeEventListener("pointermove", move);
+        d.grip.removeEventListener("pointerup", up);
+        d.grip.removeEventListener("pointercancel", up);
+        el.classList.remove("per-dragging");
+        el.style.width = "";
+        var pr = panel.getBoundingClientRect();
+        var dist = {
+          top: Math.abs(e2.clientY - pr.top), bottom: Math.abs(e2.clientY - pr.bottom),
+          left: Math.abs(e2.clientX - pr.left), right: Math.abs(e2.clientX - pr.right)
+        };
+        var edge = Object.keys(dist).reduce(function(a, b){ return dist[a] <= dist[b] ? a : b; });
+        var er = el.getBoundingClientRect();
+        var along = (edge === "top" || edge === "bottom") ? (er.left - pr.left) : (er.top - pr.top);
+        var state = load();
+        state[d.id] = { edge: edge, along: Math.max(0, Math.round(along)) };
+        save(state);
+        applyPark(d, state[d.id]);
+        setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+      }
+      d.grip.addEventListener("pointermove", move);
+      d.grip.addEventListener("pointerup", up);
+      d.grip.addEventListener("pointercancel", up);
+    });
+  });
+
+  var resetBtn = document.getElementById("layoutResetBtn");
+  if (resetBtn) resetBtn.addEventListener("click", function(){
+    try { window.localStorage.removeItem(KEY); } catch(e) {}
+    applyAll();
+    repoDefault();
+    setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+  });
+  window.addEventListener("resize", applyAll);
+  document.addEventListener("fullscreenchange", function(){ setTimeout(applyAll, 180); });
+  if (mq.addEventListener) mq.addEventListener("change", function(){ repoDefault(); applyAll(); });
 })();
 </script>
 </body>
