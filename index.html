@@ -95,17 +95,18 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .map-status{margin-top:9px}
 .map-tools{margin-top:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
 .map-tools .field{flex:1 1 240px;position:relative}
-.place-results{position:absolute;top:100%;left:0;right:0;z-index:80;margin-top:4px;background:var(--popover);border:1px solid var(--card-border);border-radius:10px;overflow:hidden;box-shadow:0 18px 42px rgba(0,0,0,.42)}
+.place-results{position:absolute;top:100%;left:0;right:0;z-index:80;margin-top:4px;background:hsl(222,20%,13%);border:1px solid var(--card-border);border-radius:10px;overflow:hidden;box-shadow:0 18px 42px rgba(0,0,0,.42)}
 .place-results button{display:block;width:100%;text-align:left;padding:10px 12px;min-height:44px;background:none;border:none;border-bottom:1px solid var(--border);color:var(--foreground);font-size:.92rem}
 .place-results button:last-child{border-bottom:none}
-.place-results button:hover,.place-results button:focus-visible{background:var(--accent)}
+.place-results button:hover,.place-results button:focus-visible{background:hsl(222,18%,22%)}
 .place-results .pr-kind{color:var(--muted-foreground);font-size:.78rem}
 .atlas-toggle{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-size:.9rem;color:var(--accent-foreground)}
 .atlas-toggle input{width:20px;height:20px;min-height:20px}
 .atlas-icon{background:none;border:none}
 .atlas-dot{display:block;width:10px;height:10px;border-radius:50%;background:#e9e2cf;border:2px solid #22242c;box-shadow:0 1px 4px rgba(0,0,0,.6)}
-.place-card{margin-top:12px;border:1px solid var(--card-border);border-left:3px solid var(--primary);border-radius:10px;padding:12px 14px}
-.place-card h4{margin:0 0 3px;font-size:1.02rem}
+.place-card{margin:0 0 12px;border:1px solid var(--card-border);border-left:3px solid var(--primary);border-radius:10px;padding:12px 14px;background:hsl(222,20%,13%)}
+.place-card h4{margin:0 0 3px;font-size:1.02rem;cursor:move;touch-action:none}
+.place-card.floating{position:fixed;z-index:1200;margin:0;box-shadow:0 18px 42px rgba(0,0,0,.5)}
 .place-card p{margin:5px 0 0}
 .place-card .pc-close{float:right}
 .mk-ruin .mk-dot{background:#c47b4a}
@@ -233,7 +234,7 @@ body.bg-animated::before{animation:none}
 .map-stage{display:flex;gap:14px;align-items:flex-start;margin-top:12px}
 .map-stage .map-side{flex:1 1 auto;min-width:0}
 .map-repo{flex:0 0 300px;min-width:0}
-.map-repo:has(.lib-panel[hidden]):not(:has(.lib-panel:not([hidden]))){display:none}
+.map-repo:has(.lib-panel[hidden]):not(:has(.lib-panel:not([hidden]))):has(> #placeCard[hidden]){display:none}
 .map-repo .lib-panel{margin:0}
 @media (max-width:820px){
 .map-stage{flex-direction:column}
@@ -413,6 +414,7 @@ body.displaying .init-strip{font-size:1.05rem}
   <header class="vtt-head">
     <h1>APOC VTT</h1>
     <span class="muted small" id="siteVersion" hidden></span>
+    <button type="button" class="btn primary" id="pushTvBtn" title="Open a second, map-only copy for the TV — this laptop copy keeps all the controls">Push to TV</button>
     <button class="btn" id="ambBtn" type="button" aria-pressed="false" title="Toggle animated scenes and ambient sound">🔇 Ambience off</button>
     <button class="btn" id="layoutResetBtn" type="button" title="Restore the default perimeter layout">Reset layout</button>
   </header>
@@ -435,10 +437,7 @@ body.displaying .init-strip{font-size:1.05rem}
       </div>
       <label class="atlas-toggle"><input type="checkbox" id="atlasToggle" checked> Atlas places</label>
       <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
-      <button type="button" class="btn primary" id="pushTvBtn" title="Open a second, map-only copy for the TV — this laptop copy keeps all the controls">Push to TV</button>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
-      <button type="button" class="btn" id="fsBtn">Full screen</button>
-      <button type="button" class="btn danger" id="dropRemoveBtn" hidden>Remove map</button>
     </div>
     <div class="map-tools">
       <label class="atlas-toggle"><input type="checkbox" id="gridToggle"> Grid</label>
@@ -616,10 +615,12 @@ body.displaying .init-strip{font-size:1.05rem}
       <button type="button" class="btn" id="tplAnchorBtn" hidden>Anchor to token</button>
       <button type="button" class="btn danger" id="drawDelSelBtn" hidden>Delete selected</button>
       <span class="muted small" id="drawStatus"></span>
+      <button type="button" class="btn" id="fsBtn">Full screen</button>
     </div>
     <div class="map-tools">
       <span class="muted small">Layers:</span>
       <span id="drawLayerChips" class="layer-chips"></span>
+      <button type="button" class="btn danger" id="dropRemoveBtn" hidden>Remove map</button>
       <button type="button" class="btn" id="drawAddLayer">Add layer</button>
       <button type="button" class="btn" id="layerRenameBtn">Rename layer</button>
       <button type="button" class="btn danger" id="layerDelBtn" aria-label="Delete layer" title="Delete layer">Delete<br>Layer</button>
@@ -681,10 +682,10 @@ body.displaying .init-strip{font-size:1.05rem}
     <div class="map-stage">
       <div class="map-side">
         <div id="apocMap" class="apoc-map" aria-label="Editable shared map of Faerûn"></div>
-        <div id="placeCard" class="place-card" hidden></div>
         <p class="map-status muted small" id="mapStatus">Loading the shared markers…</p>
       </div>
       <aside class="map-repo" aria-label="Art Library">
+        <div id="placeCard" class="place-card" hidden></div>
         <div class="nest artlib" id="artLibrary">
           <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
           <div class="nest-body">
@@ -1173,10 +1174,44 @@ setInterval(loadSharedEntries, 60000);
   const atlasLayer = L.layerGroup().addTo(map);
   const card = $("placeCard"), searchInput = $("placeSearch"), resultsBox = $("placeResults");
   function showCard(title, kindLabel, body, hint){
-    card.innerHTML = `<button type="button" class="btn pc-close" id="placeCardClose">Close</button><h4>${esc(title)}</h4><span class="pr-kind">${esc(kindLabel)}</span><p>${esc(body)}</p>${hint ? `<p class="muted small">${esc(hint)}</p>` : ""}`;
+    card.innerHTML = `<button type="button" class="btn pc-close" id="placeCardClose">Close</button><h4 title="Drag to move this card">${esc(title)}</h4><span class="pr-kind">${esc(kindLabel)}</span><p>${esc(body)}</p>${hint ? `<p class="muted small">${esc(hint)}</p>` : ""}`;
     card.hidden = false;
+    pcRestore();
     $("placeCardClose").addEventListener("click", () => { card.hidden = true; });
   }
+  /* The place card is movable (Shaun): drag it by its title; where it is
+     dropped sticks (per device). Reset layout sends it back to its dock
+     at the top of the right-hand column, beside the map. */
+  const PC_KEY = "apocvtt:placecard-pos";
+  function pcFloat(x, y){
+    const r = card.getBoundingClientRect();
+    card.classList.add("floating");
+    card.style.width = Math.max(220, Math.min(340, r.width || 300)) + "px";
+    card.style.left = Math.max(0, Math.min(window.innerWidth - 60, x)) + "px";
+    card.style.top = Math.max(0, Math.min(window.innerHeight - 40, y)) + "px";
+  }
+  function pcRestore(){
+    try { const p = JSON.parse(localStorage.getItem(PC_KEY) || "null");
+      if (p && typeof p.x === "number" && typeof p.y === "number") pcFloat(p.x, p.y);
+    } catch(e) {}
+  }
+  card.addEventListener("pointerdown", ev => {
+    if (!ev.target.closest("h4") || ev.target.closest("button")) return;
+    const r = card.getBoundingClientRect();
+    if (!card.classList.contains("floating")) pcFloat(r.left, r.top);
+    const dx = ev.clientX - r.left, dy = ev.clientY - r.top;
+    try { card.setPointerCapture(ev.pointerId); } catch(e) {}
+    const move = e2 => { card.style.left = Math.max(0, Math.min(window.innerWidth - 60, e2.clientX - dx)) + "px"; card.style.top = Math.max(0, Math.min(window.innerHeight - 40, e2.clientY - dy)) + "px"; };
+    const up = () => { card.removeEventListener("pointermove", move); card.removeEventListener("pointerup", up);
+      try { localStorage.setItem(PC_KEY, JSON.stringify({ x: parseInt(card.style.left, 10) || 0, y: parseInt(card.style.top, 10) || 0 })); } catch(e) {} };
+    card.addEventListener("pointermove", move); card.addEventListener("pointerup", up);
+    ev.preventDefault();
+  });
+  const pcResetBtn = document.getElementById("layoutResetBtn");
+  if (pcResetBtn) pcResetBtn.addEventListener("click", () => {
+    try { localStorage.removeItem(PC_KEY); } catch(e) {}
+    card.classList.remove("floating"); card.style.left = ""; card.style.top = ""; card.style.width = "";
+  });
   function focusPlace(x, y, title, kindLabel, body, hint){
     map.flyTo(toLatLng(x, y), Math.max(map.getZoom(), 0.75), { duration: 0.6 });
     showCard(title, kindLabel, body, hint);
