@@ -256,6 +256,20 @@ input,select,textarea{font-size:16px}
 .layer-chip.active{border-color:var(--primary);color:var(--primary);box-shadow:inset 0 -3px 0 var(--primary)}
 .chip-eye{min-width:40px}
 .apoc-map.drag-over{outline:3px dashed var(--primary);outline-offset:-3px}
+/* ===== v1.04: Paint palette, template handles, repo drawer (Roll20 right dock) ===== */
+.paint-pal{display:flex;flex-wrap:wrap;gap:4px}
+.pal-swatch{width:30px;height:30px;min-height:30px;border:1px solid hsl(222 18% 30%);border-radius:6px;padding:0;cursor:pointer}
+.pal-swatch[aria-pressed="true"]{outline:2px solid var(--primary);outline-offset:1px}
+.lib-item{touch-action:none}
+.drag-ghost{position:fixed;z-index:3000;pointer-events:none;opacity:.88;width:76px;height:76px}
+.tpl-handle-icon{background:transparent;border:none}
+.tpl-handle{display:block;width:22px;height:22px;border-radius:50%;background:var(--primary);border:2px solid #fff;box-shadow:0 1px 6px rgba(0,0,0,.5);cursor:grab}
+#repoTab{display:none}
+@media (max-width:820px){
+  .map-stage{flex-direction:row}
+  .map-repo{position:fixed;top:0;right:0;height:100dvh;width:min(320px,86vw);flex:none;z-index:1500;background:var(--background);overflow-y:auto;padding:10px;box-shadow:-14px 0 34px rgba(0,0,0,.45)}
+  #repoTab{display:block;position:fixed;right:0;top:42%;z-index:1400;writing-mode:vertical-rl;padding:16px 9px;border-radius:12px 0 0 12px;min-height:120px}
+}
 .stamp-picked{border-color:var(--primary) !important;color:var(--primary)}
 .stamp-icon{background:none;border:none}
 .stamp-icon img{display:block;object-fit:contain}
@@ -342,6 +356,8 @@ input,select,textarea{font-size:16px}
         <select id="drawTool">
           <option value="">Off</option>
           <option value="select">Select / move</option>
+          <option value="lasso">Free-form select</option>
+          <option value="zoom">Magnifier</option>
           <option value="line">Freehand line</option>
           <option value="arrow">Arrow</option>
           <option value="rect">Rectangle</option>
@@ -351,6 +367,7 @@ input,select,textarea{font-size:16px}
           <option value="text">Text note</option>
           <option value="template">Spell template</option>
           <option value="paint">Paint brush</option>
+          <option value="spray">Airbrush</option>
           <option value="clone">Clone stamp</option>
           <option value="stamp">Stamp</option>
           <option value="pick">Eyedropper</option>
@@ -402,7 +419,14 @@ input,select,textarea{font-size:16px}
         <label for="drawOpacity">Opacity</label>
         <input id="drawOpacity" type="range" min="0.1" max="1" step="0.05" value="1" style="width:110px">
       </div>
-      <label class="atlas-toggle"><input type="checkbox" id="drawFill" checked> Fill shapes</label>
+      <div class="field" style="flex:0 1 auto">
+        <label for="drawFillMode">Shape fill</label>
+        <select id="drawFillMode">
+          <option value="both" selected>Outline + fill</option>
+          <option value="outline">Outline only</option>
+          <option value="fill">Fill only</option>
+        </select>
+      </div>
       <div class="field" style="flex:0 1 auto">
         <label for="drawLayerSel">Layer</label>
         <select id="drawLayerSel">
@@ -416,11 +440,20 @@ input,select,textarea{font-size:16px}
           <option value="circle">Circle — radius</option>
           <option value="cone">Cone — length</option>
           <option value="line">Line — length</option>
+          <option value="square">Square — side</option>
+          <option value="ring">Ring — radius</option>
         </select>
       </div>
       <div class="field" style="flex:0 1 auto" id="tplSizeField" hidden>
         <label for="tplSize">Size (ft)</label>
         <input id="tplSize" type="number" value="20" min="5" step="5" style="width:84px">
+      </div>
+      <div class="field" style="flex:0 1 auto" id="tplWidthField" hidden>
+        <label for="tplWidth">Line width (ft)</label>
+        <select id="tplWidth">
+          <option value="5">5 ft</option>
+          <option value="10">10 ft</option>
+        </select>
       </div>
       <div class="field" style="flex:0 1 auto" id="stampSizeField" hidden>
         <label for="stampSize">Stamp size</label>
@@ -432,10 +465,17 @@ input,select,textarea{font-size:16px}
       </div>
       <label class="atlas-toggle"><input type="checkbox" id="drawToggle" checked> Drawings</label>
       <label class="atlas-toggle"><input type="checkbox" id="tokensToggle" checked> Tokens</label>
+      <div class="field" style="flex:1 1 100%">
+        <label>Paint palette</label>
+        <div class="paint-pal" id="paintPalette"></div>
+      </div>
       <button type="button" class="btn" id="drawUndo">Undo drawing</button>
       <button type="button" class="btn" id="drawRedo">Redo</button>
       <button type="button" class="btn" id="drawClear">Clear drawings</button>
       <button type="button" class="btn" id="drawDupBtn" hidden>Duplicate</button>
+      <button type="button" class="btn" id="drawFrontBtn" hidden>To front</button>
+      <button type="button" class="btn" id="drawBackBtn" hidden>To back</button>
+      <button type="button" class="btn" id="tplAnchorBtn" hidden>Anchor to token</button>
       <button type="button" class="btn danger" id="drawDelSelBtn" hidden>Delete selected</button>
       <span class="muted small" id="drawStatus"></span>
     </div>
@@ -454,6 +494,55 @@ input,select,textarea{font-size:16px}
     <div class="lib-panel" id="stampLib" hidden>
       <p class="lib-head">Stamps</p>
       <div class="lib-grid" id="stampGrid"></div>
+    </div>
+    <div class="lib-panel" id="tplLib" hidden>
+      <p class="lib-head">Bursts — radius</p>
+      <div class="lib-grid" id="tplBursts"></div>
+      <p class="lib-head">Cones — length</p>
+      <div class="lib-grid" id="tplCones"></div>
+      <p class="lib-head">Lines — length × width</p>
+      <div class="lib-grid" id="tplLines"></div>
+      <p class="lib-head">Squares — side</p>
+      <div class="lib-grid" id="tplSquares"></div>
+      <p class="lib-head">Distance rings</p>
+      <div class="lib-grid" id="tplRings"></div>
+      <div class="field" style="max-width:280px">
+        <label for="tplAnchor">Anchor to token</label>
+        <select id="tplAnchor"><option value="">None</option></select>
+      </div>
+      <p class="lib-head">The Ash</p>
+      <div class="form-grid">
+        <div class="field">
+          <label for="ashToken">Caster</label>
+          <select id="ashToken"></select>
+        </div>
+        <div class="field">
+          <label for="ashTerrain">Terrain</label>
+          <select id="ashTerrain">
+            <option value="silt">Silt Sea / Ocean / Desert / air</option>
+            <option value="boulder">Boulder fields / Salt flats / Sandy wastes</option>
+            <option value="mountain">Mountains / Rocky badlands / Stony barrens</option>
+            <option value="scrub">Scrub plains</option>
+            <option value="verdant">Verdant belts</option>
+            <option value="forest">Forests</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="ashLevel">Spell level</label>
+          <select id="ashLevel">
+            <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option>
+            <option>6</option><option>7</option><option>8</option><option>9</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>&nbsp;</label>
+          <button type="button" class="btn primary" id="ashCastBtn">Cast Ash</button>
+        </div>
+      </div>
+      <div class="map-actions">
+        <button type="button" class="btn" id="ashVisualBtn" aria-pressed="false">Ash — visual only</button>
+        <span class="muted small" id="ashMeta"></span>
+      </div>
     </div>
     <div class="map-stage">
       <div class="map-side">
@@ -476,6 +565,7 @@ input,select,textarea{font-size:16px}
         </div>
       </aside>
     </div>
+    <button type="button" class="btn primary" id="repoTab">Repository</button>
     <form id="markerForm" class="marker-form" hidden>
       <div class="form-grid">
         <div class="field">
@@ -556,6 +646,16 @@ input,select,textarea{font-size:16px}
         </div>
         <div class="field full">
           <label class="atlas-toggle"><input type="checkbox" id="tokenGm"> GM only — hidden from players and the TV</label>
+        </div>
+        <div class="field full" id="tokenLightField">
+          <label for="tokenLight">Light / vision radius (ft)</label>
+          <input id="tokenLight" type="number" min="0" step="5" placeholder="0">
+        </div>
+        <div class="field full">
+          <label class="atlas-toggle"><input type="checkbox" id="tokenFlip"> Flip (mirror)</label>
+        </div>
+        <div class="field full">
+          <label class="atlas-toggle"><input type="checkbox" id="tokenLock"> Locked in place</label>
         </div>
         <div class="field full">
           <label>Status markers</label>
@@ -1097,7 +1197,7 @@ setInterval(loadSharedEntries, 60000);
     }).join("");
     return L.divIcon({
       className: "tk-icon",
-      html: `<div class="tk tkc-${tk.color || "amber"}${tk.gm ? " tk-gm" : ""}" style="width:${px}px"><div class="tk-disc" style="width:${px}px;height:${px}px;font-size:${Math.round(px * 0.45)}px">${disc}</div>${hp}<div class="tk-status">${dots}</div><span class="tk-label">${esc(tk.name || "Token")}</span></div>`,
+      html: `<div class="tk tkc-${tk.color || "amber"}${tk.gm ? " tk-gm" : ""}" style="width:${px}px"><div class="tk-disc" style="width:${px}px;height:${px}px;font-size:${Math.round(px * 0.45)}px${tk.flip ? ";transform:scaleX(-1)" : ""}">${disc}</div>${hp}<div class="tk-status">${dots}</div><span class="tk-label">${esc(tk.name || "Token")}</span></div>`,
       iconAnchor: [px / 2, px / 2]
     });
   }
@@ -1105,7 +1205,8 @@ setInterval(loadSharedEntries, 60000);
     tokenLayer.clearLayers();
     for (const tk of tokens) {
       if (tk.gm && !effectiveGm()) continue;
-      const m = L.marker(toLatLng(tk.x, tk.y), { draggable: true, icon: tokenIcon(tk) }).addTo(tokenLayer);
+      if (tk.light > 0) tokenLayer.addLayer(L.circle(toLatLng(tk.x, tk.y), { radius: tk.light / feetPerSquare * CELL, color: "#e8a33d", weight: 1, dashArray: "4 4", fillColor: "#e8a33d", fillOpacity: 0.08, interactive: false }));
+      const m = L.marker(toLatLng(tk.x, tk.y), { draggable: !tk.lock, icon: tokenIcon(tk) }).addTo(tokenLayer);
       m.on("click", () => {
         if (isProjecting() || document.body.classList.contains("map-expanded")) {
           L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(tk.name)}</b>${tk.maxHp > 0 ? `<br>HP ${tk.hp || 0}/${tk.maxHp}` : ""}`).openOn(map);
@@ -1170,6 +1271,9 @@ setInterval(loadSharedEntries, 60000);
     $("tokenImg").value = tk.img || "";
     $("tokenSym").value = tk.sym || "";
     $("tokenGm").checked = !!tk.gm;
+    $("tokenLight").value = tk.light || "";
+    $("tokenFlip").checked = !!tk.flip;
+    $("tokenLock").checked = !!tk.lock;
     draftStatus = [...(tk.status || [])];
     renderStatusChips();
     fillLinkOptions(tk.entryId || "");
@@ -1251,7 +1355,10 @@ setInterval(loadSharedEntries, 60000);
       sym: $("tokenSym").value.trim().slice(0, 4),
       status: [...draftStatus],
       entryId: $("tokenLink").value,
-      gm: $("tokenGm").checked
+      gm: $("tokenGm").checked,
+      light: parseFloat($("tokenLight").value) || 0,
+      flip: $("tokenFlip").checked,
+      lock: $("tokenLock").checked
     });
     const ok = await saveTokens();
     if (!ok) { tokenStatusEl.textContent = "That token didn't save — check the connection and try again."; return; }
@@ -1337,7 +1444,7 @@ setInterval(loadSharedEntries, 60000);
   const drawLayerDef = id => drawLayers.find(l => l.id === id) || drawLayers[0];
   const curDrawColor = () => $("drawColor").value;
   const curDrawWidth = () => parseInt($("drawWidth").value, 10) || 3;
-  const curDrawFill = () => $("drawFill").checked;
+  const curDrawFill = () => $("drawFillMode").value !== "outline";
   function curLayerPatch(){ const def = drawLayerDef($("drawLayerSel").value); return { layer: def.id, gm: !!def.gm }; }
   function buildLayerUi(){
     const sel = $("drawLayerSel");
@@ -1463,8 +1570,8 @@ setInterval(loadSharedEntries, 60000);
       if (ldef.hidden) continue;
       if (ldef.gm && !gm) continue;
       const lop = (typeof ldef.opacity === "number" ? ldef.opacity : 1) * (typeof it.opacity === "number" ? it.opacity : 1);
-      const st = { color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false, opacity: lop };
-      const fo = (it.fill === false ? 0 : 0.18) * lop;
+      const st = { color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false, opacity: it.fillMode === "fill" ? 0 : lop };
+      const fo = it.fillMode === "fill" ? 0.35 * lop : (it.fill === false ? 0 : 0.18) * lop;
       if (it.type === "line") drawLayer.addLayer(L.polyline(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fill: false }));
       else if (it.type === "poly") drawLayer.addLayer(L.polygon(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fillOpacity: fo }));
       else if (it.type === "arrow") {
@@ -1486,12 +1593,23 @@ setInterval(loadSharedEntries, 60000);
       else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { icon: stampIcon(it, lop), interactive: false }));
       else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(it.data, [[0, 0], [MH, MW]], { opacity: lop, interactive: false }));
       else if (it.type === "template") {
-        const cells = (it.sizeFt || 20) / feetPerSquare;
-        const Lun = cells * CELL;
-        const o = [it.x / 100 * MW, it.y / 100 * MH];
+        const anchorTk = it.anchor ? tokens.find(t => t.id === it.anchor) : null;
+        const ox = anchorTk ? anchorTk.x : it.x, oy = anchorTk ? anchorTk.y : it.y;
+        const Lun = (it.sizeFt || 20) / feetPerSquare * CELL;
+        const o = [ox / 100 * MW, oy / 100 * MH];
         const tfo = (it.fill === false ? 0 : 0.22) * lop;
         if (it.shape === "circle") {
           drawLayer.addLayer(L.circle(uToLatLng(o[0], o[1]), { ...st, radius: Lun, fillOpacity: tfo }));
+        } else if (it.shape === "ring") {
+          drawLayer.addLayer(L.circle(uToLatLng(o[0], o[1]), { ...st, weight: Math.max(2, it.w || 3), radius: Lun, fillOpacity: 0.05 * lop }));
+          drawLayer.addLayer(L.marker(uToLatLng(o[0], o[1]), { icon: L.divIcon({ className: "atlas-icon", html: `<span class="ruler-label">${it.sizeFt || 20} ft</span>`, iconAnchor: [0, 0] }), interactive: false }));
+        } else if (it.shape === "square") {
+          const a = (it.angle || 0) * Math.PI / 180, half = Lun / 2;
+          const cs = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([sx, sy]) => {
+            const lx = sx * half, ly = sy * half;
+            return uToLatLng(o[0] + lx * Math.cos(a) - ly * Math.sin(a), o[1] + lx * Math.sin(a) + ly * Math.cos(a));
+          });
+          drawLayer.addLayer(L.polygon(cs, { ...st, fillOpacity: tfo }));
         } else {
           const a = (it.angle || 0) * Math.PI / 180;
           const end = [o[0] + Lun * Math.cos(a), o[1] + Lun * Math.sin(a)];
@@ -1501,12 +1619,15 @@ setInterval(loadSharedEntries, 60000);
             const p2 = [o[0] + Lun * Math.cos(a + h), o[1] + Lun * Math.sin(a + h)];
             drawLayer.addLayer(L.polygon([uToLatLng(o[0], o[1]), uToLatLng(p1[0], p1[1]), uToLatLng(p2[0], p2[1])], { ...st, fillOpacity: tfo }));
           } else {
-            const wU = (5 / feetPerSquare) * CELL / 2;
+            const wU = ((it.widthFt || 5) / feetPerSquare) * CELL / 2;
             const pxv = -Math.sin(a), pyv = Math.cos(a);
             const c = [[o[0] + pxv * wU, o[1] + pyv * wU], [end[0] + pxv * wU, end[1] + pyv * wU], [end[0] - pxv * wU, end[1] - pyv * wU], [o[0] - pxv * wU, o[1] - pyv * wU]];
             drawLayer.addLayer(L.polygon(c.map(p => uToLatLng(p[0], p[1])), { ...st, fillOpacity: tfo }));
           }
         }
+      }
+      else if (it.type === "ash") {
+        drawLayer.addLayer(L.circle(uToLatLng(it.x / 100 * MW, it.y / 100 * MH), { color: "#000000", weight: 1, fillColor: "#17181c", fillOpacity: 0.55 * lop, interactive: false, radius: (it.rSq || 3) * CELL }));
       }
     }
   }
@@ -1638,6 +1759,7 @@ setInterval(loadSharedEntries, 60000);
       else if (it.type === "rect") { const a = P([it.x, it.y]), b = P([it.x + it.w, it.y + it.h]); hit = ux > Math.min(a[0], b[0]) - tol && ux < Math.max(a[0], b[0]) + tol && uy > Math.min(a[1], b[1]) - tol && uy < Math.max(a[1], b[1]) + tol; }
       else if (it.type === "circle") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < it.r / 100 * MW + tol; }
       else if (it.type === "text" || it.type === "template") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < CELL; }
+      else if (it.type === "ash") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < (it.rSq || 3) * CELL + tol / 2; }
       if (hit) {
         drawItems.splice(i, 1);
         saveDraw().then(ok => { renderDraw(); drawStatusEl.textContent = ok ? "Erased." : "Erase didn't save — refreshed."; if (!ok) loadDraw(true); });
@@ -2044,6 +2166,8 @@ setInterval(loadSharedEntries, 60000);
   function withOp(item){
     const o = curDrawOpacity();
     if (o < 1) item.opacity = Math.round(o * 100) / 100;
+    const fm = $("drawFillMode").value;
+    if (fm !== "both" && /^(rect|circle|ellipse|polygon)$/.test(item.type)) { item.fillMode = fm; item.fill = fm !== "outline"; }
     return item;
   }
   function smoothLine(pts){
@@ -2182,7 +2306,7 @@ setInterval(loadSharedEntries, 60000);
   });
 
   /* ---- Select / move / duplicate / delete ---- */
-  let selItem = null, selDrag = null;
+  let selItem = null, selDrag = null, selExtra = [], selRect = null;
   function itemAnchor(it){
     if (it.type === "line" || it.type === "poly") return it.pts[0];
     if (it.type === "arrow") return it.a;
@@ -2204,6 +2328,7 @@ setInterval(loadSharedEntries, 60000);
     if (it.type === "ellipse") return { x: it.x - it.rx, y: it.y - it.ry, w: it.rx * 2, h: it.ry * 2 };
     if (it.type === "stamp") { const w = (it.size || 2) * CELL / MW * 100, h = (it.size || 2) * CELL / MH * 100; return { x: it.x - w / 2, y: it.y - h / 2, w, h }; }
     if (it.type === "template") { const half = (it.sizeFt || 20) / feetPerSquare * CELL / 2; return { x: it.x - half / MW * 100, y: it.y - half / MH * 100, w: half / MW * 200, h: half / MH * 200 }; }
+    if (it.type === "ash") { const r = (it.rSq || 3) * CELL; return { x: it.x - r / MW * 100, y: it.y - r / MH * 100, w: r / MW * 200, h: r / MH * 200 }; }
     return { x: it.x - 2, y: it.y - 1.5, w: 8, h: 3 };
   }
   function hitItem(p){
@@ -2224,23 +2349,36 @@ setInterval(loadSharedEntries, 60000);
       else if (it.type === "ellipse") { const c = P([it.x, it.y]); const nx = (ux - c[0]) / Math.max(1, it.rx / 100 * MW), ny = (uy - c[1]) / Math.max(1, it.ry / 100 * MH); hit = (nx * nx + ny * ny) <= 1.2; }
       else if (it.type === "stamp") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < (it.size || 2) * CELL / 2 + tol / 2; }
       else if (it.type === "text" || it.type === "template") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < CELL; }
+      else if (it.type === "ash") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < (it.rSq || 3) * CELL + tol / 2; }
       if (hit) return it;
     }
     return null;
   }
+  function selectionItems(){
+    if (!selItem) return [];
+    return [selItem, ...selExtra.filter(it => it !== selItem)].filter(it => drawItems.includes(it));
+  }
   function renderSelection(){
     artFx.clearLayers();
-    const ok = !!selItem && drawItems.includes(selItem);
-    if (!ok) selItem = null;
-    $("drawDupBtn").hidden = $("drawDelSelBtn").hidden = !ok;
-    if (!ok) return;
-    const b = itemBBox(selItem);
-    artFx.addLayer(L.rectangle([toLatLng(b.x, b.y), toLatLng(b.x + b.w, b.y + b.h)], { color: "#e8a33d", weight: 2, dashArray: "6 4", fill: false, interactive: false }));
+    const items = selectionItems();
+    if (!items.length) { selItem = null; selExtra = []; }
+    const ok = items.length > 0;
+    $("drawDupBtn").hidden = $("drawDelSelBtn").hidden = $("drawFrontBtn").hidden = $("drawBackBtn").hidden = !ok;
+    $("tplAnchorBtn").hidden = !(items.length === 1 && items[0].type === "template");
+    if (items.length === 1 && items[0].type === "template" && items[0].anchor) $("tplAnchorBtn").textContent = "Unanchor";
+    else $("tplAnchorBtn").textContent = "Anchor to token";
+    for (const it of items) {
+      const b = itemBBox(it);
+      artFx.addLayer(L.rectangle([toLatLng(b.x, b.y), toLatLng(b.x + b.w, b.y + b.h)], { color: "#e8a33d", weight: 2, dashArray: "6 4", fill: false, interactive: false }));
+    }
+    if (items.length === 1 && (items[0].type === "template" || items[0].type === "ash")) renderTplHandles(items[0]);
+    else clearTplHandles();
   }
-  function clearSelection(){ selItem = null; selDrag = null; renderSelection(); }
+  function clearSelection(){ selItem = null; selExtra = []; selDrag = null; renderSelection(); }
   async function deleteSelected(){
-    if (!selItem) return;
-    drawItems = drawItems.filter(it => it !== selItem);
+    const items = selectionItems();
+    if (!items.length) return;
+    drawItems = drawItems.filter(it => !items.includes(it));
     clearSelection();
     const ok = await saveDraw(); renderDraw();
     drawStatusEl.textContent = ok ? "Deleted — the table sees it." : "Delete didn't save — refreshed.";
@@ -2248,11 +2386,11 @@ setInterval(loadSharedEntries, 60000);
   }
   $("drawDelSelBtn").addEventListener("click", deleteSelected);
   $("drawDupBtn").addEventListener("click", async () => {
-    if (!selItem || selItem.type === "paint") return;
-    const copy = JSON.parse(JSON.stringify(selItem));
-    itemTranslate(copy, 2, 2);
-    drawItems.push(copy);
-    selItem = copy;
+    const items = selectionItems().filter(it => it.type !== "paint");
+    if (!items.length) return;
+    const copies = items.map(it => { const c = JSON.parse(JSON.stringify(it)); itemTranslate(c, 2, 2); return c; });
+    drawItems.push(...copies);
+    selItem = copies[0]; selExtra = copies.slice(1);
     const ok = await saveDraw(); renderDraw(); renderSelection();
     drawStatusEl.textContent = ok ? "Duplicated." : "Duplicate didn't save — refreshed.";
     if (!ok) loadDraw(true);
@@ -2521,8 +2659,18 @@ setInterval(loadSharedEntries, 60000);
     if (tool === "pick") { pickColor(p); return; }
     if (tool === "bucket") { bucketFill(p); return; }
     if (tool === "select") {
-      selItem = hitItem(p);
-      selDrag = selItem ? { last: p, moved: false } : null;
+      if (patch) {
+        const pb = patchBoundsPct();
+        if (p.x >= pb.x && p.x <= pb.x + pb.w && p.y >= pb.y && p.y <= pb.y + pb.h) { patchDrag = { last: p }; return; }
+        await finalizePatch();
+      }
+      const hit = hitItem(p);
+      if (hit) {
+        if (!selectionItems().includes(hit)) { selItem = hit; selExtra = []; }
+        selDrag = { last: p, moved: false };
+      } else {
+        selRect = { p0: p, cur: p };
+      }
       renderSelection();
       return;
     }
@@ -2536,9 +2684,11 @@ setInterval(loadSharedEntries, 60000);
   map.on("mousemove", e => {
     if (isProjecting()) return;
     const p = toXY(e.latlng);
+    if (patchDrag && patch) { movePatch(p); return; }
+    if (selRect) { selRect.cur = p; drawSelRect(); return; }
     if (selDrag && selItem) {
       const dx = p.x - selDrag.last.x, dy = p.y - selDrag.last.y;
-      if (dx || dy) { itemTranslate(selItem, dx, dy); selDrag.last = p; selDrag.moved = true; renderDraw(); renderSelection(); }
+      if (dx || dy) { for (const it of selectionItems()) if (it.type !== "ash") itemTranslate(it, dx, dy); selDrag.last = p; selDrag.moved = true; renderDraw(); renderSelection(); }
       return;
     }
     if (paintStroke) { paintMove(p); return; }
@@ -2547,6 +2697,13 @@ setInterval(loadSharedEntries, 60000);
   });
   map.on("mouseup", async e => {
     const p = toXY(e.latlng);
+    if (patchDrag) patchDrag = null;
+    if (selRect) {
+      const r = { x: Math.min(selRect.p0.x, selRect.cur.x), y: Math.min(selRect.p0.y, selRect.cur.y), w: Math.abs(selRect.cur.x - selRect.p0.x), h: Math.abs(selRect.cur.y - selRect.p0.y) };
+      selRect = null;
+      selFx.clearLayers();
+      if (r.w > 0.3 || r.h > 0.3) await finishRectSelect(r);
+    }
     if (selDrag) {
       if (selDrag.moved && selItem) {
         const ok = await saveDraw();
@@ -2684,8 +2841,29 @@ setInterval(loadSharedEntries, 60000);
     e.preventDefault();
     $("apocMap").classList.remove("drag-over");
     const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) addDroppedFile(f);
+    if (!f) return;
+    if (e.target && e.target.closest && e.target.closest("#apocMap")) {
+      const rect = $("apocMap").getBoundingClientRect();
+      const ll = map.containerPointToLatLng(L.point(e.clientX - rect.left, e.clientY - rect.top));
+      addDroppedTokenFile(f, toXY(ll));
+    } else addDroppedFile(f);
   });
+  async function addDroppedTokenFile(file, p){
+    if (!file || !/^image\/(png|jpeg|webp|gif)/.test(file.type)) return;
+    const id = "drop-" + Date.now().toString(36);
+    const name = (file.name || "Dropped token").replace(/\.[a-z0-9]+$/i, "").slice(0, 60) || "Dropped token";
+    const ext = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+    const path = `vtt-tokens/${id}.${ext}`;
+    let img = null, shared = false;
+    try { const up = await db.storage.from(DROP_BUCKET).upload(path, file, { contentType: file.type, upsert: false }); shared = !up.error; } catch (err) { shared = false; }
+    img = shared ? dropPublicUrl(path) : URL.createObjectURL(file);
+    const tk = { id: newId(), name, x: p.x, y: p.y, size: 1, color: "amber", hp: null, maxHp: null, img, sym: "", status: [], entryId: "" };
+    tokens.push(tk);
+    const ok = await saveTokens();
+    drawTokens();
+    tokenStatusEl.textContent = ok ? `"${name}" dropped on the map${shared ? "" : " (token lives on this device only — the upload didn't go through)"}.` : "That token didn't save — try again.";
+    if (!ok) loadTokens(true);
+  }
   setInterval(() => {
     const def = MAPS[$("mapSelect").value];
     $("dropRemoveBtn").hidden = !(def && def.drop);
@@ -2720,6 +2898,431 @@ setInterval(loadSharedEntries, 60000);
     loadActiveMap();
   })();
   setInterval(loadDropRegistry, 60000);
+
+  /* ============ v1.04: templates + The Ash, Paint kit, full drag & drop ============ */
+  const selFx = L.layerGroup().addTo(map);
+  let patch = null, patchDrag = null;
+
+  /* ---- Rect select + moveable raster patch + free-form (lasso) select ---- */
+  function drawSelRect(){
+    selFx.clearLayers();
+    if (!selRect) return;
+    selFx.addLayer(L.rectangle([toLatLng(selRect.p0.x, selRect.p0.y), toLatLng(selRect.cur.x, selRect.cur.y)], { color: "#e8a33d", weight: 2, dashArray: "6 4", fill: false, interactive: false }));
+  }
+  function itemAnchor(it){
+    if (it.type === "line" && it.pts && it.pts.length) return { x: it.pts[0][0], y: it.pts[0][1] };
+    if (it.type === "arrow") return { x: it.a[0], y: it.a[1] };
+    if (it.type === "paint") return { x: -999, y: -999 };
+    return { x: it.x || 0, y: it.y || 0 };
+  }
+  function itemSelectable(it){
+    const def = drawLayers.find(l => l.id === layerOf(it));
+    return !!def && !def.hidden && !(def.gm && !gmView);
+  }
+  async function finishRectSelect(r){
+    const hits = drawItems.filter(it => {
+      if (!itemSelectable(it)) return false;
+      const b = itemBBox(it), cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+      return cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h;
+    });
+    if (hits.length) { selItem = hits[0]; selExtra = hits.slice(1); renderSelection(); drawStatusEl.textContent = `${hits.length} item(s) selected.`; return; }
+    const layerId = $("drawLayerSel").value;
+    if (drawItems.some(i => i.type === "paint" && layerOf(i) === layerId)) await beginPatch(r);
+  }
+  async function beginPatch(r){
+    const layerId = $("drawLayerSel").value;
+    const rec = await ensurePaint(layerId);
+    const x0 = Math.max(0, Math.round(r.x / 100 * rec.canvas.width)), y0 = Math.max(0, Math.round(r.y / 100 * rec.canvas.height));
+    const w = Math.min(rec.canvas.width - x0, Math.round(r.w / 100 * rec.canvas.width)), h = Math.min(rec.canvas.height - y0, Math.round(r.h / 100 * rec.canvas.height));
+    if (w < 4 || h < 4) return;
+    const pc = document.createElement("canvas"); pc.width = w; pc.height = h;
+    pc.getContext("2d").drawImage(rec.canvas, x0, y0, w, h, 0, 0, w, h);
+    rec.ctx.clearRect(x0, y0, w, h);
+    serializePaint(layerId);
+    renderDraw();
+    patch = { mapId: currentMapId, layerId, rec, x0, y0, w, h, cx: x0, cy: y0, canvas: pc, overlay: null };
+    const def = drawLayers.find(l => l.id === layerId);
+    patch.overlay = L.imageOverlay(pc.toDataURL("image/png"), [toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { interactive: false, opacity: def && def.opacity != null ? def.opacity : 1 }).addTo(paintFx);
+    drawStatusEl.textContent = "Patch lifted — drag it into place; tap elsewhere to set it down.";
+  }
+  function patchBoundsPct(){
+    if (!patch) return { x: 0, y: 0, w: 0, h: 0 };
+    return { x: patch.cx / patch.rec.canvas.width * 100, y: patch.cy / patch.rec.canvas.height * 100, w: patch.w / patch.rec.canvas.width * 100, h: patch.h / patch.rec.canvas.height * 100 };
+  }
+  function movePatch(p){
+    const dx = (p.x - patchDrag.last.x) / 100 * patch.rec.canvas.width, dy = (p.y - patchDrag.last.y) / 100 * patch.rec.canvas.height;
+    patchDrag.last = p;
+    patch.cx = Math.max(-patch.w + 8, Math.min(patch.rec.canvas.width - 8, patch.cx + dx));
+    patch.cy = Math.max(-patch.h + 8, Math.min(patch.rec.canvas.height - 8, patch.cy + dy));
+    const b = patchBoundsPct();
+    patch.overlay.setBounds([toLatLng(b.x, b.y), toLatLng(b.x + b.w, b.y + b.h)]);
+  }
+  async function finalizePatch(){
+    if (!patch) return;
+    const pf = patch; patch = null; patchDrag = null;
+    if (pf.overlay) paintFx.removeLayer(pf.overlay);
+    if (pf.mapId !== currentMapId) return; /* map switched mid-float: the cut was never saved, server state intact */
+    pf.rec.ctx.drawImage(pf.canvas, Math.round(pf.cx), Math.round(pf.cy));
+    serializePaint(pf.layerId);
+    const ok = await saveDraw();
+    renderDraw();
+    drawStatusEl.textContent = ok ? "Patch set down — saved." : "Patch didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  }
+  setInterval(() => { if (patch && patch.mapId !== currentMapId) { if (patch.overlay) paintFx.removeLayer(patch.overlay); patch = null; patchDrag = null; } }, 1000);
+  let lassoPts = null;
+  map.on("mousedown", e => {
+    if (isProjecting() || armedMode !== "draw" || $("drawTool").value !== "lasso") return;
+    lassoPts = [toXY(e.latlng)];
+  });
+  map.on("mousemove", e => {
+    if (!lassoPts) return;
+    lassoPts.push(toXY(e.latlng));
+    selFx.clearLayers();
+    selFx.addLayer(L.polyline(lassoPts.map(p => toLatLng(p.x, p.y)), { color: "#e8a33d", weight: 2, dashArray: "4 3", interactive: false }));
+  });
+  map.on("mouseup", () => {
+    if (!lassoPts) return;
+    const pts = lassoPts; lassoPts = null; selFx.clearLayers();
+    if (pts.length < 3) return;
+    const inside = (x, y) => { let c = false; for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) { const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y; if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) c = !c; } return c; };
+    const hits = drawItems.filter(it => itemSelectable(it) && inside(itemAnchor(it).x, itemAnchor(it).y));
+    if (hits.length) { selItem = hits[0]; selExtra = hits.slice(1); renderSelection(); drawStatusEl.textContent = `${hits.length} item(s) selected.`; }
+  });
+
+  /* ---- Template / Ash resize handles ---- */
+  let tplHandles = [];
+  function clearTplHandles(){ for (const m of tplHandles) artFx.removeLayer(m); tplHandles = []; }
+  function tplCenter(it){
+    if (it.type === "template" && it.anchor) { const tk = tokens.find(t => t.id === it.anchor); if (tk) return { x: tk.x, y: tk.y }; }
+    return { x: it.x, y: it.y };
+  }
+  function tplHandlePos(it){
+    const c = tplCenter(it);
+    if (it.type === "ash") return { x: c.x + (it.rSq || 3) * CELL / MW * 100, y: c.y };
+    const Lun = (it.sizeFt || 20) / feetPerSquare * CELL;
+    if (it.shape === "cone" || it.shape === "line") { const a = (it.angle || 0) * Math.PI / 180; return { x: c.x + Math.cos(a) * Lun / MW * 100, y: c.y + Math.sin(a) * Lun / MH * 100 }; }
+    if (it.shape === "square") { const a = (it.angle || 0) * Math.PI / 180 + Math.PI / 4, d = Lun / Math.SQRT2; return { x: c.x + Math.cos(a) * d / MW * 100, y: c.y + Math.sin(a) * d / MH * 100 }; }
+    return { x: c.x + Lun / MW * 100, y: c.y };
+  }
+  function tplWidthHandlePos(it){
+    const c = tplCenter(it), a = (it.angle || 0) * Math.PI / 180;
+    const midU = [c.x / 100 * MW + Math.cos(a) * (it.sizeFt || 20) / feetPerSquare * CELL / 2, c.y / 100 * MH + Math.sin(a) * (it.sizeFt || 20) / feetPerSquare * CELL / 2];
+    const wU = ((it.widthFt || 5) / feetPerSquare) * CELL / 2;
+    return { x: (midU[0] - Math.sin(a) * wU) / MW * 100, y: (midU[1] + Math.cos(a) * wU) / MH * 100 };
+  }
+  function tplSizeLabel(it){
+    if (it.type === "ash") return `${Math.round((it.rSq || 3) * 10) / 10} sq`;
+    if (it.shape === "line") return `${it.sizeFt || 20} ft × ${it.widthFt || 5} ft`;
+    if (it.shape === "square") return `${it.sizeFt || 20} ft side`;
+    return `${it.sizeFt || 20} ft`;
+  }
+  function tplResizeTo(it, p){
+    const c = tplCenter(it);
+    const dxu = (p.x - c.x) / 100 * MW, dyu = (p.y - c.y) / 100 * MH;
+    const dist = Math.hypot(dxu, dyu);
+    if (it.type === "ash") { it.rSq = Math.max(0.5, Math.round(dist / CELL * 2) / 2); return; }
+    const feet = Math.max(1, Math.round(dist / CELL * feetPerSquare));
+    if (it.shape === "cone" || it.shape === "line") { it.sizeFt = feet; it.angle = Math.round(Math.atan2(dyu, dxu) * 180 / Math.PI); }
+    else if (it.shape === "square") { it.sizeFt = Math.max(1, Math.round(dist / CELL * feetPerSquare * Math.SQRT2)); it.angle = Math.round(Math.atan2(dyu, dxu) * 180 / Math.PI - 45); }
+    else it.sizeFt = feet;
+  }
+  function renderTplHandles(it){
+    clearTplHandles();
+    const hp = tplHandlePos(it);
+    const labelIcon = () => L.divIcon({ className: "atlas-icon", html: `<span class="ruler-label">${tplSizeLabel(it)}</span>`, iconAnchor: [-16, 12] });
+    const sizeMk = L.marker(toLatLng(hp.x, hp.y), { draggable: true, icon: L.divIcon({ className: "tpl-handle-icon", html: '<span class="tpl-handle"></span>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(artFx);
+    const label = L.marker(toLatLng(hp.x, hp.y), { interactive: false, icon: labelIcon() }).addTo(artFx);
+    tplHandles.push(sizeMk, label);
+    sizeMk.on("drag", () => {
+      tplResizeTo(it, toXY(sizeMk.getLatLng()));
+      label.setLatLng(sizeMk.getLatLng());
+      label.setIcon(labelIcon());
+      renderDraw();
+    });
+    sizeMk.on("dragend", async () => {
+      const ok = await saveDraw();
+      renderDraw(); renderSelection();
+      drawStatusEl.textContent = ok ? `${tplSizeLabel(it)} — saved.` : "Resize didn't save — refreshed.";
+      if (!ok) loadDraw(true);
+    });
+    if (it.type === "template" && it.shape === "line") {
+      const wp = tplWidthHandlePos(it);
+      const wMk = L.marker(toLatLng(wp.x, wp.y), { draggable: true, icon: L.divIcon({ className: "tpl-handle-icon", html: '<span class="tpl-handle"></span>', iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(artFx);
+      tplHandles.push(wMk);
+      wMk.on("drag", () => {
+        const c = tplCenter(it), a = (it.angle || 0) * Math.PI / 180;
+        const midU = [c.x / 100 * MW + Math.cos(a) * (it.sizeFt || 20) / feetPerSquare * CELL / 2, c.y / 100 * MH + Math.sin(a) * (it.sizeFt || 20) / feetPerSquare * CELL / 2];
+        const p = toXY(wMk.getLatLng());
+        const perp = Math.abs(((p.x / 100 * MW) - midU[0]) * -Math.sin(a) + ((p.y / 100 * MH) - midU[1]) * Math.cos(a));
+        it.widthFt = Math.max(1, Math.round(2 * perp / CELL * feetPerSquare));
+        label.setIcon(labelIcon());
+        renderDraw();
+      });
+      wMk.on("dragend", async () => { const ok = await saveDraw(); renderDraw(); renderSelection(); if (!ok) loadDraw(true); });
+    }
+  }
+
+  /* ---- Templates palette + placement finishing (snap / line width / anchor) ---- */
+  const TPL_PRESETS = {
+    tplBursts: [["circle", 5], ["circle", 10], ["circle", 15], ["circle", 20], ["circle", 30], ["circle", 40]],
+    tplCones: [["cone", 15], ["cone", 30], ["cone", 60]],
+    tplLines: [["line", 30, 5], ["line", 30, 10], ["line", 60, 5], ["line", 60, 10], ["line", 120, 5], ["line", 120, 10]],
+    tplSquares: [["square", 10], ["square", 20]],
+    tplRings: [["ring", 10], ["ring", 20], ["ring", 30], ["ring", 60], ["ring", 120]]
+  };
+  function buildTplLib(){
+    for (const [id, list] of Object.entries(TPL_PRESETS)) {
+      $(id).innerHTML = list.map(([shape, ft, w], i) => `<button type="button" class="btn" data-tpl="${id}:${i}">${ft} ft${shape === "line" ? ` × ${w}` : ""}</button>`).join("");
+    }
+    document.querySelectorAll("[data-tpl]").forEach(b => b.addEventListener("click", () => {
+      const [id, idx] = b.dataset.tpl.split(":");
+      const [shape, ft, w] = TPL_PRESETS[id][Number(idx)];
+      $("tplShape").value = shape;
+      $("tplSize").value = ft;
+      if (shape === "line") $("tplWidth").value = String(w || 5);
+      if ($("drawTool").value !== "template") { $("drawTool").value = "template"; $("drawTool").dispatchEvent(new Event("change")); }
+      else $("tplWidthField").hidden = shape !== "line";
+      drawStatusEl.textContent = "Drag on the map to place and aim it.";
+    }));
+  }
+  buildTplLib();
+  function snapPct(p){
+    const ux = Math.round((p.x / 100 * MW) / CELL) * CELL, uy = Math.round((p.y / 100 * MH) / CELL) * CELL;
+    return { x: Math.round(ux / MW * 10000) / 100, y: Math.round(uy / MH * 10000) / 100 };
+  }
+  let tplLenBefore = 0;
+  map.on("mousedown", () => { if ($("drawTool").value === "template") tplLenBefore = drawItems.length; });
+  map.on("mouseup", () => {
+    if ($("drawTool").value !== "template" || drawItems.length <= tplLenBefore) return;
+    const it = drawItems[drawItems.length - 1];
+    if (!it || it.type !== "template") return;
+    let touched = false;
+    if (it.shape === "line") { const w = parseInt($("tplWidth").value, 10) || 5; if (it.widthFt !== w) { it.widthFt = w; touched = true; } }
+    if (gridOn && gridType === "square") { const s = snapPct({ x: it.x, y: it.y }); if (s.x !== it.x || s.y !== it.y) { it.x = s.x; it.y = s.y; touched = true; } }
+    const anch = $("tplAnchor").value;
+    if (anch && tokens.some(t => t.id === anch)) { it.anchor = anch; touched = true; }
+    if (touched) { renderDraw(); saveDraw().then(ok => { if (!ok) loadDraw(true); }); }
+  });
+
+  /* ---- The Ash (Cost of Magic, Table 1A) ---- */
+  const ASH_TABLE = {
+    silt: [12, 16, 20, 22, 24, 26, 28, 30, 32],
+    boulder: [10, 14, 17, 20, 22, 24, 26, 28, 30],
+    mountain: [5, 7, 9, 10, 11, 12, 13, 14, 15],
+    scrub: [3, 4, 4, 5, 5, 5, 5, 6, 6],
+    verdant: [2, 2, 2, 3, 3, 4, 4, 4],
+    forest: [1, 1, 2, 2, 2, 2, 2, 3, 3]
+  };
+  function ashRadiusSq(it){ return (ASH_TABLE[it.terrain] ? ASH_TABLE[it.terrain][(it.highest || 1) - 1] : 3) + ((it.count || 1) - 1); }
+  function refreshTplUi(){
+    const cur = $("ashToken").value;
+    $("ashToken").innerHTML = tokens.length ? tokens.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("") : `<option value="">(no tokens on this map)</option>`;
+    if (tokens.some(t => t.id === cur)) $("ashToken").value = cur;
+    const curA = $("tplAnchor").value;
+    $("tplAnchor").innerHTML = `<option value="">None</option>` + tokens.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("");
+    if (tokens.some(t => t.id === curA)) $("tplAnchor").value = curA;
+    const lvl = parseInt($("ashLevel").value, 10) || 1;
+    $("ashMeta").textContent = `Radius: ${ASH_TABLE[$("ashTerrain").value][lvl - 1]} squares`;
+  }
+  $("ashTerrain").addEventListener("change", refreshTplUi);
+  $("ashLevel").addEventListener("change", refreshTplUi);
+  setInterval(() => { if (!$("tplLib").hidden) refreshTplUi(); }, 3000);
+  refreshTplUi();
+  $("ashCastBtn").addEventListener("click", async () => {
+    const tk = tokens.find(t => t.id === $("ashToken").value);
+    if (!tk) { drawStatusEl.textContent = "No caster token on this map."; return; }
+    const lvl = parseInt($("ashLevel").value, 10) || 1, ter = $("ashTerrain").value;
+    const near = drawItems.find(it => it.type === "ash" && !it.visual && Math.hypot((it.x - tk.x) / 100 * MW, (it.y - tk.y) / 100 * MH) < CELL * 0.75);
+    if (near) {
+      near.highest = Math.max(near.highest || 1, lvl);
+      near.count = (near.count || 1) + 1;
+      near.rSq = ashRadiusSq(near);
+      const ok = await saveDraw(); renderDraw();
+      drawStatusEl.textContent = ok ? `The ash grows: ${near.rSq} squares (${near.count} casts here).` : "Ash didn't save — refreshed.";
+      if (!ok) loadDraw(true);
+    } else {
+      const it = { type: "ash", x: tk.x, y: tk.y, terrain: ter, highest: lvl, count: 1, ...patchForLayer($("drawLayerSel").value) };
+      it.rSq = ashRadiusSq(it);
+      drawItems.push(it);
+      const ok = await saveDraw(); renderDraw();
+      drawStatusEl.textContent = ok ? `Ash at ${tk.name}: ${it.rSq} squares.` : "Ash didn't save — refreshed.";
+      if (!ok) loadDraw(true);
+    }
+  });
+  let ashVisualArm = false;
+  $("ashVisualBtn").addEventListener("click", () => {
+    ashVisualArm = !ashVisualArm;
+    $("ashVisualBtn").setAttribute("aria-pressed", String(ashVisualArm));
+    if (ashVisualArm) drawStatusEl.textContent = "Tap the map to place the ash disc.";
+  });
+  map.on("mousedown", async e => {
+    if (!ashVisualArm || isProjecting()) return;
+    ashVisualArm = false;
+    $("ashVisualBtn").setAttribute("aria-pressed", "false");
+    drawStart = null; /* swallow the armed tool's own placement for this tap */
+    const p = toXY(e.latlng);
+    const it = { type: "ash", visual: true, rSq: 3, x: p.x, y: p.y, ...patchForLayer($("drawLayerSel").value) };
+    drawItems.push(it);
+    const ok = await saveDraw(); renderDraw();
+    drawStatusEl.textContent = ok ? "Ash disc placed — select it to resize." : "Ash didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+
+  /* ---- MS Paint kit: airbrush, classic palette, magnifier; z-order; anchor toggle ---- */
+  let sprayStroke = null, sprayTimer = null, sprayLastRender = 0;
+  function sprayStamp(p){
+    if (!sprayStroke) return;
+    const rec = sprayStroke.rec, ctx = rec.ctx, c = paintXY(rec, p), r = brushRadius(rec) * 1.5;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, curDrawOpacity() * 0.55);
+    ctx.fillStyle = curDrawColor();
+    for (let i = 0; i < 14; i++) {
+      const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * r;
+      ctx.beginPath(); ctx.arc(c.x + Math.cos(a) * d, c.y + Math.sin(a) * d, 0.8 + Math.random() * 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+    const now = Date.now();
+    if (now - sprayLastRender > 80) { sprayLastRender = now; renderDraw(); }
+  }
+  map.on("mousedown", async e => {
+    if (isProjecting() || armedMode !== "draw" || $("drawTool").value !== "spray") return;
+    const layerId = $("drawLayerSel").value;
+    const rec = await ensurePaint(layerId);
+    sprayStroke = { layerId, rec, last: toXY(e.latlng) };
+    sprayStamp(sprayStroke.last);
+    sprayTimer = setInterval(() => { if (sprayStroke) sprayStamp(sprayStroke.last); }, 70);
+  });
+  map.on("mousemove", e => { if (sprayStroke) { sprayStroke.last = toXY(e.latlng); sprayStamp(sprayStroke.last); } });
+  map.on("mouseup", async () => {
+    if (sprayTimer) { clearInterval(sprayTimer); sprayTimer = null; }
+    if (sprayStroke) { const l = sprayStroke.layerId; sprayStroke = null; await endRasterStroke(l); }
+    if ($("drawTool").value === "zoom") return;
+  });
+  map.on("mousedown", e => {
+    if (isProjecting() || armedMode !== "draw" || $("drawTool").value !== "zoom") return;
+    const out = e.originalEvent && (e.originalEvent.altKey || e.originalEvent.shiftKey);
+    map.setZoomAround(e.latlng, map.getZoom() + (out ? -1 : 1));
+  });
+  const PAINT28 = ["#000000", "#808080", "#800000", "#808000", "#008000", "#008080", "#000080", "#800080", "#808040", "#004040", "#0080ff", "#004080", "#8000ff", "#804000", "#ffffff", "#c0c0c0", "#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff", "#ffff80", "#00ff80", "#80ffff", "#8080ff", "#ff0080", "#ff8040"];
+  $("paintPalette").innerHTML = PAINT28.map(c => `<button type="button" class="pal-swatch" data-pal="${c}" style="background:${c}" title="${c}" aria-label="Paint colour ${c}"></button>`).join("");
+  $("paintPalette").querySelectorAll("[data-pal]").forEach(b => b.addEventListener("click", () => setDrawColor(b.dataset.pal)));
+  $("drawFrontBtn").addEventListener("click", async () => {
+    if (!selItem) return;
+    drawItems = drawItems.filter(it => it !== selItem); drawItems.push(selItem);
+    const ok = await saveDraw(); renderDraw(); renderSelection();
+    drawStatusEl.textContent = ok ? "Brought to front." : "Didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+  $("drawBackBtn").addEventListener("click", async () => {
+    if (!selItem) return;
+    drawItems = drawItems.filter(it => it !== selItem); drawItems.unshift(selItem);
+    const ok = await saveDraw(); renderDraw(); renderSelection();
+    drawStatusEl.textContent = ok ? "Sent to back." : "Didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+  $("tplAnchorBtn").addEventListener("click", async () => {
+    const items = selectionItems();
+    if (items.length !== 1 || items[0].type !== "template") return;
+    const it = items[0];
+    if (it.anchor) delete it.anchor;
+    else {
+      let best = null, bd = 3 * CELL;
+      for (const t of tokens) { const d = Math.hypot((t.x - it.x) / 100 * MW, (t.y - it.y) / 100 * MH); if (d < bd) { bd = d; best = t; } }
+      if (!best) { drawStatusEl.textContent = "No token near that template to anchor to."; return; }
+      it.anchor = best.id;
+    }
+    const ok = await saveDraw(); renderDraw(); renderSelection();
+    drawStatusEl.textContent = ok ? (it.anchor ? "Anchored — it follows its token." : "Unanchored.") : "Didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+  $("drawTool").addEventListener("change", () => {
+    const t = $("drawTool").value;
+    $("tplLib").hidden = t !== "template";
+    $("tplWidthField").hidden = !(t === "template" && $("tplShape").value === "line");
+    if (patch && t !== "select") finalizePatch();
+    if (t === "template") refreshTplUi();
+  });
+  $("tplShape").addEventListener("change", () => { $("tplWidthField").hidden = !($("drawTool").value === "template" && $("tplShape").value === "line"); });
+  setInterval(() => { $("tokenLightField").hidden = !gmView; }, 1000);
+
+  /* ---- Drag from the repository onto the map (mouse + touch via Pointer Events) ---- */
+  let swallowBtn = null;
+  document.addEventListener("click", e => {
+    if (swallowBtn && (e.target === swallowBtn || swallowBtn.contains(e.target))) { e.stopPropagation(); e.preventDefault(); swallowBtn = null; }
+  }, true);
+  function libDrag(container, onDrop){
+    let drag = null;
+    container.addEventListener("pointerdown", e => {
+      const b = e.target.closest(".lib-item");
+      if (!b) return;
+      drag = { b, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, active: false, ghost: null, pid: e.pointerId };
+    });
+    container.addEventListener("pointermove", e => {
+      if (!drag || e.pointerId !== drag.pid) return;
+      drag.x = e.clientX; drag.y = e.clientY;
+      if (!drag.active && Math.hypot(drag.x - drag.x0, drag.y - drag.y0) > 12) {
+        drag.active = true;
+        drag.ghost = drag.b.cloneNode(true);
+        drag.ghost.classList.add("drag-ghost");
+        document.body.appendChild(drag.ghost);
+        try { container.setPointerCapture(e.pointerId); } catch (err) {}
+      }
+      if (drag.active && drag.ghost) { drag.ghost.style.left = (drag.x - 38) + "px"; drag.ghost.style.top = (drag.y - 38) + "px"; }
+    });
+    const finish = () => {
+      if (!drag) return;
+      const was = drag; drag = null;
+      if (was.ghost) was.ghost.remove();
+      if (!was.active) return;
+      swallowBtn = was.b;
+      setTimeout(() => { if (swallowBtn === was.b) swallowBtn = null; }, 600);
+      const rect = $("apocMap").getBoundingClientRect();
+      if (was.x >= rect.left && was.x <= rect.right && was.y >= rect.top && was.y <= rect.bottom) {
+        const ll = map.containerPointToLatLng(L.point(was.x - rect.left, was.y - rect.top));
+        onDrop(was.b, toXY(ll));
+      }
+    };
+    container.addEventListener("pointerup", finish);
+    container.addEventListener("pointercancel", () => { if (drag && drag.ghost) drag.ghost.remove(); drag = null; });
+  }
+  libDrag($("tokenLib"), (b, p) => {
+    const patch = { name: b.dataset.name || "Token", color: b.dataset.color || "amber" };
+    if (b.dataset.sym) patch.sym = b.dataset.sym;
+    if (b.dataset.img) patch.img = b.dataset.img;
+    const custom = $("libName").value.trim();
+    if (custom) patch.name = custom;
+    const tk = Object.assign({ id: newId(), name: "Token", x: p.x, y: p.y, size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" }, patch);
+    tokens.push(tk);
+    saveTokens().then(ok => { drawTokens(); tokenStatusEl.textContent = ok ? `"${tk.name}" placed — drag it into place.` : "That token didn't save — try again."; if (!ok) loadTokens(true); });
+  });
+  libDrag($("stampGrid"), (b, p) => {
+    curStamp = b.dataset.simg ? { img: b.dataset.simg } : { sym: b.dataset.ssym, color: b.dataset.scolor || "amber" };
+    placeStamp(p);
+  });
+  $("repoTab").addEventListener("click", () => $("libBtn").click());
+
+  /* ---- Measure from a token + tool keyboard shortcuts ---- */
+  map.on("mousedown", e => {
+    if (!rulerOn || isProjecting()) return;
+    const p = toXY(e.latlng);
+    const tk = tokens.find(t => Math.hypot((t.x - p.x) / 100 * MW, (t.y - p.y) / 100 * MH) < (t.size || 1) * CELL / 2 + CELL * 0.3);
+    if (tk) {
+      rulerStart = L.latLng(toLatLng(tk.x, tk.y));
+      if (rulerLine) rulerLine.setLatLngs([rulerStart, rulerStart]);
+      if (rulerTip) rulerTip.setLatLng(rulerStart);
+    }
+  });
+  document.addEventListener("keydown", e => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (/INPUT|TEXTAREA|SELECT/.test(tag || "")) return;
+    const k = e.key.toLowerCase();
+    const tool = { v: "select", b: "paint", e: "erase", s: "stamp", c: "clone", i: "pick", k: "bucket", l: "line", o: "ellipse", t: "template", z: "zoom" }[k];
+    if (tool && $("drawTool").value !== tool) { $("drawTool").value = tool; $("drawTool").dispatchEvent(new Event("change")); }
+    else if (k === "r") $("rulerBtn").click();
+    else if (k === "g") $("gridToggle").click();
+  });
 })();
 </script>
 <script>
