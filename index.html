@@ -124,6 +124,7 @@ body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-to
 #apocMap:fullscreen{height:100%;width:100%;border:none;border-radius:0}
 .expand-exit-wrap{display:none}
 body.map-expanded .expand-exit-wrap{display:block}
+body.map-fs .expand-exit-wrap{display:block}
 .tk-icon{background:none;border:none}
 .tk{position:relative}
 .tk-disc{border-radius:50%;border:3px solid #0d0f14;box-shadow:0 2px 8px rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-weight:700;color:#101319;overflow:hidden;margin:0 auto}
@@ -439,7 +440,6 @@ body.displaying .td-ui{display:none}
     <span class="muted small" id="siteVersion" hidden></span>
     <button type="button" class="btn primary" id="pushTvBtn" title="Open a second, map-only copy for the TV — this laptop copy keeps all the controls">Push to TV</button>
     <button class="btn" id="ambBtn" type="button" aria-pressed="false" title="Toggle animated scenes and ambient sound">🔇 Ambience off</button>
-    <button class="btn" id="layoutResetBtn" type="button" title="Restore the default perimeter layout">Reset layout</button>
   </header>
   <section class="panel" id="mapPanel" aria-label="The VTT — Maps">
     <p class="eyebrow">Campaign map</p>
@@ -1183,7 +1183,9 @@ setInterval(loadSharedEntries, 60000);
     $("markerNote").value = isEdit ? (state.mk.note || "") : "";
     if (!isEdit) tempPin = L.marker(toLatLng(state.x, state.y), { icon: iconFor("place", "New marker", true) }).addTo(layer);
     form.hidden = false;
-    form.scrollIntoView({ behavior: "smooth", block: "center" });
+    /* No scrollIntoView here: a single click on the map must not shunt
+       the page away from the map (Shaun, 2026-11-06). The editor form
+       opens in place below the controls; the page stays where it was. */
   }
   map.on("click", e => { if (isProjecting()) return; if (document.body.classList.contains("map-expanded")) return; if (typeof armedMode !== "undefined" && armedMode) return; if (typeof rulerOn !== "undefined" && rulerOn) return; const p = toXY(e.latlng); openEditor({ mode: "new", x: p.x, y: p.y }); });
   $("markerCancel").addEventListener("click", closeEditor);
@@ -1377,15 +1379,19 @@ setInterval(loadSharedEntries, 60000);
     setTimeout(() => map.invalidateSize(), 280);
   }
   $("mapExpandBtn").addEventListener("click", () => {
-    const on = !document.body.classList.contains("map-expanded");
-    setExpanded(on);
-    const el = $("mapPanel");
-    if (on) {
-      try {
-        if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(() => {}); }
-        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-      } catch(e) { /* the expanded overlay class still applies */ }
-    } else if (document.fullscreenElement) document.exitFullscreen();
+    /* Shaun (2026-11-06): full screen means the MAP full screen, not the
+       whole page. Fullscreen the map element itself; the old whole-panel
+       overlay (setExpanded) remains only as the fallback when element
+       fullscreen is unavailable or refused. */
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    if (document.body.classList.contains("map-expanded")) { setExpanded(false); return; }
+    const el = $("apocMap");
+    let started = false;
+    try {
+      if (el.requestFullscreen) { const r = el.requestFullscreen(); started = true; if (r && r.catch) r.catch(() => setExpanded(true)); }
+      else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); started = true; }
+    } catch(e) { /* fall through to the overlay fallback */ }
+    if (!started) setExpanded(true);
   });
   const expandExitCtl = L.control({ position: "bottomright" });
   expandExitCtl.onAdd = () => {
@@ -1400,6 +1406,10 @@ setInterval(loadSharedEntries, 60000);
   expandExitCtl.addTo(map);
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && document.body.classList.contains("map-expanded")) setExpanded(false);
+    const mapFs = !!document.fullscreenElement && document.fullscreenElement.id === "apocMap";
+    document.body.classList.toggle("map-fs", mapFs);
+    if (!document.body.classList.contains("map-expanded")) $("mapExpandBtn").textContent = mapFs ? "⛶ Exit full screen" : "⛶ Expand map";
+    setTimeout(() => map.invalidateSize(), 200);
   });
 
   /* ================= VTT Phase 1: grid, shared scale, tokens, ruler =================
@@ -3095,10 +3105,11 @@ setInterval(loadSharedEntries, 60000);
     }
   }, 1500);
 
-  /* ---- Full screen: the whole panel, controls at the edges ---- */
+  /* ---- Full screen: the MAP only (Shaun, 2026-11-06 — the button used
+     to fullscreen the whole panel/page; he wants the map itself) ---- */
   $("fsBtn").addEventListener("click", () => {
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
-    const el = $("mapPanel");
+    const el = $("apocMap");
     try { if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(() => {}); } }
     catch(err) { /* fullscreen unavailable here — the Expand view still works */ }
   });
