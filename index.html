@@ -323,6 +323,11 @@ input,select,textarea{font-size:16px}
   .vtt-col.per-parked.per-v{width:min(320px,44vw);max-height:calc(100% - 12px);overflow-y:auto}
   .vtt-col.per-parked.per-h{width:auto;max-height:52%;overflow-y:auto}
   .per-dragging{position:fixed !important;z-index:2600 !important;opacity:.94;outline:2px dashed var(--primary);outline-offset:2px;background:transparent !important;box-shadow:none;pointer-events:auto}
+  .vtt-col.per-collapsible h3{cursor:pointer;display:inline-block;margin:0 0 8px;vertical-align:middle}
+  .vtt-col.per-collapsible h3::after{content:"▾";margin-left:8px;color:var(--primary)}
+  .vtt-col.per-collapsible.per-collapsed h3{margin-bottom:0}
+  .vtt-col.per-collapsible.per-collapsed h3::after{content:"▸"}
+  .vtt-col.per-collapsible.per-collapsed>*:not(.per-grip):not(h3){display:none !important}
 }
 
 /* v1.06 fix: Delete Layer at half width, label stacked on two lines
@@ -3661,6 +3666,25 @@ setInterval(loadSharedEntries, 60000);
       d.grip.addEventListener("pointerup", up);
       d.grip.addEventListener("pointercancel", up);
     });
+  });
+
+  /* Dice roller + Initiative: Shaun's exception — nested, collapsed
+     to just the header line by default, tap the header to expand. */
+  [byId.dice, byId.init].forEach(function(d){
+    if (!d) return;
+    var col = d.el, h = col.querySelector("h3");
+    if (!h) return;
+    col.classList.add("per-collapsible", "per-collapsed");
+    h.setAttribute("role", "button");
+    h.setAttribute("tabindex", "0");
+    h.setAttribute("aria-expanded", "false");
+    function toggle(){
+      var closed = col.classList.toggle("per-collapsed");
+      h.setAttribute("aria-expanded", String(!closed));
+      setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+    }
+    h.addEventListener("click", toggle);
+    h.addEventListener("keydown", function(e){ if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
   });
 
   var resetBtn = document.getElementById("layoutResetBtn");
