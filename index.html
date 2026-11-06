@@ -294,7 +294,7 @@ input,select,textarea{font-size:16px}
    localStorage key "apocVttPerimeterV1". Phones keep the drawer. */
 .per-grip{display:none}
 @media (min-width:821px){
-  .per-grip{display:inline-flex;align-items:center;gap:6px;flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border:1px dashed hsl(220 16% 34%);border-radius:8px;padding:4px 10px;min-height:36px;font-size:.8rem;color:var(--muted-foreground);background:transparent;white-space:nowrap}
+  .per-grip{display:none;align-items:center;gap:6px;flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border:1px dashed hsl(220 16% 34%);border-radius:8px;padding:4px 10px;min-height:36px;font-size:.8rem;color:var(--muted-foreground);background:transparent;white-space:nowrap}
   .per-grip:active{cursor:grabbing}
   .map-repo .per-grip{display:flex;margin:0 0 8px}
   .vtt-col .per-grip{margin:0 0 8px}
@@ -407,6 +407,18 @@ body.displaying .init-strip{font-size:1.05rem}
 .mr-nest{margin:6px 0}
 .mr-folder-head{font-size:.82rem;min-height:40px;padding:6px 10px}
 .mr-body{padding:2px 4px 8px}
+
+/* ---- Monster repository (MM I population) ---- */
+.mon-badge{font-size:.6rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#0d0f14;background:var(--primary);border-radius:999px;padding:1px 6px}
+.mon-cr{display:block;font-size:.62rem;opacity:.75}
+.mon-info{position:absolute;top:2px;right:4px;font-size:.8rem;opacity:.75;cursor:pointer;padding:2px}
+.mon-info:hover{opacity:1}
+.lib-item{position:relative}
+.mon-none{display:flex;align-items:center;justify-content:center;width:52px;height:52px;border-radius:50%;border:2px dashed hsl(222 16% 40%);font-size:20px;font-weight:700;opacity:.7}
+.monster-detail{border:1px solid hsl(222 18% 28%);border-radius:10px;padding:10px;margin-top:10px;background:transparent}
+.monster-detail h4{margin:0 0 4px;font-size:.95rem}
+.monster-detail p{margin:4px 0;font-size:.82rem;line-height:1.35}
+.mon-flag{display:inline-block;border:1px solid hsl(0 45% 45%);color:#e8a0a0;border-radius:999px;padding:1px 8px;font-size:.7rem;font-weight:700;margin:2px 4px 2px 0}
 /* ---- map generator ---- */
 #genNest{flex:1 1 100%}
 .gen-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:4px 2px}
@@ -458,10 +470,18 @@ body.displaying .init-strip{font-size:1.05rem}
               </div>
             </div>
             <div class="nest" id="monsterNest">
-              <button type="button" class="nest-head" aria-expanded="false">Monsters</button>
+              <button type="button" class="nest-head" aria-expanded="false"><span>Monsters <span class="muted small" id="monsterCount"></span></span></button>
               <div class="nest-body">
-                <div class="lib-grid" id="libMonsters"></div>
-                <p class="muted small" id="monsterLibNote">Nothing here yet — the DM monster repository lands under this header when it is populated.</p>
+                <div class="field" style="max-width:280px">
+                  <label for="monsterSort">Sort monsters</label>
+                  <select id="monsterSort">
+                    <option value="alpha">Alphabetical</option>
+                    <option value="crAsc">CR low → high</option>
+                    <option value="crDesc">CR high → low</option>
+                  </select>
+                </div>
+                <div id="libMonsters"><p class="muted small" id="monsterLibNote">Loading the DM monster repository…</p></div>
+                <div class="monster-detail" id="monsterDetail" hidden></div>
               </div>
             </div>
             <div class="lib-panel" id="mapRepo">
@@ -4900,6 +4920,235 @@ function floorConnected(L, cols, rows){
 
 <script>
 "use strict";
+/* ================= Monster repository — Monster Manual I (DM material) =================
+   Shaun's DM monster shelf, inside Art Library > Monsters. GM-ONLY: the
+   whole nest is hidden unless effectiveGm() (GM view on, not the
+   ?display TV copy) — players never see the contents, and the registry
+   is not even fetched until GM view is first switched on.
+   Data: shared site_settings key "vtt_monsters" (mirrors the
+   vtt_dropmaps pattern) — { monsters: [{ slug, name, type, typeLine,
+   cr, crNum, status: "found"|"generated"|"none", path, desc, flags }] }.
+   Art lives in the cody-artwork bucket under vtt-monsters/ at 512x512.
+   Layout per Shaun's spec: grouped BY creature type under type
+   sub-headers (types A-Z), monsters A-Z within a type; a sort toggle
+   re-orders within types — Alphabetical / CR low-high / CR high-low
+   (fractional CRs numeric, no-CR last in both CR directions). Groups
+   build their rows lazily on first expansion (the v1.13 maps fix), and
+   thumbnails are loading="lazy", so the shelf never slows the page.
+   Tap a monster = place its token at the map centre; drag it onto the
+   map = place at the drop point — same tokens as Symbols/Artwork.
+   The (i) on a tile opens its detail: description, CR, APOC flags, and
+   whether the art is book art (enhanced) or generated. */
+(function(){
+  var nest = document.getElementById("monsterNest");
+  var box = document.getElementById("libMonsters");
+  if (!nest || !box) return;
+  var countEl = document.getElementById("monsterCount");
+  var sortEl = document.getElementById("monsterSort");
+  var detailEl = document.getElementById("monsterDetail");
+  var FLAG_LABELS = {
+    "summoning-does-not-work": "Summoning doesn\u2019t work in the APOC",
+    "planar-travel-severed": "Planar travel is severed \u2014 it can\u2019t be called or reached from here",
+    "drow-do-not-exist": "Drow no longer exist \u2014 the whole race became demons",
+    "tieflings-do-not-exist": "Tieflings do not exist in the APOC"
+  };
+  var SIZE_TOKENS = { "Fine": 0.5, "Diminutive": 0.5, "Tiny": 0.5, "Small": 1, "Medium": 1, "Medium-size": 1, "Large": 2, "Huge": 3, "Gargantuan": 4, "Colossal": 4 };
+  var monsters = [], bySlug = {}, started = false, sortMode = "alpha";
+  var groupState = {};
+  function pub(path){ return "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/" + path; }
+  function gmOn(){ try { return typeof effectiveGm === "function" && effectiveGm(); } catch(e) { return false; } }
+
+  /* GM gate — poll like the token-light field does; the nest does not
+     exist for players or the TV copy. */
+  function gate(){
+    var gm = gmOn();
+    nest.style.display = gm ? "" : "none";
+    if (gm && !started) { started = true; loadRegistry(); }
+  }
+  gate();
+  setInterval(gate, 700);
+
+  async function loadRegistry(){
+    var note = document.getElementById("monsterLibNote");
+    try {
+      if (!db) throw new Error("no db");
+      var res = await db.from(SETTINGS_TABLE).select("value").eq("key", "vtt_monsters").maybeSingle();
+      if (res.error) throw res.error;
+      monsters = (res.data && res.data.value && Array.isArray(res.data.value.monsters)) ? res.data.value.monsters : [];
+    } catch(e) { monsters = []; }
+    bySlug = {};
+    monsters.forEach(function(m){ bySlug[m.slug] = m; });
+    if (countEl) countEl.textContent = monsters.length ? "\u2014 " + monsters.length + " (Monster Manual I)" : "";
+    if (note) note.textContent = monsters.length ? "" : "The monster repository is empty \u2014 the registry read came back with nothing.";
+    render();
+  }
+
+  function sortedWithin(list){
+    var arr = list.slice();
+    if (sortMode === "alpha") arr.sort(function(a, b){ return a.name.localeCompare(b.name); });
+    else {
+      var dir = sortMode === "crAsc" ? 1 : -1;
+      arr.sort(function(a, b){
+        var an = (typeof a.crNum === "number") ? a.crNum : null;
+        var bn = (typeof b.crNum === "number") ? b.crNum : null;
+        if (an === null && bn === null) return a.name.localeCompare(b.name);
+        if (an === null) return 1;   /* no-CR last in BOTH directions */
+        if (bn === null) return -1;
+        if (an !== bn) return (an - bn) * dir;
+        return a.name.localeCompare(b.name);
+      });
+    }
+    return arr;
+  }
+
+  function groupNest(title){
+    var wrap = document.createElement("div");
+    wrap.className = "nest mr-nest";
+    var h = document.createElement("button");
+    h.type = "button"; h.className = "nest-head mr-folder-head";
+    h.setAttribute("aria-expanded", "false");
+    h.textContent = title;
+    var body = document.createElement("div");
+    body.className = "nest-body mr-body";
+    wrap.appendChild(h); wrap.appendChild(body);
+    return { wrap: wrap, body: body };
+  }
+
+  function itemEl(m){
+    var d = document.createElement("div");
+    d.className = "lib-item";
+    d.dataset.slug = m.slug;
+    d.dataset.name = m.name;
+    if (m.path) d.dataset.img = pub(m.path);
+    d.title = m.name + " \u2014 CR " + m.cr + ". Tap to place on the map, drag to drop it in place, (i) for details.";
+    if (m.path) {
+      var img = document.createElement("img");
+      img.loading = "lazy"; img.decoding = "async"; img.alt = m.name;
+      img.src = pub(m.path);
+      d.appendChild(img);
+    } else {
+      var disc = document.createElement("span");
+      disc.className = "mon-none";
+      disc.textContent = (m.name || "?").charAt(0);
+      disc.title = "No art \u2014 template entry";
+      d.appendChild(disc);
+    }
+    var cap = document.createElement("span"); cap.className = "lib-cap";
+    cap.textContent = m.name;
+    var cr = document.createElement("span"); cr.className = "mon-cr";
+    cr.textContent = "CR " + m.cr;
+    cap.appendChild(cr);
+    d.appendChild(cap);
+    if (m.status === "generated") {
+      var badge = document.createElement("span");
+      badge.className = "mon-badge"; badge.textContent = "generated";
+      badge.title = "Art generated from the book description \u2014 no book art was found";
+      d.appendChild(badge);
+    }
+    var info = document.createElement("span");
+    info.className = "mon-info"; info.textContent = "\u24d8";
+    info.title = "Details \u2014 " + m.name;
+    info.setAttribute("role", "button");
+    info.addEventListener("click", function(ev){ ev.stopPropagation(); showDetail(m); });
+    info.addEventListener("pointerdown", function(ev){ ev.stopPropagation(); });
+    d.appendChild(info);
+    d.addEventListener("click", function(){ placeMonster(m, null); });
+    return d;
+  }
+
+  function buildRows(items){
+    var grid = document.createElement("div");
+    grid.className = "lib-grid";
+    items.forEach(function(m){ grid.appendChild(itemEl(m)); });
+    return grid;
+  }
+
+  /* Lazy build on first expansion — capture phase, same as the maps
+     shelf: rows exist by the time the nest opens. */
+  box.addEventListener("click", function(e){
+    var h = e.target && e.target.closest ? e.target.closest(".mr-folder-head") : null;
+    if (!h) return;
+    var n = h.parentElement;
+    if (!n || n.classList.contains("open")) return;
+    var body = n.querySelector(":scope > .mr-body");
+    if (!body || !body._lazy) return;
+    var st = groupState[body._lazy];
+    body._lazy = null;
+    if (!st || st.built) return;
+    st.content = buildRows(st.items);
+    st.built = true;
+    body.appendChild(st.content);
+  }, true);
+
+  function render(){
+    groupState = {};
+    box.innerHTML = "";
+    var groups = {};
+    monsters.forEach(function(m){ (groups[m.type] = groups[m.type] || []).push(m); });
+    Object.keys(groups).sort(function(a, b){ return a.localeCompare(b); }).forEach(function(t){
+      var items = sortedWithin(groups[t]);
+      var gn = groupNest(t + " (" + items.length + ")");
+      groupState[t] = { built: false, items: items, content: null };
+      gn.body._lazy = t;
+      box.appendChild(gn.wrap);
+    });
+    if (!monsters.length) box.innerHTML = "<p class=\"muted small\">The monster repository is empty \u2014 the registry read came back with nothing.</p>";
+  }
+
+  if (sortEl) sortEl.addEventListener("change", function(){ sortMode = sortEl.value; render(); });
+
+  function showDetail(m){
+    if (!detailEl) return;
+    var flags = (m.flags || []).map(function(f){
+      return "<span class=\"mon-flag\">" + esc(FLAG_LABELS[f] || f) + "</span>";
+    }).join("");
+    var art = m.status === "generated"
+      ? "Art: generated from the book description (no book art found) \u2014 flagged as generated."
+      : (m.status === "found" ? "Art: book art, enhanced; the original is preserved."
+      : "Art: none \u2014 this is a template entry, listed without art rather than given an invented picture.");
+    detailEl.innerHTML = "<h4>" + esc(m.name) + "</h4>"
+      + "<p class=\"muted small\">" + esc(m.typeLine) + " \u00b7 CR " + esc(m.cr) + " \u00b7 Monster Manual I</p>"
+      + (flags ? "<p>" + flags + "</p>" : "")
+      + "<p>" + esc(m.desc || "") + "</p>"
+      + "<p class=\"muted small\">" + art + "</p>";
+    detailEl.hidden = false;
+    detailEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function placeMonster(m, at){
+    if (!gmOn()) return;
+    var tk;
+    if (at) {
+      tk = { id: newId(), name: m.name, x: at.x, y: at.y, size: 1, color: "red", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" };
+    } else {
+      var c = toXY(map.getCenter());
+      var off = (tokens.length % 5) * 1.5;
+      tk = { id: newId(), name: m.name, x: Math.min(98, c.x + off), y: Math.min(98, c.y + off), size: 1, color: "red", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" };
+    }
+    var sz = SIZE_TOKENS[String(m.typeLine || "").split(" ")[0]];
+    if (sz) tk.size = sz;
+    if (m.path) tk.img = pub(m.path);
+    tokens.push(tk);
+    saveTokens().then(function(ok){
+      drawTokens();
+      tokenStatusEl.textContent = ok ? "\"" + tk.name + "\" placed \u2014 drag it into place." : "That token didn\u2019t save \u2014 try again.";
+      if (!ok) loadTokens(true);
+    });
+  }
+
+  /* Drag from the shelf onto the map — the same libDrag the token
+     repository uses (pointer events, ghost, drop point in map %). */
+  if (typeof libDrag === "function") {
+    libDrag(box, function(b, p){
+      var m = bySlug[b.dataset.slug];
+      if (m) placeMonster(m, p);
+    });
+  }
+})();
+</script>
+
+<script>
+"use strict";
 /* ================= v1.06: perimeter-always, movable groups =================
    Desktop/table only (phones keep the right-edge repository drawer).
    Default arrangement is the page flow itself: toolbars across the
@@ -4983,8 +5232,13 @@ function floorConnected(L, cols, rows){
     else if (park.edge === "right") { el.style.right = "6px"; el.style.top = Math.min(Math.max(along, textBottom), Math.max(textBottom, pr.height - h - 6)) + "px"; }
   }
   function applyAll(){
-    var state = load();
-    defs.forEach(function(d){ applyPark(d, state[d.id]); });
+    /* Shaun's layout call (v1.20): ALL buttons live below the map, in page
+       order. The perimeter parking floated the control groups around the
+       map from a saved arrangement, overriding the page order on his
+       screen no matter how the page itself was arranged — parking is
+       retired. Every group stays in flow: text, map, then all the button
+       rows underneath. */
+    defs.forEach(function(d){ applyPark(d, null); });
   }
   applyAll();
 
