@@ -406,7 +406,14 @@ body.displaying .init-strip{font-size:1.05rem}
 .artlib-head{font-size:1.08rem;padding:10px}
 .mr-nest{margin:6px 0}
 .mr-folder-head{font-size:.82rem;min-height:40px;padding:6px 10px}
-.mr-body{padding:2px 4px 8px}
+.mr-body{padding:2px 4px 8px}/* ---- 3D view ---- */
+#tdWrap{position:relative;height:min(76vh,880px);background:#05070a;border:1px solid #2b2f38;border-radius:10px;overflow:hidden;margin-top:6px}
+#tdCanvas,#tdCanvas canvas{width:100%;height:100%;display:block}
+.td-ui{position:absolute;top:8px;left:8px;display:flex;gap:10px;align-items:center;background:rgba(8,10,14,.55);padding:6px 8px;border-radius:8px;z-index:5}
+.td-hint{color:#cfd3da;font-size:.78rem}
+body.displaying #tdWrap{height:100%;margin:0;border:0;border-radius:0}
+body.displaying .td-ui{display:none}
+
 
 /* ---- Monster repository (MM I population) ---- */
 .mon-badge{font-size:.6rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#0d0f14;background:var(--primary);border-radius:999px;padding:1px 6px}
@@ -442,6 +449,14 @@ body.displaying .init-strip{font-size:1.05rem}
     <div class="map-stage">
       <div class="map-side">
         <div id="apocMap" class="apoc-map" aria-label="Editable shared map of Faerûn"></div>
+        <div id="tdWrap" hidden>
+          <div id="tdCanvas"></div>
+          <div class="td-ui">
+            <button type="button" class="btn primary" id="tdBackBtn">Back to 2D</button>
+            <span class="td-hint">Drag to orbit &middot; scroll to zoom &middot; shift-drag to pan &middot; drag a token to move it</span>
+            <span class="td-hint" id="tdStatus"></span>
+          </div>
+        </div>
         <p class="map-status muted small" id="mapStatus">Loading the shared markers…</p>
       </div>
       <aside class="map-repo" aria-label="Art Library">
@@ -700,6 +715,7 @@ body.displaying .init-strip{font-size:1.05rem}
       <button type="button" class="btn danger" id="drawDelSelBtn" hidden>Delete selected</button>
       <span class="muted small" id="drawStatus"></span>
       <button type="button" class="btn" id="fsBtn">Full screen</button>
+      <button type="button" class="btn" id="view3dBtn">3D view</button>
     </div>
     <div class="map-tools">
       <span class="muted small">Layers:</span>
@@ -1048,6 +1064,7 @@ loadSharedEntries();
 setInterval(loadSharedEntries, 60000);
 </script>
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 "use strict";
 /* ================= The table's map: shared markers over the canon 3E Faerun map =================
@@ -4528,6 +4545,565 @@ function floorConnected(L, cols, rows){
     idbDel: id => idbDel(id),
     loadFaerun: async () => { switchMap("faerun"); await saveActiveMap(); }
   };
+
+  /* ================= v1.14: 3D view — the 2D table, stood up =================
+     A Three.js scene built from the SAME shared state as the 2D
+     table: the map image becomes the ground, the walls layer
+     extrudes to height (generated maps carry heights; hand-drawn
+     walls default to 10 ft), doors swing open/shut with their
+     state, placed props become part-built procedural models
+     (a table is a top on legs, a shelf is a frame with books —
+     stylized, but built, not bare blocks), light sources become
+     real flickering lights, and tokens stand up as standees with
+     their portrait art. Visibility rules are the 2D rules: GM-only
+     material never renders for players, fog hides what it hides,
+     and with dynamic lighting on a player sees only lit,
+     in-line-of-sight space — the darkness is the same raycast
+     polygons, baked to an overlay. Moving a token here writes the
+     same shared token store, so it moves in 2D too (and back).
+     The view mode itself is shared (key vtt_view3d): push it and
+     every screen — the TV's ?display copy included — shows 3D.
+     Conversion limit, stated plainly: furniture painted into a
+     flat map PICTURE stays floor texture; only placed/drawn
+     elements (walls, doors, props, tokens, lights) stand up. */
+  const TD = { active: false, renderer: null, scene: null, camera: null, root: null,
+    tokenObjs: {}, texCache: {}, cam: { az: 0.85, el: 0.92, dist: 34, tx: 10, tz: 7 },
+    savedView: null, sig: "", poll: 0, drag: null, keys: {}, following: false, counts: {}, localSetAt: 0, genData: null };
+  window.__apoc3d = TD;
+  const TD_CAPS = { walls: 600, props: 400, tokens: 200, pointLights: 8 };
+  const tdW = (xPct, yPct) => [xPct / 100 * MW / CELL, yPct / 100 * MH / CELL]; /* world units = squares */
+  const tdStatusEl = () => $("tdStatus");
+
+  function tdMat(color, opts){ return new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.9, metalness: 0.02 }, opts || {})); }
+  function tdCanvasTex(draw, w, h){
+    const cv = document.createElement("canvas"); cv.width = w || 256; cv.height = h || 256;
+    draw(cv.getContext("2d"), cv.width, cv.height);
+    const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
+  }
+  function tdWallTexture(kind){
+    if (TD.texCache["wall:" + kind]) return TD.texCache["wall:" + kind];
+    let tex;
+    if (kind === "wood") tex = tdCanvasTex((g, w, h) => {
+      g.fillStyle = "#6e5233"; g.fillRect(0, 0, w, h);
+      for (let y = 0; y < h; y += 42) { g.fillStyle = y % 84 ? "#75582f" : "#684e2c"; g.fillRect(0, y, w, 42); g.fillStyle = "rgba(0,0,0,.45)"; g.fillRect(0, y, w, 3); }
+      for (let i = 0; i < 260; i++) { g.fillStyle = "rgba(0,0,0,.10)"; g.fillRect(Math.random() * w, Math.random() * h, 8 + Math.random() * 26, 1.6); }
+    });
+    else if (kind === "marble") tex = tdCanvasTex((g, w, h) => {
+      g.fillStyle = "#b6b2a6"; g.fillRect(0, 0, w, h);
+      g.strokeStyle = "rgba(90,90,110,.4)"; for (let i = 0; i < 9; i++) { g.beginPath(); let x = Math.random() * w, y = 0; g.moveTo(x, y); while (y < h) { x += (Math.random() - .5) * 30; y += 16 + Math.random() * 20; g.lineTo(x, y); } g.stroke(); }
+      g.fillStyle = "rgba(0,0,0,.18)"; g.fillRect(0, 0, w, 3); g.fillRect(0, 0, 3, h);
+    });
+    else tex = tdCanvasTex((g, w, h) => { /* stone blocks */
+      g.fillStyle = "#76736c"; g.fillRect(0, 0, w, h);
+      const bh = 36;
+      for (let y = 0, row = 0; y < h; y += bh, row++) {
+        for (let x = -((row % 2) * 42); x < w; x += 84) {
+          const v = 108 + Math.floor(Math.random() * 22);
+          g.fillStyle = `rgb(${v},${v - 3},${v - 10})`; g.fillRect(x + 2, y + 2, 80, bh - 4);
+        }
+        g.fillStyle = "rgba(0,0,0,.5)"; g.fillRect(0, y, w, 2);
+      }
+      for (let i = 0; i < 200; i++) { g.fillStyle = "rgba(0,0,0,.08)"; g.fillRect(Math.random() * w, Math.random() * h, 3, 3); }
+    });
+    TD.texCache["wall:" + kind] = tex; return tex;
+  }
+  function tdWoodMat(){ return new THREE.MeshStandardMaterial({ map: tdWallTexture("wood"), roughness: .85 }); }
+  function tdPropModel(prop, fw, fh){
+    const grp = new THREE.Group();
+    const W = fw || 1, D = fh || 1;
+    const wood = tdWoodMat(), darkWood = tdMat(0x4a3823, { roughness: .9 });
+    const iron = tdMat(0x3c3f45, { roughness: .55, metalness: .55 });
+    const box = (mat, sx, sy, sz, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat); m.position.set(x || 0, y || 0, z || 0); grp.add(m); return m; };
+    const cyl = (mat, rt, rb, sy, x, y, z, seg) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, sy, seg || 14), mat); m.position.set(x || 0, y || 0, z || 0); grp.add(m); return m; };
+    switch (prop) {
+      case "table": case "counter": {
+        box(wood, W * 0.98, 0.09, D * 0.98, 0, 0.52, 0);
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(darkWood, 0.09, 0.52, 0.09, sx * (W / 2 - 0.12), 0.26, sz * (D / 2 - 0.12));
+        if (prop === "table") { box(tdMat(0xd8cfb8), 0.5, 0.03, 0.34, 0.1, 0.58, 0); cyl(tdMat(0xb9bdc4, { metalness: .6, roughness: .35 }), 0.09, 0.11, 0.16, -W / 4, 0.64, 0.1); }
+        break; }
+      case "chair": {
+        box(wood, 0.62, 0.07, 0.58, 0, 0.34, 0);
+        box(wood, 0.62, 0.62, 0.07, 0, 0.68, -0.26);
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(darkWood, 0.06, 0.34, 0.06, sx * 0.25, 0.17, sz * 0.22);
+        break; }
+      case "throne": {
+        box(tdMat(0x7a2e2e), 0.7, 0.09, 0.66, 0, 0.36, 0);
+        const back = box(tdWoodMat(), 0.7, 1.3, 0.08, 0, 1.0, -0.3); back.material = tdMat(0x5d2323, { roughness: .8 });
+        cyl(tdMat(0xd8a93d, { metalness: .7, roughness: .3 }), 0.09, 0.09, 0.12, 0, 1.72, -0.3);
+        for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(darkWood, 0.07, 0.36, 0.07, sx * 0.28, 0.18, sz * 0.26);
+        break; }
+      case "barrel": {
+        cyl(wood, 0.34, 0.34, 0.78, 0, 0.39, 0);
+        for (const y of [0.14, 0.64]) { const band = new THREE.Mesh(new THREE.TorusGeometry(0.345, 0.022, 8, 22), iron); band.rotation.x = Math.PI / 2; band.position.y = y; grp.add(band); }
+        cyl(darkWood, 0.30, 0.30, 0.04, 0, 0.79, 0); break; }
+      case "crate": {
+        box(wood, 0.84, 0.84, 0.84, 0, 0.42, 0);
+        for (const s of [-1, 1]) { const f = box(darkWood, 0.9, 0.1, 0.9, 0, s < 0 ? 0.06 : 0.78, 0); f.rotation.y = 0; }
+        box(darkWood, 0.92, 0.09, 0.12, 0, 0.42, 0.37); box(darkWood, 0.92, 0.09, 0.12, 0, 0.42, -0.37);
+        break; }
+      case "bed": {
+        box(darkWood, W * 0.96, 0.16, D * 0.96, 0, 0.2, 0);
+        box(tdMat(0xcfc7ae), W * 0.9, 0.14, D * 0.9, 0, 0.34, 0);
+        box(tdMat(0x8a8578), W * 0.86, 0.17, D * 0.55, 0, 0.35, -D * 0.16); /* blanket */
+        box(tdMat(0xe8e2cf), W * 0.5, 0.09, 0.34, 0, 0.44, D / 2 - 0.26); /* pillow */
+        box(darkWood, W * 0.96, 0.62, 0.07, 0, 0.42, D / 2 - 0.04); /* headboard */
+        break; }
+      case "chest": {
+        box(darkWood, 0.86, 0.42, 0.55, 0, 0.21, 0);
+        const lid = cyl(darkWood, 0.28, 0.28, 0.86, 0, 0.42, 0, 12); lid.rotation.z = Math.PI / 2; lid.scale.set(1, 1, 0.9);
+        box(iron, 0.1, 0.2, 0.04, 0, 0.3, 0.29); break; }
+      case "shelf": {
+        for (const sx of [-1, 1]) box(darkWood, 0.07, 1.5, 0.4, sx * 0.42, 0.75, 0);
+        const bookCols = [0x8a3b2e, 0x2e5d8a, 0x3f7a3a, 0x8a6d2e, 0x5d2e8a, 0x707880];
+        for (let lvl = 0; lvl < 3; lvl++) {
+          box(wood, 0.9, 0.05, 0.4, 0, 0.28 + lvl * 0.52, 0);
+          let bx = -0.38;
+          while (bx < 0.32) { const bw = 0.05 + Math.random() * 0.05, bh = 0.3 + Math.random() * 0.14;
+            box(tdMat(bookCols[Math.floor(Math.random() * bookCols.length)]), bw, bh, 0.26, bx + bw / 2, 0.31 + lvl * 0.52 + bh / 2, 0); bx += bw + 0.012; }
+        }
+        box(darkWood, 0.94, 0.06, 0.44, 0, 1.53, 0); break; }
+      case "altar": {
+        box(tdMat(0x9a978c), W * 0.94, 0.62, D * 0.8, 0, 0.31, 0);
+        box(tdMat(0xb0ada0), W * 0.78, 0.2, D * 0.6, 0, 0.72, 0);
+        box(tdMat(0x7a1f1f), W * 0.6, 0.04, D * 0.42, 0, 0.84, 0); /* cloth */
+        for (const sx of [-1, 1]) { cyl(iron, 0.03, 0.05, 0.3, sx * W * 0.3, 0.99, 0); cyl(tdMat(0xffc46b, { emissive: 0xff9a3c, emissiveIntensity: 1.4 }), 0.035, 0.035, 0.1, sx * W * 0.3, 1.18, 0); }
+        break; }
+      case "coffin": {
+        const shape = new THREE.Shape();
+        shape.moveTo(-0.32, -0.95); shape.lineTo(0.32, -0.95); shape.lineTo(0.44, 0.1); shape.lineTo(0.24, 0.95); shape.lineTo(-0.24, 0.95); shape.lineTo(-0.44, 0.1); shape.closePath();
+        const geo = new THREE.ExtrudeGeometry(shape, { depth: 0.34, bevelEnabled: false });
+        const body = new THREE.Mesh(geo, darkWood); body.rotation.x = -Math.PI / 2; body.position.y = 0.36; grp.add(body);
+        box(darkWood, 0.5, 0.05, 1.7, 0, 0.4, 0); break; }
+      case "fireplace": case "campfire": {
+        if (prop === "campfire") {
+          for (let i = 0; i < 5; i++) { const log = cyl(darkWood, 0.06, 0.06, 0.7, 0, 0.08, 0); log.rotation.z = Math.PI / 2; log.rotation.y = i * Math.PI / 5; }
+        } else {
+          box(tdMat(0x6f6a61), 1.0, 1.15, 0.5, 0, 0.58, -0.18);
+          box(tdMat(0x111114), 0.62, 0.6, 0.3, 0, 0.3, 0.02);
+          box(tdMat(0x7d766a), 1.1, 0.09, 0.62, 0, 1.2, -0.14);
+        }
+        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.5, 8), new THREE.MeshBasicMaterial({ color: 0xff8a3c }));
+        flame.position.y = 0.32; flame.name = "flame"; grp.add(flame);
+        const fl2 = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.34, 8), new THREE.MeshBasicMaterial({ color: 0xffd27a }));
+        fl2.position.y = 0.3; fl2.name = "flame"; grp.add(fl2);
+        break; }
+      case "brazier": {
+        cyl(iron, 0.1, 0.2, 0.5, 0, 0.25, 0);
+        cyl(iron, 0.3, 0.18, 0.16, 0, 0.56, 0);
+        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.42, 8), new THREE.MeshBasicMaterial({ color: 0xff8a3c }));
+        flame.position.y = 0.82; flame.name = "flame"; grp.add(flame); break; }
+      case "candle": cyl(tdMat(0xe8e2cf), 0.045, 0.05, 0.22, 0, 0.11, 0);
+        { const f = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.12, 6), new THREE.MeshBasicMaterial({ color: 0xffd27a })); f.position.y = 0.28; f.name = "flame"; grp.add(f); } break;
+      case "statue": {
+        box(tdMat(0x8d8a80), 0.7, 0.5, 0.7, 0, 0.25, 0);
+        cyl(tdMat(0x9a978c), 0.16, 0.22, 0.85, 0, 0.93, 0);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 12, 10), tdMat(0x9a978c)); head.position.y = 1.55; grp.add(head);
+        box(tdMat(0x9a978c), 0.62, 0.1, 0.1, 0, 1.22, 0); break; }
+      case "tree": {
+        cyl(tdMat(0x4f3a22), 0.13, 0.2, 1.0, 0, 0.5, 0);
+        const c1 = new THREE.Mesh(new THREE.ConeGeometry(0.85, 1.9, 9), tdMat(0x44543a)); c1.position.y = 1.8; grp.add(c1);
+        const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.4, 9), tdMat(0x4b5d3f)); c2.position.y = 2.7; grp.add(c2); break; }
+      case "rock": case "rubble": {
+        const r = new THREE.Mesh(new THREE.DodecahedronGeometry(prop === "rock" ? 0.42 : 0.3, 0), tdMat(0x75726a));
+        r.position.y = 0.24; r.rotation.set(0.4, 0.7, 0.2); grp.add(r);
+        if (prop === "rubble") { const r2 = new THREE.Mesh(new THREE.DodecahedronGeometry(0.18, 0), tdMat(0x83807a)); r2.position.set(0.3, 0.12, 0.2); grp.add(r2); }
+        break; }
+      case "bush": { const b = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 8), tdMat(0x51663f)); b.position.y = 0.34; b.scale.y = 0.75; grp.add(b); break; }
+      case "stump": cyl(tdMat(0x5d4630), 0.26, 0.3, 0.36, 0, 0.18, 0); cyl(tdMat(0x9a7c55), 0.26, 0.26, 0.03, 0, 0.37, 0); break;
+      case "tent": {
+        const prism = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 1.05, 1.15, 4, 1), tdMat(0x8a7a52));
+        prism.rotation.y = Math.PI / 4; prism.scale.set(1, 1, 0.72); prism.position.y = 0.57; grp.add(prism); break; }
+      default: box(wood, Math.min(W, 1) * 0.8, 0.5, Math.min(D, 1) * 0.8, 0, 0.25, 0);
+    }
+    grp.traverse(m => { if (m.isMesh) { m.castShadow = false; m.receiveShadow = false; } });
+    return grp;
+  }
+  function tdEmojiTexture(sym, colorHex){
+    const key = "emoji:" + sym;
+    if (TD.texCache[key]) return TD.texCache[key];
+    const tex = tdCanvasTex((g, w, h) => {
+      g.fillStyle = (colorHex || "#e8a33d") + ""; g.globalAlpha = 0.92;
+      g.beginPath(); g.arc(w / 2, h / 2, w * 0.47, 0, 7); g.fill();
+      g.globalAlpha = 1; g.font = `${Math.floor(h * 0.62)}px serif`; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText(sym, w / 2, h / 2 + 4);
+    }, 128, 128);
+    TD.texCache[key] = tex; return tex;
+  }
+  function tdImageTexture(src){
+    if (TD.texCache["img:" + src]) return TD.texCache["img:" + src];
+    const cv = document.createElement("canvas"); cv.width = cv.height = 128;
+    const tex = new THREE.CanvasTexture(cv);
+    TD.texCache["img:" + src] = tex;
+    const im = new Image(); im.crossOrigin = "anonymous";
+    im.onload = () => { const g = cv.getContext("2d"); g.clearRect(0, 0, 128, 128);
+      const s = Math.min(128 / im.naturalWidth, 128 / im.naturalHeight);
+      g.drawImage(im, (128 - im.naturalWidth * s) / 2, (128 - im.naturalHeight * s) / 2, im.naturalWidth * s, im.naturalHeight * s); tex.needsUpdate = true; };
+    im.src = src;
+    return tex;
+  }
+  function tdTokenTexture(tk){
+    if (tk.img) return tdImageTexture(tk.img);
+    if (tk.sym) return tdEmojiTexture(tk.sym, (LIB_HEX[tk.color] || "#e8a33d"));
+    const key = "letter:" + (tk.name || "?") + ":" + (tk.color || "");
+    if (TD.texCache[key]) return TD.texCache[key];
+    const tex = tdCanvasTex((g, w, h) => {
+      g.fillStyle = LIB_HEX[tk.color] || "#e8a33d"; g.beginPath(); g.arc(w / 2, h / 2, w * 0.47, 0, 7); g.fill();
+      g.fillStyle = "#14161c"; g.font = `bold ${Math.floor(h * 0.55)}px sans-serif`; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText((tk.name || "?").trim().charAt(0).toUpperCase() || "?", w / 2, h / 2 + 4);
+    }, 128, 128);
+    TD.texCache[key] = tex; return tex;
+  }
+
+  function tdPlayerView(){ return !effectiveGm() || lightPreview; }
+  function tdTokenVisible(tk){
+    if (tk.gm && !effectiveGm()) return false;
+    if (!tdPlayerView()) return true;
+    if (fogState.enabled) {
+      const inside = fogState.revealed.some(r => tk.x >= r.x && tk.x <= r.x + r.w && tk.y >= r.y && tk.y <= r.y + r.h);
+      if (!inside) return false;
+    }
+    if (lightState.enabled) {
+      const segs = lightBlockers(); const ftU = ftToUnits(1);
+      const [ux, uy] = toUnits({ x: tk.x, y: tk.y });
+      const lit = lightState.lights.some(src => { const [sx, sy] = toUnits({ x: src.x, y: src.y }); return pointInPolyU(ux, uy, visPoly(sx, sy, (src.dim || 0) * ftU, segs)); })
+        || tokens.some(o => { if (o === tk || o.gm || !(o.light > 0)) return false; const [sx, sy] = toUnits({ x: o.x, y: o.y }); return pointInPolyU(ux, uy, visPoly(sx, sy, o.light * ftU, segs)); });
+      if (!lit) return false;
+    }
+    return true;
+  }
+  function tdPropVisible(it){
+    if (it.gm && !effectiveGm()) return false;
+    const ldef = drawLayerDef(layerOf(it));
+    if (ldef.hidden || (ldef.gm && !effectiveGm())) return false;
+    if (!tdPlayerView()) return true;
+    if (fogState.enabled && !fogState.revealed.some(r => it.x >= r.x && it.x <= r.x + r.w && it.y >= r.y && it.y <= r.y + r.h)) return false;
+    return true;
+  }
+
+  function tdDarknessTexture(){
+    const pv = tdPlayerView();
+    if (!pv || (!lightState.enabled && !fogState.enabled)) return null;
+    const cw = 1024, ch = Math.max(64, Math.round(1024 * MH / MW));
+    const cv = document.createElement("canvas"); cv.width = cw; cv.height = ch;
+    const g = cv.getContext("2d");
+    const sx = cw / MW, sy = ch / MH;
+    if (fogState.enabled) {
+      g.fillStyle = "rgba(2,3,6,0.94)"; g.beginPath(); g.rect(0, 0, cw, ch);
+      for (const r of fogState.revealed) { const a = toUnits({ x: r.x, y: r.y }), b = toUnits({ x: r.x + r.w, y: r.y + r.h }); g.rect(a[0] * sx, a[1] * sy, (b[0] - a[0]) * sx, (b[1] - a[1]) * sy); }
+      g.fill("evenodd");
+    }
+    if (lightState.enabled) {
+      const segs = lightBlockers(); const ftU = ftToUnits(1);
+      const dimP = [], brightP = [];
+      for (const src of lightState.lights) { const [ux, uy] = toUnits({ x: src.x, y: src.y });
+        const d = visPoly(ux, uy, (src.dim || 0) * ftU, segs), b = visPoly(ux, uy, (src.bright || 0) * ftU, segs);
+        if (d.length > 2) dimP.push(d); if (b.length > 2) brightP.push(b); }
+      for (const tk of tokens) { if (tk.gm || !(tk.light > 0)) continue; const [ux, uy] = toUnits({ x: tk.x, y: tk.y });
+        const p = visPoly(ux, uy, tk.light * ftU, segs); if (p.length > 2) dimP.push(p); }
+      const darken = (polys, alpha) => { if (!polys.length && alpha > 0.5) { g.fillStyle = `rgba(2,3,6,${alpha})`; g.fillRect(0, 0, cw, ch); return; }
+        g.fillStyle = `rgba(2,3,6,${alpha})`; g.beginPath(); g.rect(0, 0, cw, ch); for (const p of polys) { p.forEach((pt, i) => { const X = pt.x * sx, Y = pt.y * sy; if (i) g.lineTo(X, Y); else g.moveTo(X, Y); }); g.closePath(); } g.fill("evenodd"); };
+      darken(brightP, 0.36); darken(dimP, 0.92);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    return tex;
+  }
+
+  function tdDispose(obj){
+    obj.traverse(m => {
+      if (m.geometry) m.geometry.dispose();
+      if (m.material) { (Array.isArray(m.material) ? m.material : [m.material]).forEach(mt => { if (mt.map && !Object.values(TD.texCache).includes(mt.map)) mt.map.dispose(); mt.dispose(); }); }
+    });
+  }
+  function tdBuildStatic(){
+    if (TD.root) { TD.scene.remove(TD.root); tdDispose(TD.root); }
+    TD.root = new THREE.Group(); TD.scene.add(TD.root);
+    const Wu = MW / CELL, Hu = MH / CELL;
+    const def = MAPS[currentMapId] || {};
+    /* ground: the map image on a plane (texture downscaled to 2048
+       for the 3D ground only — the 2D map keeps full resolution) */
+    const groundMat = new THREE.MeshStandardMaterial({ color: 0x3a3d44, roughness: 1 });
+    const ground = new THREE.Mesh(new THREE.PlaneGeometry(Wu, Hu), groundMat);
+    ground.rotation.x = -Math.PI / 2; ground.position.set(Wu / 2, 0, Hu / 2);
+    TD.root.add(ground);
+    const gim = new Image(); gim.crossOrigin = "anonymous";
+    gim.onload = () => {
+      const cv = document.createElement("canvas");
+      const s = Math.min(1, 2048 / Math.max(gim.naturalWidth, gim.naturalHeight));
+      cv.width = Math.round(gim.naturalWidth * s); cv.height = Math.round(gim.naturalHeight * s);
+      cv.getContext("2d").drawImage(gim, 0, 0, cv.width, cv.height);
+      groundMat.map = new THREE.CanvasTexture(cv); groundMat.color.set(0xffffff); groundMat.needsUpdate = true;
+    };
+    gim.src = def.img;
+    if (gridOn) {
+      const pts = [];
+      for (let x = 0; x <= Wu; x++) pts.push(x, 0.02, 0, x, 0.02, Hu);
+      for (let y = 0; y <= Hu; y++) pts.push(0, 0.02, y, Wu, 0.02, y);
+      const gg = new THREE.BufferGeometry(); gg.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      TD.root.add(new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: 0xe9e2cf, transparent: true, opacity: 0.14 })));
+    }
+    /* walls + doors */
+    const genTheme = TD.genData && TD.genData.theme;
+    const wallKind = genTheme === "wood" || genTheme === "grass" ? "wood" : genTheme === "marble" ? "marble" : "stone";
+    const wallTex = tdWallTexture(wallKind); wallTex.repeat.set(1, 1);
+    const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness: .95 });
+    const doorMat = tdWoodMat();
+    const wallsGrp = new THREE.Group(); TD.root.add(wallsGrp);
+    let wallCount = 0;
+    for (const w of lightState.walls) {
+      if (wallCount >= TD_CAPS.walls) break;
+      const [ax, az] = tdW(w.a[0], w.a[1]), [bx, bz] = tdW(w.b[0], w.b[1]);
+      const len = Math.hypot(bx - ax, bz - az); if (len < 0.01) continue;
+      const ang = Math.atan2(bz - az, bx - ax);
+      const hFt = w.h || 10, hU = hFt / feetPerSquare;
+      wallCount++;
+      if (w.kind === "door") {
+        const hinge = new THREE.Group(); hinge.position.set(ax, 0, az); hinge.rotation.y = -ang;
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(len * 0.96, hU, 0.07), doorMat);
+        panel.position.set(len / 2, hU / 2, 0); hinge.add(panel);
+        const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), tdMat(0xb9bdc4, { metalness: .7, roughness: .3 }));
+        knob.position.set(len * 0.88, hU * 0.45, 0.07); hinge.add(knob);
+        if (w.open) hinge.rotation.y = -ang + THREE.MathUtils.degToRad(100);
+        wallsGrp.add(hinge);
+        const lintelH = (10 / feetPerSquare) - hU;
+        if (lintelH > 0.05) { const lin = new THREE.Mesh(new THREE.BoxGeometry(len, lintelH, 0.22), wallMat); lin.position.set((ax + bx) / 2, hU + lintelH / 2, (az + bz) / 2); lin.rotation.y = -ang; wallsGrp.add(lin); }
+      } else {
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(len, hU, 0.24), wallMat);
+        seg.position.set((ax + bx) / 2, hU / 2, (az + bz) / 2); seg.rotation.y = -ang;
+        wallsGrp.add(seg);
+      }
+    }
+    TD.counts.walls = wallCount;
+    /* props */
+    const propsGrp = new THREE.Group(); TD.root.add(propsGrp);
+    let propCount = 0, skipped = 0;
+    const stamps = drawItems.filter(it => it.type === "stamp");
+    for (const it of stamps) {
+      if (!tdPropVisible(it)) { skipped++; continue; }
+      if (propCount >= TD_CAPS.props) { skipped++; continue; }
+      propCount++;
+      const [px, pz] = tdW(it.x, it.y);
+      let node;
+      if (it.prop) { node = tdPropModel(it.prop, it.fw || it.size || 1, it.fh || it.size || 1); }
+      else {
+        node = new THREE.Group();
+        const tex = it.img ? tdImageTexture(it.img) : tdEmojiTexture(it.sym || "?", LIB_HEX[it.color] || "#e8a33d");
+        const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true }));
+        const s = (it.size || 2) * 0.8; spr.scale.set(s, s, 1); spr.position.y = s / 2 + 0.05; node.add(spr);
+      }
+      node.position.set(px, 0, pz);
+      if (it.rot) node.rotation.y = -it.rot * Math.PI / 180;
+      propsGrp.add(node);
+    }
+    TD.counts.props = propCount; TD.counts.propsSkipped = skipped;
+    /* light sources as real lights (first N) + a visible flame marker */
+    let li = 0;
+    for (const src of lightState.lights) {
+      if (li >= TD_CAPS.pointLights) break;
+      const [lx, lz] = tdW(src.x, src.y);
+      const pl = new THREE.PointLight(new THREE.Color(src.color || "#ffb347"), 0.85, Math.max(2, (src.dim || 20) / feetPerSquare), 1.6);
+      pl.position.set(lx, 1.1, lz); pl.userData.flame = !!src.flame; pl.userData.seed = li * 1.37;
+      TD.root.add(pl); li++;
+    }
+    TD.counts.pointLights = li;
+    /* darkness / fog overlay */
+    const darkTex = tdDarknessTexture();
+    TD.darkPlane = null;
+    if (darkTex) {
+      const dp = new THREE.Mesh(new THREE.PlaneGeometry(Wu, Hu), new THREE.MeshBasicMaterial({ map: darkTex, transparent: true, depthWrite: false }));
+      dp.rotation.x = -Math.PI / 2; dp.position.set(Wu / 2, 2.35, Hu / 2);
+      TD.root.add(dp); TD.darkPlane = dp;
+    }
+    /* tokens (dynamic group) */
+    TD.tokGrp = new THREE.Group(); TD.root.add(TD.tokGrp);
+    tdBuildTokens();
+    TD.cam.tx = Wu / 2; TD.cam.tz = Hu / 2;
+    TD.cam.dist = Math.min(90, Math.max(14, Math.max(Wu, Hu) * 1.05));
+  }
+  function tdBuildTokens(){
+    if (!TD.tokGrp) return;
+    for (const k in TD.tokenObjs) { TD.tokGrp.remove(TD.tokenObjs[k]); tdDispose(TD.tokenObjs[k]); }
+    TD.tokenObjs = {};
+    let n = 0;
+    for (const tk of tokens) {
+      if (n >= TD_CAPS.tokens) break;
+      if (!tdTokenVisible(tk)) continue;
+      n++;
+      const grp = new THREE.Group();
+      const r = 0.42 * (tk.size || 1);
+      const base = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.08, 0.09, 22), tdMat(new THREE.Color(LIB_HEX[tk.color] || "#e8a33d").getHex(), { roughness: .5 }));
+      base.position.y = 0.045; grp.add(base);
+      const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tdTokenTexture(tk), transparent: true }));
+      spr.scale.set(r * 2, r * 2, 1); spr.position.y = r + 0.14; spr.userData.tkId = tk.id;
+      grp.add(spr);
+      const [px, pz] = tdW(tk.x, tk.y);
+      grp.position.set(px, 0, pz);
+      grp.userData.tkId = tk.id;
+      TD.tokGrp.add(grp);
+      TD.tokenObjs[tk.id] = grp;
+    }
+    TD.counts.tokens = n;
+  }
+  function tdSignature(){
+    return JSON.stringify([currentMapId, tokens.map(t => [t.id, t.x, t.y, t.gm ? 1 : 0, t.img || t.sym || ""]), lightState.enabled, lightState.walls.map(w => w.open ? 1 : 0), lightState.lights.map(s => [s.x, s.y, s.dim]),
+      fogState.enabled, fogState.revealed.length, drawItems.filter(i => i.type === "stamp").map(i => [i.x, i.y, i.prop || ""]), effectiveGm(), lightPreview, gridOn]);
+  }
+  async function tdLoadGenData(){
+    TD.genData = null;
+    if (!db) return;
+    const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", genKey(currentMapId)).maybeSingle();
+    if (data && data.value) TD.genData = data.value;
+  }
+  async function tdSetViewKey(on){
+    if (!db) return;
+    await db.from(SETTINGS_TABLE).upsert({ key: "vtt_view3d", value: { on: !!on, mapId: currentMapId }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+  }
+  async function enter3D(fromRemote){
+    if (TD.active) return;
+    if (!window.THREE) { if (tdStatusEl()) tdStatusEl().textContent = ""; $("mapStatus").textContent = "The 3D library could not load — check the connection and refresh."; return; }
+    if (!TD.renderer) {
+      TD.renderer = new THREE.WebGLRenderer({ antialias: true });
+      TD.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      $("tdCanvas").appendChild(TD.renderer.domElement);
+      tdBindControls(TD.renderer.domElement);
+    }
+    TD.scene = new THREE.Scene();
+    TD.scene.background = new THREE.Color(0x05070a);
+    TD.scene.fog = new THREE.Fog(0x05070a, 120, 260);
+    TD.camera = new THREE.PerspectiveCamera(46, 1, 0.1, 600);
+    TD.scene.add(new THREE.AmbientLight(0xbfae90, 0.62));
+    const sun = new THREE.DirectionalLight(0xfff2d8, 0.55); sun.position.set(30, 60, 18); TD.scene.add(sun);
+    TD.savedView = { c: map.getCenter(), z: map.getZoom() };
+    await tdLoadGenData();
+    tdBuildStatic();
+    TD.sig = tdSignature();
+    $("apocMap").hidden = true;
+    $("tdWrap").hidden = false;
+    $("view3dBtn").textContent = "2D view";
+    TD.active = true;
+    tdResize();
+    const loop = () => {
+      if (!TD.active) return;
+      TD.raf = requestAnimationFrame(loop);
+      const t = performance.now() / 1000;
+      TD.root.traverse(m => { if (m.name === "flame") { const s = 1 + 0.16 * Math.sin(t * 11 + m.position.x * 3.1) + 0.07 * Math.sin(t * 23 + m.position.z * 5.3); m.scale.set(s, 1 + 0.22 * Math.sin(t * 13 + m.position.x), s); } });
+      TD.scene.traverse(m => { if (m.isPointLight && m.userData.flame) m.intensity = 0.85 + 0.14 * Math.sin(t * 9.3 + m.userData.seed * 7.0) + 0.06 * Math.sin(t * 21.7 + m.userData.seed * 3.0); });
+      tdUpdateCamera();
+      TD.renderer.render(TD.scene, TD.camera);
+    };
+    loop();
+    if (!fromRemote) { TD.localSetAt = Date.now(); tdSetViewKey(true); }
+    if (tdStatusEl()) tdStatusEl().textContent = `3D: ${TD.counts.walls || 0} walls, ${TD.counts.props || 0} props, ${TD.counts.tokens || 0} tokens, ${TD.counts.pointLights || 0} real lights.`;
+  }
+  function exit3D(fromRemote){
+    if (!TD.active) return;
+    TD.active = false;
+    cancelAnimationFrame(TD.raf);
+    $("tdWrap").hidden = true;
+    $("apocMap").hidden = false;
+    $("view3dBtn").textContent = "3D view";
+    if (TD.savedView) { map.setView(TD.savedView.c, TD.savedView.z); TD.savedView = null; }
+    map.invalidateSize();
+    if (!fromRemote) { TD.localSetAt = Date.now(); tdSetViewKey(false); }
+  }
+  function tdResize(){
+    if (!TD.renderer || !TD.active) return;
+    const wrap = $("tdWrap"), w = wrap.clientWidth, h = wrap.clientHeight;
+    if (!w || !h) return;
+    TD.renderer.setSize(w, h);
+    TD.camera.aspect = w / h; TD.camera.updateProjectionMatrix();
+  }
+  window.addEventListener("resize", tdResize);
+  function tdUpdateCamera(){
+    const c = TD.cam;
+    const cx = c.tx + c.dist * Math.cos(c.el) * Math.cos(c.az);
+    const cz = c.tz + c.dist * Math.cos(c.el) * Math.sin(c.az);
+    const cy = c.dist * Math.sin(c.el);
+    TD.camera.position.set(cx, cy, cz);
+    TD.camera.lookAt(c.tx, 0, c.tz);
+  }
+  function tdBindControls(el){
+    const ptrs = new Map();
+    let moved = 0;
+    const ray = new THREE.Raycaster();
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    function pickToken(e){
+      const r = el.getBoundingClientRect();
+      const nd = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(nd, TD.camera);
+      const hits = ray.intersectObjects(TD.tokGrp.children, true);
+      for (const h of hits) { let o = h.object; while (o && !o.userData.tkId) o = o.parent; if (o) return o; }
+      return null;
+    }
+    function groundPoint(e){
+      const r = el.getBoundingClientRect();
+      const nd = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(nd, TD.camera);
+      const v = new THREE.Vector3();
+      return ray.ray.intersectPlane(groundPlane, v) ? v : null;
+    }
+    el.addEventListener("pointerdown", e => {
+      el.setPointerCapture(e.pointerId);
+      ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      moved = 0;
+      if (!isProjecting() && ptrs.size === 1) {
+        const hit = pickToken(e);
+        if (hit) {
+          const tk = tokens.find(t => t.id === hit.userData.tkId);
+          if (tk && !tk.lock) TD.drag = { tk, grp: hit };
+        }
+      }
+    });
+    el.addEventListener("pointermove", e => {
+      const p = ptrs.get(e.pointerId); if (!p) return;
+      const dx = e.clientX - p.x, dy = e.clientY - p.y;
+      p.x = e.clientX; p.y = e.clientY; moved += Math.abs(dx) + Math.abs(dy);
+      if (TD.drag) {
+        const v = groundPoint(e);
+        if (v) TD.drag.grp.position.set(v.x, 0, v.z);
+        return;
+      }
+      if (ptrs.size === 2) return; /* pinch handled on up/down deltas only — wheel/pinch zoom below */
+      if (e.shiftKey || e.buttons === 4 || e.buttons === 2) {
+        const s = TD.cam.dist / 220;
+        const sin = Math.sin(TD.cam.az), cos = Math.cos(TD.cam.az);
+        TD.cam.tx -= (dx * cos - dy * sin) * s * 0.4; TD.cam.tz -= (dx * sin + dy * cos) * s * 0.4;
+      } else {
+        TD.cam.az -= dx * 0.0052;
+        TD.cam.el = Math.max(0.14, Math.min(1.38, TD.cam.el + dy * 0.0042));
+      }
+    });
+    async function endPtr(e){
+      ptrs.delete(e.pointerId);
+      if (TD.drag && ptrs.size === 0) {
+        const { tk, grp } = TD.drag; TD.drag = null;
+        const p = { x: Math.round(grp.position.x * CELL / MW * 10000) / 100, y: Math.round(grp.position.z * CELL / MH * 10000) / 100 };
+        tk.x = Math.max(0, Math.min(100, p.x)); tk.y = Math.max(0, Math.min(100, p.y));
+        const ok = await saveTokens(); drawTokens(); tdBuildTokens();
+        if (tdStatusEl()) tdStatusEl().textContent = ok ? `${tk.name || "Token"} moved — saved for everybody, in 2D too.` : "That move didn't save — try again.";
+        if (!ok) loadTokens(true);
+      }
+    }
+    el.addEventListener("pointerup", endPtr);
+    el.addEventListener("pointercancel", endPtr);
+    el.addEventListener("wheel", e => { e.preventDefault(); TD.cam.dist = Math.max(4, Math.min(160, TD.cam.dist * (1 + Math.sign(e.deltaY) * 0.09))); }, { passive: false });
+    el.addEventListener("contextmenu", e => e.preventDefault());
+  }
+  $("view3dBtn").addEventListener("click", () => { if (TD.active) exit3D(false); else enter3D(false); });
+  $("tdBackBtn").addEventListener("click", () => exit3D(false));
+  /* Follow the shared view mode (Push to TV shows 3D too) and keep
+     the scene in step with shared state changes. */
+  TD.poll = setInterval(async () => {
+    if (db && Date.now() - TD.localSetAt > 4000) {
+      const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", "vtt_view3d").maybeSingle();
+      const v = data && data.value;
+      if (v && v.on && v.mapId === currentMapId && !TD.active) enter3D(true);
+      else if (TD.active && (!v || !v.on || v.mapId !== currentMapId)) exit3D(true);
+    }
+    if (TD.active && TD.scene) {
+      const s = tdSignature();
+      if (s !== TD.sig) { TD.sig = s; tdBuildStatic(); if (tdStatusEl()) tdStatusEl().textContent = `3D: ${TD.counts.walls || 0} walls, ${TD.counts.props || 0} props, ${TD.counts.tokens || 0} tokens, ${TD.counts.pointLights || 0} real lights.`; }
+    }
+  }, 3000);
 
 })();
 </script>
