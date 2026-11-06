@@ -202,6 +202,33 @@ textarea{min-height:96px;resize:vertical}
 .ping-dot{position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:#e8a33d;box-shadow:0 0 6px #000;pointer-events:none}
 @keyframes pingring{0%{transform:scale(.4);opacity:1}100%{transform:scale(3.4);opacity:0}}
 
+/* ---- Usability pass (v1.01): phone-first tap targets, layout, hints ----
+   Presentation only: no ids, keys or behaviour change here. */
+.hint{flex-basis:100%;margin:2px 0 0;font-size:.85rem;color:var(--muted-foreground)}
+.map-tools .btn{min-height:48px;padding:12px 18px;font-size:1rem}
+.map-tools .atlas-toggle{min-height:48px}
+.lib-item{min-height:64px}
+.lib-cap{font-size:.8rem}
+.chip-eye{min-width:36px;min-height:36px}
+.leaflet-bar a{min-width:40px !important;min-height:40px !important;line-height:40px !important;font-size:18px !important}
+/* Repository-ready stage: map + side rail. The rail keeps the token
+   repository (and the DM monster repository to come) BESIDE the map on wide
+   screens; on phones it stacks under the map. It collapses entirely while
+   the repository panel is closed, so the map keeps full width. */
+.map-stage{display:flex;gap:14px;align-items:flex-start;margin-top:12px}
+.map-stage .map-side{flex:1 1 auto;min-width:0}
+.map-repo{flex:0 0 300px;min-width:0}
+.map-repo:has(> .lib-panel[hidden]){display:none}
+.map-repo .lib-panel{margin:0}
+@media (max-width:820px){
+.map-stage{flex-direction:column}
+.map-repo{flex:none;width:100%}
+.apoc-map{height:62vh;min-height:340px}
+.panel{padding:12px}
+}
+@media (pointer:coarse){
+input,select,textarea{font-size:16px}
+}
 </style>
 </head>
 <body>
@@ -215,6 +242,7 @@ textarea{min-height:96px;resize:vertical}
     <p class="muted">The Realms as Forgotten Realms canon left them when the APOC hit — Shaun's thousand years of lore layer over this.</p>
     <p class="map-note"><strong>The Bastion of Last Hope</strong> — on this map, it is the city on the Sword Coast printed as <strong>Waterdeep</strong>: Waterdeep is its original name, and the Bastion of Last Hope is the name it carries now. Everything the map shows for Waterdeep — its streets, Undermountain below it, its history — is the Bastion's own pre-APOC past, altered by what the APOC did to it.</p>
     <p class="muted">The world was decimated. Everywhere else is pretty much a ghost town or dead. Life did come back to the surface but diminished. Changed. Altered. The grey over this map is the Fog of Life — always grey, no sun, no stars — and the surviving cities are the pockets that held. What is dead, what is ruined, and what came back changed, the table marks as it learns.</p>
+    <p class="hint">Everything here is shared live — the map, tokens, dice and turn order are the same on every screen at the table.</p>
     <div class="map-tools">
       <div class="field">
         <label for="placeSearch">Find a place — the atlas, stripped down and APOC-screened</label>
@@ -232,6 +260,7 @@ textarea{min-height:96px;resize:vertical}
       <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
       <button type="button" class="btn primary" id="projBtn">Project to TV</button>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
+      <p class="hint">Switch the shared map, or expand it — Project sends a clean player-only view to the TV.</p>
     </div>
     <div class="map-tools">
       <label class="atlas-toggle"><input type="checkbox" id="gridToggle"> Grid</label>
@@ -251,22 +280,12 @@ textarea{min-height:96px;resize:vertical}
       <button type="button" class="btn" id="libBtn" aria-pressed="false">Token repository</button>
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
       <span class="muted small" id="tokenStatus">Tokens load from the shared board…</span>
-    </div>
-    <div class="lib-panel" id="tokenLib" hidden>
-      <div class="field" style="max-width:280px">
-        <label for="libName">Name for the next token (optional)</label>
-        <input id="libName" type="text" autocomplete="off" placeholder="e.g. Goblin 3">
-      </div>
-      <p class="lib-head">Symbols</p>
-      <div class="lib-grid" id="libSymbols"></div>
-      <p class="lib-head">Discs &amp; numbers</p>
-      <div class="lib-grid" id="libDiscs"></div>
-      <p class="lib-head">Artwork — Saint James &amp; Cody's gallery</p>
-      <div class="lib-grid" id="libArt"></div>
+      <p class="hint">Arm Ruler or Ping, then tap the map. The token repository holds ready-made tokens — pick one, then tap Place.</p>
     </div>
     <div class="map-tools">
       <button type="button" class="btn" id="gmBtn" aria-pressed="false">GM view: off</button>
       <span class="muted small" id="gmStatus"></span>
+      <span class="hint">For the DM — fog controls and GM-only tokens stay hidden until GM view is on.</span>
     </div>
     <div class="map-tools" id="fogControls" hidden>
       <label class="atlas-toggle"><input type="checkbox" id="fogEnabled"> Fog of war on this map</label>
@@ -359,10 +378,29 @@ textarea{min-height:96px;resize:vertical}
       <button type="button" class="btn" id="drawAddLayer">Add layer</button>
       <button type="button" class="btn primary" id="drawFinish" hidden>Finish shape</button>
     </div>
-    <div id="apocMap" class="apoc-map" aria-label="Editable shared map of Faerûn"></div>
-    <div id="placeCard" class="place-card" hidden></div>
-    <p class="map-status muted small" id="mapStatus">Loading the shared markers…</p>
+    <div class="map-stage">
+      <div class="map-side">
+        <div id="apocMap" class="apoc-map" aria-label="Editable shared map of Faerûn"></div>
+        <div id="placeCard" class="place-card" hidden></div>
+        <p class="map-status muted small" id="mapStatus">Loading the shared markers…</p>
+      </div>
+      <aside class="map-repo" aria-label="Token repository">
+        <div class="lib-panel" id="tokenLib" hidden>
+          <div class="field" style="max-width:280px">
+            <label for="libName">Name for the next token (optional)</label>
+            <input id="libName" type="text" autocomplete="off" placeholder="e.g. Goblin 3">
+          </div>
+          <p class="lib-head">Symbols</p>
+          <div class="lib-grid" id="libSymbols"></div>
+          <p class="lib-head">Discs &amp; numbers</p>
+          <div class="lib-grid" id="libDiscs"></div>
+          <p class="lib-head">Artwork — Saint James &amp; Cody's gallery</p>
+          <div class="lib-grid" id="libArt"></div>
+        </div>
+      </aside>
+    </div>
     <form id="markerForm" class="marker-form" hidden>
+      <p class="hint">This marker saves to the shared map — everybody sees it.</p>
       <div class="form-grid">
         <div class="field">
           <label for="markerName">Marker name</label>
@@ -394,6 +432,7 @@ textarea{min-height:96px;resize:vertical}
       </div>
     </form>
     <form id="tokenForm" class="marker-form" hidden>
+      <p class="hint">HP and status markers show on the token for the whole table.</p>
       <div class="form-grid">
         <div class="field">
           <label for="tokenName">Token name</label>
@@ -457,6 +496,7 @@ textarea{min-height:96px;resize:vertical}
     <div class="vtt-panel">
       <div class="vtt-col">
         <h3>Dice roller — shared log</h3>
+        <p class="hint">Tap a die or type a roll like 2d6+3 — every roll lands in the shared log for the whole table.</p>
         <div class="form-grid">
           <div class="field">
             <label for="diceName">Rolling as</label>
@@ -494,6 +534,7 @@ textarea{min-height:96px;resize:vertical}
       </div>
       <div class="vtt-col">
         <h3>Initiative — turn order</h3>
+        <p class="hint">Start from the tokens on the map, then step through the turns with Next.</p>
         <p class="muted small" id="initMeta">No combat running.</p>
         <div class="map-actions">
           <button type="button" class="btn primary" id="initStartBtn">Start from tokens</button>
