@@ -347,6 +347,10 @@ input,select,textarea{font-size:16px}
 .marker-form{margin-top:6px}
 .vtt-panel{margin-top:8px}
 
+/* ---- v1.09: dynamic lighting (Light layer) ---- */
+.light-icon{background:none;border:none}
+.light-dot{display:block;width:18px;height:18px;border-radius:50%;border:2px solid #0d0f14;margin:0 auto}
+.light-name{display:block;text-align:center;margin-top:3px;background:rgba(10,12,16,.8);color:#f2e7c8;padding:2px 7px;border-radius:999px;font-size:.72rem;font-weight:600;white-space:nowrap;border:1px solid rgba(255,255,255,.22);width:max-content;margin-left:auto;margin-right:auto}
 /* ---- v1.07: Push to TV display mode (?display=1) ----
    The TV copy of this same page: JUST THE MAP — player view, no
    controls, no perimeter groups, no panels, no header, no story
@@ -461,6 +465,25 @@ body.displaying .init-strip{font-size:1.05rem}
       <button type="button" class="btn" id="fogAllBtn">Reveal all (fog off)</button>
       <button type="button" class="btn" id="fogNoneBtn">Hide all</button>
       <button type="button" class="btn" id="gmPinBtn">Set GM PIN</button>
+    </div>
+    <div class="map-tools" id="lightControls" hidden>
+      <label class="atlas-toggle"><input type="checkbox" id="lightEnabled"> Dynamic lighting on this map</label>
+      <button type="button" class="btn" id="lightPreviewBtn" aria-pressed="false">Preview as player</button>
+      <button type="button" class="btn" id="wallBtn" aria-pressed="false">Wall</button>
+      <button type="button" class="btn" id="doorBtn" aria-pressed="false">Door</button>
+      <div class="field" style="flex:0 1 auto">
+        <label for="lightPreset">Light source</label>
+        <select id="lightPreset">
+          <option value="candle">Candle — 5 / 10 ft</option>
+          <option value="torch" selected>Torch — 20 / 40 ft</option>
+          <option value="lantern">Lantern — 30 / 60 ft</option>
+          <option value="spell">Spell light — 20 / 60 ft</option>
+        </select>
+      </div>
+      <button type="button" class="btn" id="lightPlaceBtn" aria-pressed="false">Place light</button>
+      <button type="button" class="btn" id="wallEraseBtn" aria-pressed="false">Erase wall / door</button>
+      <button type="button" class="btn" id="wallClearBtn">Clear walls</button>
+      <span class="muted small" id="lightStatus"></span>
     </div>
     <div class="map-tools">
       <div class="field" style="flex:0 1 auto">
@@ -789,6 +812,35 @@ body.displaying .init-strip{font-size:1.05rem}
         <button type="button" class="btn" id="tokenCancel">Cancel</button>
       </div>
     </form>
+    <form id="lightForm" class="marker-form" hidden>
+      <h3>Light source</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="lightName">Name</label>
+          <input id="lightName" type="text" autocomplete="off" placeholder="Torch">
+        </div>
+        <div class="field">
+          <label for="lightColor">Color</label>
+          <input id="lightColor" type="color" value="#ffb347" style="width:52px;height:34px;padding:0;background:none;border:none">
+        </div>
+        <div class="field">
+          <label for="lightBright">Bright radius (ft)</label>
+          <input id="lightBright" type="number" min="0" step="5" placeholder="20">
+        </div>
+        <div class="field">
+          <label for="lightDim">Dim radius (ft) — total reach</label>
+          <input id="lightDim" type="number" min="0" step="5" placeholder="40">
+        </div>
+        <div class="field full">
+          <label class="atlas-toggle"><input type="checkbox" id="lightFlame"> Flame — flickers (torch, candle, lantern)</label>
+        </div>
+      </div>
+      <div class="map-actions">
+        <button type="submit" class="btn primary">Save light</button>
+        <button type="button" class="btn danger" id="lightDelete">Delete light</button>
+        <button type="button" class="btn" id="lightCancel">Cancel</button>
+      </div>
+    </form>
     <div class="vtt-panel">
       <div class="vtt-col">
         <h3>Dice roller — shared log</h3>
@@ -908,15 +960,25 @@ setInterval(loadSharedEntries, 60000);
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
   const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false });
+  /* Shaun's fixed layer stack (2026-11-06), bottom to top:
+     1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground. Extensible in this
+     order — new table layers take the next z slot above Foreground.
+     (Leaflet's own popup/tooltip/control chrome keeps its stock panes
+     above the stack; that is UI, not table material.) */
+  for (const [paneName, z] of [["layerMap", 205], ["layerTokens", 300], ["layerGm", 400], ["layerLight", 500], ["layerForeground", 560]]) {
+    map.createPane(paneName);
+    map.getPane(paneName).style.zIndex = z;
+    map.getPane(paneName).style.pointerEvents = "none";
+  }
   let bounds = [[0, 0], [MH, MW]];
-  let baseOverlay = L.imageOverlay("assets/maps/faerun-3e.webp", bounds).addTo(map);
+  let baseOverlay = L.imageOverlay("assets/maps/faerun-3e.webp", bounds, { pane: "layerMap" }).addTo(map);
   map.fitBounds([[MH * (1 - 0.34), MW * 0.02], [MH * (1 - 0.005), MW * 0.38]]);
   map.setMaxBounds([[-MH * 0.08, -MW * 0.08], [MH * 1.08, MW * 1.08]]);
   const layer = L.layerGroup().addTo(map);
   const veilLayer = L.layerGroup().addTo(map);
   function drawVeil(){
     veilLayer.clearLayers();
-    veilLayer.addLayer(L.rectangle(bounds, { color: "transparent", weight: 0, fillColor: "#767c86", fillOpacity: 0.16, interactive: false }));
+    veilLayer.addLayer(L.rectangle(bounds, { pane: "layerMap", color: "transparent", weight: 0, fillColor: "#767c86", fillOpacity: 0.16, interactive: false }));
   }
   drawVeil();
   $("apocMap").classList.add("apoc-on");
@@ -945,7 +1007,7 @@ setInterval(loadSharedEntries, 60000);
     if (currentMapId !== "faerun") return;
     for (const mk of markers) {
       const kind = KINDS.includes(mk.kind) ? mk.kind : "place";
-      const m = L.marker(toLatLng(mk.x, mk.y), { draggable: true, icon: iconFor(kind, mk.name) }).addTo(layer);
+      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: true, icon: iconFor(kind, mk.name) }).addTo(layer);
       m.on("click", () => {
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}`).openOn(map); return; }
         openEditor({ mode: "edit", mk });
@@ -1091,7 +1153,7 @@ setInterval(loadSharedEntries, 60000);
   }
   for (const p of PLACES) {
     if (p.dot === false) continue;
-    const dot = L.marker(toLatLng(p.x, p.y), { icon: L.divIcon({ className: "atlas-icon", html: '<span class="atlas-dot"></span>', iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false }).addTo(atlasLayer);
+    const dot = L.marker(toLatLng(p.x, p.y), { pane: "layerMap", icon: L.divIcon({ className: "atlas-icon", html: '<span class="atlas-dot"></span>', iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false }).addTo(atlasLayer);
     dot.on("click", () => {
       if (isProjecting()) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b><br>${esc(p.d)}`).openOn(map); return; }
       showCard(p.n, p.t, p.d, "Atlas lore is the world as canon left it — what stands here now, the table marks.");
@@ -1217,6 +1279,7 @@ setInterval(loadSharedEntries, 60000);
   ];
   let tokens = [], feetPerSquare = 5, gridOn = false, gmView = false, gridType = "square", scaleUnit = "ft";
   const tokenLayer = L.layerGroup().addTo(map);
+  const tokenMarkers = {}; /* token id -> marker, for the v1.09 lighting visibility pass */
   const gridLayer = L.layerGroup();
   const tokenStatusEl = $("tokenStatus");
   const tokenForm = $("tokenForm");
@@ -1240,7 +1303,7 @@ setInterval(loadSharedEntries, 60000);
   function drawGrid(){
     gridLayer.clearLayers();
     if (!gridOn) return;
-    const opts = { color:"#e9e2cf", weight:1, opacity:0.16, interactive:false };
+    const opts = { pane:"layerMap", color:"#e9e2cf", weight:1, opacity:0.16, interactive:false };
     if (gridType === "hex") {
       const b = map.getBounds().pad(0.2);
       for (const c of hexCenters()) {
@@ -1341,10 +1404,12 @@ setInterval(loadSharedEntries, 60000);
   }
   function drawTokens(){
     tokenLayer.clearLayers();
+    for (const k in tokenMarkers) delete tokenMarkers[k];
     for (const tk of tokens) {
       if (tk.gm && !effectiveGm()) continue;
-      if (tk.light > 0) tokenLayer.addLayer(L.circle(toLatLng(tk.x, tk.y), { radius: tk.light / feetPerSquare * CELL, color: "#e8a33d", weight: 1, dashArray: "4 4", fillColor: "#e8a33d", fillOpacity: 0.08, interactive: false }));
-      const m = L.marker(toLatLng(tk.x, tk.y), { draggable: !tk.lock, icon: tokenIcon(tk) }).addTo(tokenLayer);
+      if (tk.light > 0 && !window.__apocLightOn) tokenLayer.addLayer(L.circle(toLatLng(tk.x, tk.y), { pane: "layerTokens", radius: tk.light / feetPerSquare * CELL, color: "#e8a33d", weight: 1, dashArray: "4 4", fillColor: "#e8a33d", fillOpacity: 0.08, interactive: false }));
+      const m = L.marker(toLatLng(tk.x, tk.y), { pane: "layerTokens", draggable: !tk.lock, icon: tokenIcon(tk) }).addTo(tokenLayer);
+      tokenMarkers[tk.id] = m;
       m.on("click", () => {
         if (isProjecting() || document.body.classList.contains("map-expanded")) {
           L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(tk.name)}</b>${tk.maxHp > 0 ? `<br>HP ${tk.hp || 0}/${tk.maxHp}` : ""}`).openOn(map);
@@ -1560,9 +1625,8 @@ setInterval(loadSharedEntries, 60000);
      on this public page. GM view is per-screen (this browser session);
      projection is always the player view. */
   function effectiveGm(){ return gmView && !isProjecting(); }
-  map.createPane("fogPane");
-  map.getPane("fogPane").style.zIndex = 640;
-  map.getPane("fogPane").style.pointerEvents = "none";
+  /* Fog renders in the GM layer (layerGm, z400) per Shaun's fixed stack —
+     it used to sit in its own pane at z640, above the tokens. */
   const fogLayer = L.layerGroup().addTo(map);
   const drawLayer = L.layerGroup().addTo(map);
   const previewLayer = L.layerGroup().addTo(map);
@@ -1613,6 +1677,7 @@ setInterval(loadSharedEntries, 60000);
     $("gmBtn").textContent = gmView ? "GM view: on" : "GM view: off";
     $("gmBtn").setAttribute("aria-pressed", String(gmView));
     $("fogControls").hidden = !gmView;
+    $("lightControls").hidden = !gmView;
     renderFog(); drawTokens(); renderDraw();
   }
   $("gmBtn").addEventListener("click", async () => {
@@ -1661,9 +1726,9 @@ setInterval(loadSharedEntries, 60000);
       return [[a[0], a[1]], [a[0], b[1]], [b[0], b[1]], [b[0], a[1]]];
     });
     fogLayer.addLayer(L.polygon([[[0, 0], [0, MW], [MH, MW], [MH, 0]], ...holes],
-      { pane: "fogPane", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: effectiveGm() ? 0.45 : 0.93, interactive: false }));
+      { pane: "layerGm", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: effectiveGm() ? 0.45 : 0.93, interactive: false }));
     if (effectiveGm()) for (const r of fogState.revealed)
-      fogLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { pane: "fogPane", color: "#e8a33d", weight: 1, fill: false, interactive: false }));
+      fogLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { pane: "layerGm", color: "#e8a33d", weight: 1, fill: false, interactive: false }));
   }
   $("fogEnabled").addEventListener("change", async () => { fogState.enabled = $("fogEnabled").checked; await saveFog(); renderFog(); });
   $("fogAllBtn").addEventListener("click", async () => { fogState.enabled = false; $("fogEnabled").checked = false; await saveFog(); renderFog(); });
@@ -1708,7 +1773,7 @@ setInterval(loadSharedEntries, 60000);
       if (ldef.hidden) continue;
       if (ldef.gm && !gm) continue;
       const lop = (typeof ldef.opacity === "number" ? ldef.opacity : 1) * (typeof it.opacity === "number" ? it.opacity : 1);
-      const st = { color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false, opacity: it.fillMode === "fill" ? 0 : lop };
+      const st = { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false, opacity: it.fillMode === "fill" ? 0 : lop };
       const fo = it.fillMode === "fill" ? 0.35 * lop : (it.fill === false ? 0 : 0.18) * lop;
       if (it.type === "line") drawLayer.addLayer(L.polyline(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fill: false }));
       else if (it.type === "poly") drawLayer.addLayer(L.polygon(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fillOpacity: fo }));
@@ -1722,14 +1787,14 @@ setInterval(loadSharedEntries, 60000);
       }
       else if (it.type === "rect") drawLayer.addLayer(L.rectangle([toLatLng(it.x, it.y), toLatLng(it.x + it.w, it.y + it.h)], { ...st, fillOpacity: fo }));
       else if (it.type === "circle") drawLayer.addLayer(L.circle(toLatLng(it.x, it.y), { ...st, radius: it.r / 100 * MW, fillOpacity: fo }));
-      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
+      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
       else if (it.type === "ellipse") {
         const epts = [], ecx = it.x / 100 * MW, ecy = it.y / 100 * MH;
         for (let k = 0; k < 48; k++) { const a = k / 48 * Math.PI * 2; epts.push(uToLatLng(ecx + Math.cos(a) * it.rx / 100 * MW, ecy + Math.sin(a) * it.ry / 100 * MH)); }
         drawLayer.addLayer(L.polygon(epts, { ...st, fillOpacity: fo }));
       }
-      else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { icon: stampIcon(it, lop), interactive: false }));
-      else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(it.data, [[0, 0], [MH, MW]], { opacity: lop, interactive: false }));
+      else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", icon: stampIcon(it, lop), interactive: false }));
+      else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(it.data, [[0, 0], [MH, MW]], { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", opacity: lop, interactive: false }));
       else if (it.type === "template") {
         const anchorTk = it.anchor ? tokens.find(t => t.id === it.anchor) : null;
         const ox = anchorTk ? anchorTk.x : it.x, oy = anchorTk ? anchorTk.y : it.y;
@@ -1765,7 +1830,7 @@ setInterval(loadSharedEntries, 60000);
         }
       }
       else if (it.type === "ash") {
-        drawLayer.addLayer(L.circle(uToLatLng(it.x / 100 * MW, it.y / 100 * MH), { color: "#000000", weight: 1, fillColor: "#17181c", fillOpacity: 0.55 * lop, interactive: false, radius: (it.rSq || 3) * CELL }));
+        drawLayer.addLayer(L.circle(uToLatLng(it.x / 100 * MW, it.y / 100 * MH), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", color: "#000000", weight: 1, fillColor: "#17181c", fillOpacity: 0.55 * lop, interactive: false, radius: (it.rSq || 3) * CELL }));
       }
     }
   }
@@ -2208,7 +2273,7 @@ setInterval(loadSharedEntries, 60000);
     bounds = [[0, 0], [MH, MW]];
     map.setMaxBounds([[-MH * 0.08, -MW * 0.08], [MH * 1.08, MW * 1.08]]);
     map.removeLayer(baseOverlay);
-    baseOverlay = L.imageOverlay(def.img, bounds).addTo(map);
+    baseOverlay = L.imageOverlay(def.img, bounds, { pane: "layerMap" }).addTo(map);
     baseOverlay.bringToBack();
     drawVeil();
     $("mapSelect").value = id;
@@ -2260,7 +2325,7 @@ setInterval(loadSharedEntries, 60000);
   }
   function showPing(p){
     clearPing();
-    pingMarker = L.marker(toLatLng(p.x, p.y), { interactive: false, icon: L.divIcon({ className: "ping-icon", html: '<span class="ping-ring"></span><span class="ping-dot"></span>', iconSize: [44, 44], iconAnchor: [22, 22] }) }).addTo(map);
+    pingMarker = L.marker(toLatLng(p.x, p.y), { pane: "layerForeground", interactive: false, icon: L.divIcon({ className: "ping-icon", html: '<span class="ping-ring"></span><span class="ping-dot"></span>', iconSize: [44, 44], iconAnchor: [22, 22] }) }).addTo(map);
     pingHideTimer = setTimeout(clearPing, Math.max(0, 9000 - (Date.now() - (p.ts || 0))));
   }
   async function loadPing(quiet){
@@ -3440,6 +3505,332 @@ setInterval(loadSharedEntries, 60000);
   });
   $("repoTab").addEventListener("click", () => $("libBtn").click());
 
+
+  /* ================= v1.09: Dynamic lighting — walls, light sources, token vision =================
+     Shaun's layer stack: 1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground.
+     This build lives in the Light layer (layerLight pane, z500); walls are
+     drawn/edited as GM material (layerGm, z400); the Foreground pane
+     (layerForeground, z560, fgFx group) sits above it, reserved for
+     overhead material — no foreground content exists yet.
+     State per map in the shared store, key vtt_light / vtt_light_<mapId>:
+     { enabled, walls:[{id,kind:"wall"|"door",a:[x,y],b:[x,y],open}],
+       lights:[{id,name,x,y,bright,dim,color,flame}] } — positions in map %,
+     radii in feet (converted with the map's shared scale). Realtime +
+     30-second refresh, same pattern as fog/drawings.
+     Visibility: raycast polygon per emitter — rays only at wall-endpoint
+     angles (±0.0001 rad), nearest segment hit clamped to the radius, arc
+     points inserted adaptively between unblocked neighbours (prototyped
+     and unit-tested before shipping; fixed-angle sample rays leaked
+     spikes at corners, so they are NOT used). Rendering is Leaflet SVG
+     polygons in the light pane, so pan/zoom reproject for free and
+     recomputes happen only on data change (plus the flicker timer). */
+  const lightKey = () => currentMapId === "faerun" ? "vtt_light" : `vtt_light_${currentMapId}`;
+  let lightState = { enabled: false, walls: [], lights: [] };
+  let lightPreview = false, lightEditingId = null, lightSegStart = null, lightFlickerTimer = null;
+  const wallFx = L.layerGroup().addTo(map);
+  const lightFx = L.layerGroup().addTo(map);
+  const lightEditFx = L.layerGroup().addTo(map);
+  const fgFx = L.layerGroup().addTo(map); /* Foreground layer (5) — reserved, extensible */
+  const lightStatusEl = $("lightStatus");
+  const LIGHT_PRESETS = {
+    candle: { label: "Candle", bright: 5, dim: 10, color: "#ffc46b", flame: true },
+    torch: { label: "Torch", bright: 20, dim: 40, color: "#ff9a3c", flame: true },
+    lantern: { label: "Lantern", bright: 30, dim: 60, color: "#ffd27a", flame: true },
+    spell: { label: "Spell light", bright: 20, dim: 60, color: "#9fd8ff", flame: false }
+  };
+  const ftToUnits = ft => ft / feetPerSquare * CELL;
+  const toUnits = p => [p.x / 100 * MW, p.y / 100 * MH];
+  function segIntersect(px, py, dx, dy, ax, ay, bx, by){
+    const ex = bx - ax, ey = by - ay, den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) return null;
+    const t = ((ax - px) * ey - (ay - py) * ex) / den;
+    const u = ((ax - px) * dy - (ay - py) * dx) / den;
+    return (t >= 0 && u >= -1e-9 && u <= 1 + 1e-9) ? t : null;
+  }
+  function visPoly(ox, oy, radius, segs){
+    const near = segs.filter(s => ox >= Math.min(s[0], s[2]) - radius && ox <= Math.max(s[0], s[2]) + radius && oy >= Math.min(s[1], s[3]) - radius && oy <= Math.max(s[1], s[3]) + radius);
+    const angles = [];
+    for (const s of near) for (const e of [[s[0], s[1]], [s[2], s[3]]]) {
+      const b = Math.atan2(e[1] - oy, e[0] - ox);
+      angles.push(b - 0.0001, b, b + 0.0001);
+    }
+    if (!angles.length) angles.push(0);
+    const raw = [];
+    for (const a of angles) {
+      const dx = Math.cos(a), dy = Math.sin(a);
+      let best = radius;
+      for (const s of near) { const t = segIntersect(ox, oy, dx, dy, s[0], s[1], s[2], s[3]); if (t !== null && t < best) best = t; }
+      raw.push({ a, x: ox + dx * best, y: oy + dy * best, d: best });
+    }
+    raw.sort((p, q) => p.a - q.a);
+    const pts = raw.filter((p, i) => i === 0 || Math.abs(p.a - raw[i - 1].a) > 1e-7);
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], q = pts[(i + 1) % pts.length];
+      out.push(p);
+      let gap = q.a - p.a; if (gap <= 0) gap += Math.PI * 2;
+      if (p.d >= radius - 1e-6 && q.d >= radius - 1e-6 && gap > 0.06) {
+        const steps = Math.floor(gap / 0.12);
+        for (let k = 1; k <= steps; k++) { const a = p.a + gap * k / (steps + 1); out.push({ a, x: ox + Math.cos(a) * radius, y: oy + Math.sin(a) * radius, d: radius }); }
+      }
+    }
+    return out;
+  }
+  function pointInPolyU(x, y, poly){
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      if (((yi > y) !== (yj > y)) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function lightBlockers(){
+    const segs = [];
+    for (const w of lightState.walls) {
+      if (w.kind === "door" && w.open) continue;
+      const a = toUnits({ x: w.a[0], y: w.a[1] }), b = toUnits({ x: w.b[0], y: w.b[1] });
+      segs.push([a[0], a[1], b[0], b[1]]);
+    }
+    return segs;
+  }
+  function lightIcon(src){
+    return L.divIcon({ className: "light-icon", html: `<span class="light-dot" style="background:${esc(src.color || "#ffb347")};box-shadow:0 0 14px 5px ${esc(src.color || "#ffb347")}"></span><span class="light-name">${esc(src.name || "Light")}</span>`, iconAnchor: [9, 9] });
+  }
+  async function loadLighting(quiet){
+    if (!db) return;
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", lightKey()).maybeSingle();
+    if (error) return;
+    const v = (data && data.value && typeof data.value === "object") ? data.value : {};
+    lightState = { enabled: !!v.enabled, walls: Array.isArray(v.walls) ? v.walls : [], lights: Array.isArray(v.lights) ? v.lights : [] };
+    $("lightEnabled").checked = lightState.enabled;
+    window.__apocLightOn = lightState.enabled;
+    renderLighting();
+  }
+  async function saveLighting(){
+    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: lightKey(), value: lightState, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    return !error;
+  }
+  function flickerFactor(src){
+    if (!src.flame) return 1;
+    const t = performance.now(), h = (src.id || "lt").length * 1.7 + ((src.id || "lt").charCodeAt(3) || 0);
+    return 1 + 0.022 * Math.sin(t / 110 + h) + 0.012 * Math.sin(t / 53 + h * 2.1);
+  }
+  function renderLighting(){
+    wallFx.clearLayers(); lightFx.clearLayers(); lightEditFx.clearLayers();
+    window.__apocLightOn = lightState.enabled;
+    const playerView = !effectiveGm() || lightPreview;
+    /* GM material: wall + door lines and light-source handles (layer 3). */
+    if (!isProjecting() && gmView && !lightPreview) {
+      for (const w of lightState.walls) {
+        const a = toLatLng(w.a[0], w.a[1]), b = toLatLng(w.b[0], w.b[1]);
+        if (w.kind === "door") wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }));
+        else wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#9aa0a8", weight: 3, interactive: false }));
+      }
+      for (const src of lightState.lights) {
+        const m = L.marker(toLatLng(src.x, src.y), { pane: "layerGm", draggable: true, icon: lightIcon(src) }).addTo(lightEditFx);
+        m.on("click", () => openLightEditor(src));
+        m.on("dragend", async () => {
+          const p = toXY(m.getLatLng()); src.x = p.x; src.y = p.y;
+          const ok = await saveLighting(); renderLighting();
+          lightStatusEl.textContent = ok ? `${src.name} moved — saved for everybody.` : "That move didn't save — try again.";
+          if (!ok) loadLighting(true);
+        });
+      }
+    }
+    if (!lightState.enabled) {
+      for (const tk of tokens) { const m = tokenMarkers[tk.id]; if (m && !tokenLayer.hasLayer(m)) tokenLayer.addLayer(m); }
+      manageFlicker(false);
+      return;
+    }
+    const segs = lightBlockers();
+    const ftU = ftToUnits(1);
+    const polysOf = (x, y, ft) => { const [ux, uy] = toUnits({ x, y }); return visPoly(ux, uy, ft * ftU, segs); };
+    const dimPolys = [], brightPolys = [], tints = [];
+    for (const src of lightState.lights) {
+      const f = flickerFactor(src);
+      const dim = polysOf(src.x, src.y, (src.dim || 0) * f), bright = polysOf(src.x, src.y, (src.bright || 0) * f);
+      if (dim.length > 2) { dimPolys.push(dim); tints.push({ poly: dim, color: src.color || "#ffb347", src }); }
+      if (bright.length > 2) brightPolys.push(bright);
+    }
+    for (const tk of tokens) {
+      if (tk.gm || !(tk.light > 0)) continue;
+      const p = polysOf(tk.x, tk.y, tk.light);
+      if (p.length > 2) dimPolys.push(p);
+    }
+    const toLL = poly => poly.map(p => uToLatLng(p.x, p.y));
+    const rect = [[0, 0], [0, MW], [MH, MW], [MH, 0]];
+    if (!playerView) {
+      /* GM sees everything: tints only, no darkness. */
+      for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10, interactive: false }));
+      manageFlicker(lightState.lights.some(s => s.flame));
+      return;
+    }
+    for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16, interactive: false }));
+    if (brightPolys.length) lightFx.addLayer(L.polygon([rect, ...brightPolys.map(toLL)], { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: 0.38, interactive: false }));
+    lightFx.addLayer(L.polygon([rect, ...dimPolys.map(toLL)], { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: 0.93, interactive: false }));
+    const visibleAt = (x, y) => { const [ux, uy] = toUnits({ x, y }); return dimPolys.some(p => pointInPolyU(ux, uy, p)); };
+    for (const tk of tokens) {
+      const m = tokenMarkers[tk.id];
+      if (!m) continue;
+      if (visibleAt(tk.x, tk.y)) { if (!tokenLayer.hasLayer(m)) tokenLayer.addLayer(m); }
+      else if (tokenLayer.hasLayer(m)) tokenLayer.removeLayer(m);
+    }
+    for (const t of tints) {
+      if (visibleAt(t.src.x, t.src.y)) lightFx.addLayer(L.marker(toLatLng(t.src.x, t.src.y), { pane: "layerLight", interactive: false, icon: lightIcon(t.src) }));
+    }
+    manageFlicker(lightState.lights.some(s => s.flame));
+  }
+  function manageFlicker(want){
+    const ok = want && lightState.enabled && lightBlockers().length <= 120 && lightState.lights.length <= 25 && !document.hidden;
+    if (ok && !lightFlickerTimer) lightFlickerTimer = setInterval(() => { if (document.hidden) return; renderLighting(); }, 200);
+    if (!ok && lightFlickerTimer) { clearInterval(lightFlickerTimer); lightFlickerTimer = null; }
+  }
+  document.addEventListener("visibilitychange", () => renderLighting());
+  /* ---- GM lighting controls ---- */
+  function setLightArmed(mode){
+    setArmed(mode);
+    for (const [id, m] of [["wallBtn", "wall"], ["doorBtn", "door"], ["lightPlaceBtn", "light-place"], ["wallEraseBtn", "wall-erase"]])
+      $(id).setAttribute("aria-pressed", String(mode === m));
+    if (mode !== "wall" && mode !== "door") { lightSegStart = null; previewLayer.clearLayers(); }
+  }
+  $("wallBtn").addEventListener("click", () => setLightArmed(armedMode === "wall" ? null : "wall"));
+  $("doorBtn").addEventListener("click", () => setLightArmed(armedMode === "door" ? null : "door"));
+  $("lightPlaceBtn").addEventListener("click", () => setLightArmed(armedMode === "light-place" ? null : "light-place"));
+  $("wallEraseBtn").addEventListener("click", () => setLightArmed(armedMode === "wall-erase" ? null : "wall-erase"));
+  $("wallClearBtn").addEventListener("click", async () => {
+    if (!lightState.walls.length) { lightStatusEl.textContent = "No walls on this map."; return; }
+    if (!confirm(`Clear all ${lightState.walls.length} wall / door segments on this map? Everybody loses them.`)) return;
+    lightState.walls = [];
+    const ok = await saveLighting(); renderLighting();
+    lightStatusEl.textContent = ok ? "Walls cleared for this map." : "Clear didn't save — refreshed.";
+    if (!ok) loadLighting(true);
+  });
+  $("lightEnabled").addEventListener("change", async () => {
+    lightState.enabled = $("lightEnabled").checked;
+    window.__apocLightOn = lightState.enabled;
+    const ok = await saveLighting(); renderLighting(); drawTokens();
+    lightStatusEl.textContent = ok ? (lightState.enabled ? "Dynamic lighting ON for this map — players and the TV see only lit, in-sight areas (plus the manual fog)." : "Dynamic lighting off for this map.") : "Lighting change didn't save — try again.";
+    if (!ok) loadLighting(true);
+  });
+  $("lightPreviewBtn").addEventListener("click", () => {
+    lightPreview = !lightPreview;
+    $("lightPreviewBtn").setAttribute("aria-pressed", String(lightPreview));
+    $("lightPreviewBtn").textContent = lightPreview ? "Preview: player view" : "Preview as player";
+    renderLighting();
+  });
+  function segDistU(px, py, s){
+    const a = toUnits({ x: s.a[0], y: s.a[1] }), b = toUnits({ x: s.b[0], y: s.b[1] });
+    const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1;
+    let t = ((px - a[0]) * dx + (py - a[1]) * dy) / L2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(px - (a[0] + t * dx), py - (a[1] + t * dy));
+  }
+  function nearestSeg(p, kind){
+    const [px, py] = toUnits(p);
+    let best = null, bd = CELL * 0.45;
+    for (const w of lightState.walls) { if (kind && w.kind !== kind) continue; const d = segDistU(px, py, w); if (d < bd) { bd = d; best = w; } }
+    return best;
+  }
+  map.on("mousedown", e => {
+    if (isProjecting() || !gmView) return;
+    const p = toXY(e.latlng);
+    if (armedMode === "wall" || armedMode === "door") { lightSegStart = lightSegStart || p; return; }
+    if (armedMode === "wall-erase") {
+      const w = nearestSeg(p, null);
+      if (w) {
+        lightState.walls = lightState.walls.filter(x => x.id !== w.id);
+        saveLighting().then(ok => { renderLighting(); lightStatusEl.textContent = ok ? `${w.kind === "door" ? "Door" : "Wall"} erased.` : "Erase didn't save — refreshed."; if (!ok) loadLighting(true); });
+      }
+      return;
+    }
+    if (armedMode === "light-place") {
+      const preset = LIGHT_PRESETS[$("lightPreset").value] || LIGHT_PRESETS.torch;
+      const src = { id: newId(), name: preset.label, x: p.x, y: p.y, bright: preset.bright, dim: preset.dim, color: preset.color, flame: preset.flame };
+      lightState.lights.push(src);
+      setLightArmed(null);
+      saveLighting().then(ok => { renderLighting(); lightStatusEl.textContent = ok ? `${src.name} placed — tap it to adjust.` : "Light didn't save — refreshed."; if (!ok) loadLighting(true); else openLightEditor(src); });
+    }
+  });
+  map.on("mousemove", e => {
+    if (!lightSegStart || (armedMode !== "wall" && armedMode !== "door")) return;
+    previewLayer.clearLayers();
+    previewLayer.addLayer(L.polyline([toLatLng(lightSegStart.x, lightSegStart.y), e.latlng], { color: armedMode === "door" ? "#e07b39" : "#9aa0a8", weight: 3, dashArray: "5 5", interactive: false }));
+  });
+  map.on("mouseup", async e => {
+    if (!lightSegStart || (armedMode !== "wall" && armedMode !== "door")) return;
+    const start = lightSegStart, p = toXY(e.latlng);
+    previewLayer.clearLayers();
+    const d = Math.hypot((p.x - start.x) / 100 * MW, (p.y - start.y) / 100 * MH);
+    if (d < 2) {
+      lightSegStart = null;
+      if (armedMode === "door") {
+        const door = nearestSeg(p, "door");
+        if (door) {
+          door.open = !door.open;
+          const ok = await saveLighting(); renderLighting();
+          lightStatusEl.textContent = ok ? `Door ${door.open ? "opened" : "closed"} — light ${door.open ? "passes" : "is blocked"}.` : "Door change didn't save — refreshed.";
+          if (!ok) loadLighting(true);
+        }
+      }
+      return;
+    }
+    lightState.walls.push({ id: newId(), kind: armedMode, a: [start.x, start.y], b: [p.x, p.y], open: false });
+    lightSegStart = p; /* chain: the next segment starts where this one ended */
+    const ok = await saveLighting(); renderLighting();
+    lightStatusEl.textContent = ok ? `${armedMode === "door" ? "Door" : "Wall"} segment saved — keep tapping to chain, or toggle the tool off.` : "Segment didn't save — refreshed.";
+    if (!ok) loadLighting(true);
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && (armedMode === "wall" || armedMode === "door")) { lightSegStart = null; previewLayer.clearLayers(); setLightArmed(null); }
+  });
+  /* ---- Light source editor ---- */
+  function openLightEditor(src){
+    lightEditingId = src.id;
+    $("lightName").value = src.name || "";
+    $("lightBright").value = src.bright ?? "";
+    $("lightDim").value = src.dim ?? "";
+    $("lightColor").value = src.color || "#ffb347";
+    $("lightFlame").checked = !!src.flame;
+    $("lightForm").hidden = false;
+  }
+  $("lightForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const src = lightState.lights.find(s => s.id === lightEditingId);
+    if (!src) { $("lightForm").hidden = true; return; }
+    src.name = $("lightName").value.trim().slice(0, 40) || "Light";
+    src.bright = Math.max(0, parseFloat($("lightBright").value) || 0);
+    src.dim = Math.max(src.bright, parseFloat($("lightDim").value) || 0);
+    src.color = $("lightColor").value || "#ffb347";
+    src.flame = $("lightFlame").checked;
+    const ok = await saveLighting(); renderLighting();
+    lightStatusEl.textContent = ok ? `${src.name} updated — the table sees it.` : "Light update didn't save — refreshed.";
+    if (!ok) loadLighting(true);
+    $("lightForm").hidden = true; lightEditingId = null;
+  });
+  $("lightDelete").addEventListener("click", async () => {
+    const src = lightState.lights.find(s => s.id === lightEditingId);
+    if (!src) { $("lightForm").hidden = true; return; }
+    if (!confirm(`Remove the light "${src.name}"?`)) return;
+    lightState.lights = lightState.lights.filter(s => s.id !== lightEditingId);
+    const ok = await saveLighting(); renderLighting();
+    lightStatusEl.textContent = ok ? `${src.name} removed.` : "Remove didn't save — refreshed.";
+    if (!ok) loadLighting(true);
+    $("lightForm").hidden = true; lightEditingId = null;
+  });
+  $("lightCancel").addEventListener("click", () => { $("lightForm").hidden = true; lightEditingId = null; });
+  /* ---- Follow the shared state, and re-render on the moves that matter ---- */
+  const _drawTokensLT = drawTokens;
+  drawTokens = function(){ _drawTokensLT(); renderLighting(); };
+  const _switchMapLT = switchMap;
+  switchMap = function(id){ _switchMapLT(id); loadLighting(true); };
+  const _loadVttSettingsLT = loadVttSettings;
+  loadVttSettings = async function(q){ await _loadVttSettingsLT(q); renderLighting(); };
+  loadLighting();
+  setInterval(() => loadLighting(true), 30000);
+  try {
+    db.channel("vtt-light-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => loadLighting(true)).subscribe();
+  } catch(e) { /* realtime is a bonus; the 30-second refresh stands */ }
+
   /* ---- Measure from a token + tool keyboard shortcuts ---- */
   map.on("mousedown", e => {
     if (!rulerOn || isProjecting()) return;
@@ -3781,8 +4172,9 @@ setInterval(loadSharedEntries, 60000);
   def(rows[0], "tools-main", "Search & map");
   def(rows[1], "tools-grid", "Grid, tokens & GM");
   def(document.getElementById("fogControls"), "tools-fog", "Fog");
-  def(rows[3], "tools-draw", "Draw & paint");
-  def(rows[4], "tools-layers", "Layers");
+  def(document.getElementById("lightControls"), "tools-light", "Lighting & walls");
+  def(rows[4], "tools-draw", "Draw & paint");
+  def(rows[5], "tools-layers", "Layers");
   def(repo, "repo", "Repository");
   def(cols[0], "dice", "Dice");
   def(cols[1], "init", "Initiative");
