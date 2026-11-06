@@ -4383,11 +4383,17 @@ setInterval(loadSharedEntries, 60000);
     var pr = panel.getBoundingClientRect();
     var w = el.offsetWidth, h = el.offsetHeight;
     var along = Math.max(0, Number(park.along) || 0);
+    /* The Campaign map text at the top of the panel is a protected zone
+       (Shaun): no parked group may sit under it. Top-edge groups start
+       below the text block; side groups may not start inside it either. */
+    var textBottom = 6;
+    panel.querySelectorAll(":scope > p").forEach(function(p){ textBottom = Math.max(textBottom, p.offsetTop + p.offsetHeight); });
+    textBottom += 8;
     el.classList.add("per-parked", (park.edge === "left" || park.edge === "right") ? "per-v" : "per-h");
-    if (park.edge === "top") { el.style.top = "6px"; el.style.left = Math.min(along, Math.max(0, pr.width - w - 6)) + "px"; }
+    if (park.edge === "top") { el.style.top = textBottom + "px"; el.style.left = Math.min(along, Math.max(0, pr.width - w - 6)) + "px"; }
     else if (park.edge === "bottom") { el.style.bottom = "6px"; el.style.left = Math.min(along, Math.max(0, pr.width - w - 6)) + "px"; }
-    else if (park.edge === "left") { el.style.left = "6px"; el.style.top = Math.min(along, Math.max(0, pr.height - h - 6)) + "px"; }
-    else if (park.edge === "right") { el.style.right = "6px"; el.style.top = Math.min(along, Math.max(0, pr.height - h - 6)) + "px"; }
+    else if (park.edge === "left") { el.style.left = "6px"; el.style.top = Math.min(Math.max(along, textBottom), Math.max(textBottom, pr.height - h - 6)) + "px"; }
+    else if (park.edge === "right") { el.style.right = "6px"; el.style.top = Math.min(Math.max(along, textBottom), Math.max(textBottom, pr.height - h - 6)) + "px"; }
   }
   function applyAll(){
     var state = load();
