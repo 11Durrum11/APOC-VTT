@@ -4065,6 +4065,16 @@ setInterval(loadSharedEntries, 60000);
     { id: "saint-james", name: "Arcanic Rendez-Vous — Saint James's floors", thumb: "assets/maps/saint-james-floors.webp", w: 1662, h: 1077 }
   ];
   var lastSig = "", filter = "";
+  /* v1.13 perf: the shelf used to build all 816 rows (and 816 <img>
+     elements) into collapsed nests on every render — that DOM weight
+     was the slow repository load. Now render() builds only folder
+     headers + counts from the in-memory registry; a folder's rows are
+     built on first expansion and cached (keyed by the group's item
+     signature) so collapse/re-expand and unrelated re-renders never
+     rebuild them. The registry itself is the shared in-memory
+     dropMaps array — expanding a folder never refetches it. */
+  var rowEls = {};
+  var groupState = {};
   function pub(path){ return "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/" + path; }
   function loadMap(id){
     var sel = document.getElementById("mapSelect");
@@ -4105,6 +4115,8 @@ setInterval(loadSharedEntries, 60000);
     sub.textContent = (o.w && o.h) ? (o.w + "×" + o.h + (o.note ? " · " + o.note : "")) : (o.note || "");
     meta.appendChild(nm); meta.appendChild(sub);
     row.appendChild(img); row.appendChild(meta);
+    row.dataset.mapId = o.id;
+    rowEls[o.id] = row;
     row.title = "Load \"" + o.name + "\" in the VTT";
     row.addEventListener("click", function(){ loadMap(o.id); });
     if (o.rec) {
@@ -4131,6 +4143,37 @@ setInterval(loadSharedEntries, 60000);
     wrap.appendChild(h); wrap.appendChild(body);
     return { wrap: wrap, body: body };
   }
+  function recRow(r){
+    return itemRow({
+      id: r.id, name: r.name || r.id,
+      thumbUrl: r.thumb ? pub(r.thumb) : pub(r.path),
+      w: r.w, h: r.h,
+      note: r.thumb_only ? "thumbnail copy — full size not in the collection" : "",
+      rec: r
+    });
+  }
+  function buildGroupRows(items){
+    var box = document.createElement("div");
+    items.forEach(function(r){ box.appendChild(recRow(r)); });
+    return box;
+  }
+  /* First expansion of a lazy folder builds its rows (capture phase:
+     runs before the delegated .nest-head toggle opens the nest, so the
+     rows are in place as it opens). */
+  listEl.addEventListener("click", function(e){
+    var h = e.target && e.target.closest ? e.target.closest(".mr-folder-head") : null;
+    if (!h) return;
+    var nest = h.parentElement;
+    if (!nest || nest.classList.contains("open")) return;
+    var body = nest.querySelector(":scope > .mr-body");
+    if (!body || !body._lazy) return;
+    var st = groupState[body._lazy];
+    body._lazy = null;
+    if (!st || st.built) return;
+    st.content = buildGroupRows(st.items);
+    st.built = true;
+    body.appendChild(st.content);
+  }, true);
   function render(force){
     var recs = (typeof dropMaps !== "undefined" && Array.isArray(dropMaps)) ? dropMaps : [];
     var sig = recs.length + "|" + recs.map(function(r){ return r.id; }).join(",") + "|" + currentMapId + "|" + filter;
@@ -4151,22 +4194,39 @@ setInterval(loadSharedEntries, 60000);
       var g = r.id.indexOf("drop-") === 0 ? "drop" : (r.folder || "drop");
       (groups[g] = groups[g] || []).push(r);
     });
+    var liveGroups = {};
     Object.keys(groups).sort(function(a, b){ return (FOLDERS[a] || a).localeCompare(FOLDERS[b] || b); }).forEach(function(g){
-      var items = groups[g].filter(function(r){ return match(r.name || r.id); });
+      var all = groups[g].slice().sort(function(a, b){ return (a.name || "").localeCompare(b.name || ""); });
+      var items = all.filter(function(r){ return match(r.name || r.id); });
       if (!items.length) return;
-      items.sort(function(a, b){ return (a.name || "").localeCompare(b.name || ""); });
+      liveGroups[g] = true;
       var gn = groupNest((FOLDERS[g] || g) + " (" + items.length + ")", !!f);
-      items.forEach(function(r){
-        gn.body.appendChild(itemRow({
-          id: r.id, name: r.name || r.id,
-          thumbUrl: r.thumb ? pub(r.thumb) : pub(r.path),
-          w: r.w, h: r.h,
-          note: r.thumb_only ? "thumbnail copy — full size not in the collection" : "",
-          rec: r
-        }));
-      });
+      if (f) {
+        /* Search: build only the matching rows, folder auto-expanded. */
+        gn.body.appendChild(buildGroupRows(items));
+      } else {
+        var isig = all.map(function(r){ return r.id; }).join(",");
+        var st = groupState[g];
+        if (st && st.built && st.sig === isig) {
+          gn.body.appendChild(st.content);
+        } else {
+          groupState[g] = { sig: isig, built: false, items: all, content: null };
+          gn.body._lazy = g;
+        }
+      }
       listEl.appendChild(gn.wrap);
       shown += items.length;
+    });
+    Object.keys(groupState).forEach(function(g){ if (!liveGroups[g]) delete groupState[g]; });
+    /* Prune row handles for rows not in the DOM, then refresh the
+       current-map highlight on the ones that are. */
+    var inDom = {};
+    listEl.querySelectorAll(".mr-item").forEach(function(el){
+      if (el.dataset.mapId) inDom[el.dataset.mapId] = true;
+    });
+    Object.keys(rowEls).forEach(function(id){ if (!inDom[id]) delete rowEls[id]; });
+    Object.keys(rowEls).forEach(function(id){
+      rowEls[id].classList.toggle("mr-current", id === currentMapId);
     });
     if (!shown) listEl.innerHTML = "<p class=\"muted small\">No maps match.</p>";
     if (countEl) countEl.textContent = "— " + (BUILTINS.length + recs.length) + " maps";
