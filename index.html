@@ -114,7 +114,7 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .mk-altered .mk-dot{background:#57b8a2}
 .apoc-on .leaflet-image-layer{filter:grayscale(.55) sepia(.14) brightness(.93) contrast(1.03)}
 #apocMap:fullscreen{height:100%;width:100%;border:none;border-radius:0}
-body.projecting #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2000;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px;margin:0;border-radius:0}
+body.projecting #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2000;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:5px;margin:0;border-radius:0}
 body.projecting .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
 body.projecting .apoc-map{height:100%;min-height:0}
 body.projecting .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
@@ -124,7 +124,7 @@ body.projecting .atlas-dot{width:14px;height:14px}
 .proj-exit-wrap{display:none}
 body.projecting .proj-exit-wrap{display:block}
 body.map-expanded{overflow:hidden}
-body.map-expanded #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:1600;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px;margin:0;border-radius:0}
+body.map-expanded #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:1600;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:5px;margin:0;border-radius:0}
 body.map-expanded .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
 body.map-expanded .apoc-map{height:100%;min-height:0}
 body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
@@ -284,7 +284,7 @@ input,select,textarea{font-size:16px}
    steps aside, every control stays — docked along the edges (toolbars
    top, dice/initiative bottom, repository beside the map) and
    transparent like everywhere else on the APOC sites, over the scene. */
-#mapPanel:fullscreen{display:flex;flex-direction:column;height:100%;overflow-y:auto;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px}
+#mapPanel:fullscreen{display:flex;flex-direction:column;height:100%;overflow-y:auto;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:5px}
 #mapPanel:fullscreen .map-tools{flex:none}
 #mapPanel:fullscreen .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
 #mapPanel:fullscreen .apoc-map{height:100%;min-height:0}
@@ -328,6 +328,18 @@ input,select,textarea{font-size:16px}
 /* v1.06 fix: Delete Layer at half width, label stacked on two lines
    ("Delete" over "Layer"); height stays a full 44px tap target. */
 #layerDelBtn{flex:0 0 68px;width:68px;min-width:68px;max-width:68px;padding:5px 4px;line-height:1.05;text-align:center;white-space:normal}
+
+/* v1.06 scoot-up: the whole stack packs tight — header, tool rows,
+   draw/palette/layers groups, stage and bottom panel all sit higher
+   with the dead gaps between them closed. */
+.vtt-head{margin:0}
+#mapPanel{margin-top:2px}
+#mapPanel>p{margin-top:4px;margin-bottom:4px}
+.map-note{margin-top:6px}
+.map-tools{margin-top:5px}
+.map-stage{margin-top:6px}
+.marker-form{margin-top:6px}
+.vtt-panel{margin-top:8px}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -380,10 +392,8 @@ input,select,textarea{font-size:16px}
       <button type="button" class="btn" id="pingBtn" aria-pressed="false">Ping</button>
       <button type="button" class="btn" id="libBtn" aria-pressed="false">Token repository</button>
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
-      <span class="muted small" id="tokenStatus"></span>
-    </div>
-    <div class="map-tools">
       <button type="button" class="btn" id="gmBtn" aria-pressed="false">GM view: off</button>
+      <span class="muted small" id="tokenStatus"></span>
       <span class="muted small" id="gmStatus"></span>
     </div>
     <div class="map-tools" id="fogControls" hidden>
@@ -3555,11 +3565,10 @@ setInterval(loadSharedEntries, 60000);
   var defs = [];
   function def(el, id, label){ if (el) defs.push({ el: el, id: id, label: label }); }
   def(rows[0], "tools-main", "Search & map");
-  def(rows[1], "tools-grid", "Grid & ruler");
-  def(rows[2], "tools-gm", "GM");
+  def(rows[1], "tools-grid", "Grid, tokens & GM");
   def(document.getElementById("fogControls"), "tools-fog", "Fog");
-  def(rows[4], "tools-draw", "Draw & paint");
-  def(rows[5], "tools-layers", "Layers");
+  def(rows[3], "tools-draw", "Draw & paint");
+  def(rows[4], "tools-layers", "Layers");
   def(repo, "repo", "Repository");
   def(cols[0], "dice", "Dice");
   def(cols[1], "init", "Initiative");
