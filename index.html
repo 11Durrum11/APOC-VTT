@@ -249,6 +249,28 @@ body.bg-animated::before{animation:none}
 @media (pointer:coarse){
 input,select,textarea{font-size:16px}
 }
+
+/* ---- v1.03: layer tabs, drop highlight, stamps, fullscreen edges ---- */
+.layer-chips{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;align-items:stretch;padding:4px 2px;flex:1 1 auto;min-width:0}
+.layer-chip{display:inline-flex;align-items:center;gap:2px;border:1px solid hsl(222 18% 28%);border-bottom-width:3px;border-radius:10px 10px 4px 4px;padding:2px 4px 2px 12px;font-size:.9rem;white-space:nowrap;cursor:pointer;min-height:44px;background:transparent}
+.layer-chip.active{border-color:var(--primary);color:var(--primary);box-shadow:inset 0 -3px 0 var(--primary)}
+.chip-eye{min-width:40px}
+.apoc-map.drag-over{outline:3px dashed var(--primary);outline-offset:-3px}
+.stamp-picked{border-color:var(--primary) !important;color:var(--primary)}
+.stamp-icon{background:none;border:none}
+.stamp-icon img{display:block;object-fit:contain}
+/* Full screen (Shaun): the whole panel goes fullscreen; the story text
+   steps aside, every control stays — docked along the edges (toolbars
+   top, dice/initiative bottom, repository beside the map) and
+   transparent like everywhere else on the APOC sites, over the scene. */
+#mapPanel:fullscreen{display:flex;flex-direction:column;height:100%;overflow:hidden;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:8px}
+#mapPanel:fullscreen .eyebrow,#mapPanel:fullscreen .map-note,#mapPanel:fullscreen>p.muted{display:none}
+#mapPanel:fullscreen .map-tools{flex:none}
+#mapPanel:fullscreen .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
+#mapPanel:fullscreen .apoc-map{height:100%;min-height:0}
+#mapPanel:fullscreen .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0}
+#mapPanel:fullscreen .marker-form{flex:none;max-height:44vh;overflow-y:auto}
+#mapPanel:fullscreen .btn,#mapPanel:fullscreen .vtt-col,#mapPanel:fullscreen .lib-panel,#mapPanel:fullscreen input,#mapPanel:fullscreen select,#mapPanel:fullscreen textarea{background:transparent}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -280,6 +302,8 @@ input,select,textarea{font-size:16px}
       <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
       <button type="button" class="btn primary" id="projBtn">Project to TV</button>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
+      <button type="button" class="btn" id="fsBtn">Full screen</button>
+      <button type="button" class="btn danger" id="dropRemoveBtn" hidden>Remove map</button>
     </div>
     <div class="map-tools">
       <label class="atlas-toggle"><input type="checkbox" id="gridToggle"> Grid</label>
@@ -317,13 +341,20 @@ input,select,textarea{font-size:16px}
         <label for="drawTool">Draw tool</label>
         <select id="drawTool">
           <option value="">Off</option>
+          <option value="select">Select / move</option>
           <option value="line">Freehand line</option>
           <option value="arrow">Arrow</option>
           <option value="rect">Rectangle</option>
           <option value="circle">Circle</option>
+          <option value="ellipse">Ellipse</option>
           <option value="poly">Polygon (tap points)</option>
           <option value="text">Text note</option>
           <option value="template">Spell template</option>
+          <option value="paint">Paint brush</option>
+          <option value="clone">Clone stamp</option>
+          <option value="stamp">Stamp</option>
+          <option value="pick">Eyedropper</option>
+          <option value="bucket">Fill bucket</option>
           <option value="erase">Eraser</option>
         </select>
       </div>
@@ -363,6 +394,14 @@ input,select,textarea{font-size:16px}
           <option value="10">Bold</option>
         </select>
       </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="drawWidthRange">Brush size</label>
+        <input id="drawWidthRange" type="range" min="1" max="24" step="1" value="3" style="width:110px">
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="drawOpacity">Opacity</label>
+        <input id="drawOpacity" type="range" min="0.1" max="1" step="0.05" value="1" style="width:110px">
+      </div>
       <label class="atlas-toggle"><input type="checkbox" id="drawFill" checked> Fill shapes</label>
       <div class="field" style="flex:0 1 auto">
         <label for="drawLayerSel">Layer</label>
@@ -383,17 +422,38 @@ input,select,textarea{font-size:16px}
         <label for="tplSize">Size (ft)</label>
         <input id="tplSize" type="number" value="20" min="5" step="5" style="width:84px">
       </div>
+      <div class="field" style="flex:0 1 auto" id="stampSizeField" hidden>
+        <label for="stampSize">Stamp size</label>
+        <input id="stampSize" type="range" min="0.5" max="6" step="0.5" value="2" style="width:110px">
+      </div>
+      <div class="field" style="flex:0 1 auto" id="stampRotField" hidden>
+        <label for="stampRot">Stamp rotation</label>
+        <input id="stampRot" type="range" min="0" max="360" step="5" value="0" style="width:110px">
+      </div>
       <label class="atlas-toggle"><input type="checkbox" id="drawToggle" checked> Drawings</label>
       <label class="atlas-toggle"><input type="checkbox" id="tokensToggle" checked> Tokens</label>
       <button type="button" class="btn" id="drawUndo">Undo drawing</button>
+      <button type="button" class="btn" id="drawRedo">Redo</button>
       <button type="button" class="btn" id="drawClear">Clear drawings</button>
+      <button type="button" class="btn" id="drawDupBtn" hidden>Duplicate</button>
+      <button type="button" class="btn danger" id="drawDelSelBtn" hidden>Delete selected</button>
       <span class="muted small" id="drawStatus"></span>
     </div>
     <div class="map-tools">
       <span class="muted small">Layers:</span>
       <span id="drawLayerChips" class="layer-chips"></span>
       <button type="button" class="btn" id="drawAddLayer">Add layer</button>
+      <button type="button" class="btn" id="layerRenameBtn">Rename layer</button>
+      <button type="button" class="btn danger" id="layerDelBtn">Delete layer</button>
+      <div class="field" style="flex:0 1 auto">
+        <label for="layerOpacity">Layer opacity</label>
+        <input id="layerOpacity" type="range" min="0.1" max="1" step="0.05" value="1" style="width:110px">
+      </div>
       <button type="button" class="btn primary" id="drawFinish" hidden>Finish shape</button>
+    </div>
+    <div class="lib-panel" id="stampLib" hidden>
+      <p class="lib-head">Stamps</p>
+      <div class="lib-grid" id="stampGrid"></div>
     </div>
     <div class="map-stage">
       <div class="map-side">
@@ -1370,10 +1430,25 @@ setInterval(loadSharedEntries, 60000);
     if (error) return;
     drawItems = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
     if (data && data.value && Array.isArray(data.value.layers) && data.value.layers.length) drawLayers = data.value.layers;
+    drawHist.last = drawSnapshot();
     buildLayerUi();
     renderDraw();
   }
+  /* Undo/redo history for drawing: saveDraw is the one choke point every
+     drawing change flows through, so it snapshots the state it replaces.
+     Loads set the baseline instead (a teammate's change is not my undo). */
+  let drawHist = { undo: [], redo: [], applying: false, last: null };
+  function drawSnapshot(){ return JSON.stringify({ items: drawItems, layers: drawLayers }); }
   async function saveDraw(){
+    const snap = drawSnapshot();
+    if (drawHist.last !== null && snap !== drawHist.last && !drawHist.applying) {
+      drawHist.undo.push(drawHist.last);
+      if (drawHist.undo.length > 50) drawHist.undo.shift();
+      let total = drawHist.undo.reduce((a, s) => a + s.length, 0);
+      while (total > 8000000 && drawHist.undo.length > 1) { total -= drawHist.undo[0].length; drawHist.undo.shift(); }
+      drawHist.redo = [];
+    }
+    drawHist.last = snap;
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: drawKey(), value: { items: drawItems, layers: drawLayers }, updated_at: new Date().toISOString() }, { onConflict: "key" });
     return !error;
   }
@@ -1387,8 +1462,9 @@ setInterval(loadSharedEntries, 60000);
       const ldef = drawLayerDef(layerOf(it));
       if (ldef.hidden) continue;
       if (ldef.gm && !gm) continue;
-      const st = { color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false };
-      const fo = it.fill === false ? 0 : 0.18;
+      const lop = (typeof ldef.opacity === "number" ? ldef.opacity : 1) * (typeof it.opacity === "number" ? it.opacity : 1);
+      const st = { color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false, opacity: lop };
+      const fo = (it.fill === false ? 0 : 0.18) * lop;
       if (it.type === "line") drawLayer.addLayer(L.polyline(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fill: false }));
       else if (it.type === "poly") drawLayer.addLayer(L.polygon(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fillOpacity: fo }));
       else if (it.type === "arrow") {
@@ -1397,16 +1473,23 @@ setInterval(loadSharedEntries, 60000);
         const ang = Math.atan2(B[1] - A[1], B[0] - A[0]), HL = CELL * 0.55;
         const h1 = [B[0] + HL * Math.cos(ang + 2.6), B[1] + HL * Math.sin(ang + 2.6)];
         const h2 = [B[0] + HL * Math.cos(ang - 2.6), B[1] + HL * Math.sin(ang - 2.6)];
-        drawLayer.addLayer(L.polygon([uToLatLng(B[0], B[1]), uToLatLng(h1[0], h1[1]), uToLatLng(h2[0], h2[1])], { ...st, fillOpacity: 0.85 }));
+        drawLayer.addLayer(L.polygon([uToLatLng(B[0], B[1]), uToLatLng(h1[0], h1[1]), uToLatLng(h2[0], h2[1])], { ...st, fillOpacity: 0.85 * lop }));
       }
       else if (it.type === "rect") drawLayer.addLayer(L.rectangle([toLatLng(it.x, it.y), toLatLng(it.x + it.w, it.y + it.h)], { ...st, fillOpacity: fo }));
       else if (it.type === "circle") drawLayer.addLayer(L.circle(toLatLng(it.x, it.y), { ...st, radius: it.r / 100 * MW, fillOpacity: fo }));
-      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
+      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
+      else if (it.type === "ellipse") {
+        const epts = [], ecx = it.x / 100 * MW, ecy = it.y / 100 * MH;
+        for (let k = 0; k < 48; k++) { const a = k / 48 * Math.PI * 2; epts.push(uToLatLng(ecx + Math.cos(a) * it.rx / 100 * MW, ecy + Math.sin(a) * it.ry / 100 * MH)); }
+        drawLayer.addLayer(L.polygon(epts, { ...st, fillOpacity: fo }));
+      }
+      else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { icon: stampIcon(it, lop), interactive: false }));
+      else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(it.data, [[0, 0], [MH, MW]], { opacity: lop, interactive: false }));
       else if (it.type === "template") {
         const cells = (it.sizeFt || 20) / feetPerSquare;
         const Lun = cells * CELL;
         const o = [it.x / 100 * MW, it.y / 100 * MH];
-        const tfo = it.fill === false ? 0 : 0.22;
+        const tfo = (it.fill === false ? 0 : 0.22) * lop;
         if (it.shape === "circle") {
           drawLayer.addLayer(L.circle(uToLatLng(o[0], o[1]), { ...st, radius: Lun, fillOpacity: tfo }));
         } else {
@@ -1460,11 +1543,10 @@ setInterval(loadSharedEntries, 60000);
   });
   $("drawFinish").addEventListener("click", () => finishPoly());
   $("drawUndo").addEventListener("click", async () => {
-    if (!drawItems.length) return;
-    drawItems.pop();
-    const ok = await saveDraw(); renderDraw();
-    drawStatusEl.textContent = ok ? "Last drawing removed for everybody." : "Undo didn't save — refreshed.";
-    if (!ok) loadDraw(true);
+    const had = drawHist.undo.length > 0;
+    const ok = await undoDraw();
+    drawStatusEl.textContent = ok ? "Undone — the table sees it." : (had ? "Undo didn't save — refreshed." : "Nothing to undo.");
+    if (!ok && had) loadDraw(true);
   });
   $("drawClear").addEventListener("click", async () => {
     const selId = $("drawLayerSel").value;
@@ -1510,7 +1592,7 @@ setInterval(loadSharedEntries, 60000);
     if (tool === "text") {
       const text = prompt("Text note:");
       if (text && text.trim()) {
-        drawItems.push({ type: "text", x: p.x, y: p.y, text: text.trim().slice(0, 80), color: curDrawColor(), ...curLayerPatch() });
+        drawItems.push(withOp({ type: "text", x: p.x, y: p.y, text: text.trim().slice(0, 80), color: curDrawColor(), ...curLayerPatch() }));
         saveDraw().then(ok => { renderDraw(); drawStatusEl.textContent = ok ? "Note placed." : "Note didn't save."; if (!ok) loadDraw(true); });
       }
       return;
@@ -1535,7 +1617,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function finishPoly(){
     if (!polyPts || polyPts.length < 3) { drawStatusEl.textContent = "A shape needs at least 3 points — tap the map to add more, or switch tools to cancel it."; return; }
-    drawItems.push({ type: "poly", pts: polyPts, color: curDrawColor(), w: curDrawWidth(), fill: curDrawFill(), ...curLayerPatch() });
+    drawItems.push(withOp({ type: "poly", pts: polyPts, color: curDrawColor(), w: curDrawWidth(), fill: curDrawFill(), ...curLayerPatch() }));
     polyPts = null; previewLayer.clearLayers();
     const ok = await saveDraw(); renderDraw();
     drawStatusEl.textContent = ok ? "Shape saved — the table sees it." : "Shape didn't save — try again.";
@@ -1619,7 +1701,7 @@ setInterval(loadSharedEntries, 60000);
     if (tool === "erase" || tool === "poly") return;
     const layerPatch = curLayerPatch();
     let item = null;
-    if (tool === "line" && startPts && startPts.length > 1) item = { type: "line", pts: startPts, color, w: curDrawWidth(), ...layerPatch };
+    if (tool === "line" && startPts && startPts.length > 1) item = { type: "line", pts: smoothLine(startPts), color, w: curDrawWidth(), ...layerPatch };
     else if (tool === "arrow") { const d = Math.hypot((p.x - start.p.x) / 100 * MW, (p.y - start.p.y) / 100 * MH); if (d > 2) item = { type: "arrow", a: [start.p.x, start.p.y], b: [p.x, p.y], color, w: curDrawWidth(), ...layerPatch }; }
     else if (tool === "rect") { const r = rectFromDrag(start.p, p); if (r.w > 0.1 && r.h > 0.1) item = { type: "rect", ...r, color, w: curDrawWidth(), fill: curDrawFill(), ...layerPatch }; }
     else if (tool === "circle") {
@@ -1636,7 +1718,7 @@ setInterval(loadSharedEntries, 60000);
       item = { type: "template", shape, x: start.p.x, y: start.p.y, sizeFt, angle, color, w: curDrawWidth(), fill: curDrawFill(), ...layerPatch };
     }
     if (!item) return;
-    drawItems.push(item);
+    drawItems.push(withOp(item));
     const ok = await saveDraw(); renderDraw();
     drawStatusEl.textContent = ok ? "Drawing saved — the table sees it." : "Drawing didn't save — try again.";
     if (!ok) loadDraw(true);
@@ -1946,6 +2028,698 @@ setInterval(loadSharedEntries, 60000);
   });
   setInterval(() => loadPing(true), 4000);
   loadPing(true);
+
+  /* ================= Art program build-out (Shaun, 2026-11-06) =================
+     Everything below lives inside the same vtt_draw {items, layers} store:
+     new tools add OPTIONAL fields (opacity) and new item types (ellipse,
+     stamp, paint) alongside the originals — old saves load and render
+     exactly as before. The paint/clone/bucket tools work on a per-layer
+     raster item (kind "paint"); maps themselves are never re-encoded. */
+  const artFx = L.layerGroup().addTo(map);
+
+  function curDrawOpacity(){
+    const v = parseFloat($("drawOpacity").value);
+    return Number.isFinite(v) ? Math.min(1, Math.max(0.05, v)) : 1;
+  }
+  function withOp(item){
+    const o = curDrawOpacity();
+    if (o < 1) item.opacity = Math.round(o * 100) / 100;
+    return item;
+  }
+  function smoothLine(pts){
+    if (!pts || pts.length < 3) return pts;
+    let cur = pts.map(p => [p[0], p[1]]);
+    const passes = cur.length > 160 ? 1 : 2;
+    for (let n = 0; n < passes; n++) {
+      const out = [cur[0]];
+      for (let i = 0; i + 1 < cur.length; i++) {
+        const a = cur[i], b = cur[i + 1];
+        out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+        out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+      }
+      out.push(cur[cur.length - 1]);
+      cur = out;
+    }
+    if (cur.length > 500) cur = cur.filter((_, i) => i % 2 === 0 || i === cur.length - 1);
+    return cur.map(p => [Math.round(p[0] * 100) / 100, Math.round(p[1] * 100) / 100]);
+  }
+  function loadCanvasImage(src){
+    return new Promise((res, rej) => {
+      const im = new Image();
+      if (/^https?:/i.test(src)) im.crossOrigin = "anonymous";
+      im.onload = () => res(im);
+      im.onerror = () => rej(new Error("image load failed"));
+      im.src = src;
+    });
+  }
+  function stampIcon(it, opacity){
+    const px = Math.max(18, Math.min(520, Math.round(CELL * (it.size || 2) * Math.pow(2, map.getZoom()))));
+    const rot = it.rot || 0, op = typeof opacity === "number" ? opacity : 1;
+    let inner;
+    if (it.img) inner = `<img src="${esc(it.img)}" alt="" style="width:${px}px;height:${px}px;transform:rotate(${rot}deg);opacity:${op}">`;
+    else {
+      const hex = LIB_HEX[it.color] || LIB_HEX.amber;
+      inner = `<span class="lib-sym" style="width:${px}px;height:${px}px;font-size:${Math.round(px * 0.52)}px;background:${hex}33;border:2px solid ${hex};transform:rotate(${rot}deg);opacity:${op}">${esc(it.sym || "?")}</span>`;
+    }
+    return L.divIcon({ className: "stamp-icon", html: inner, iconSize: [px, px], iconAnchor: [px / 2, px / 2] });
+  }
+  map.on("zoomend", () => renderDraw());
+
+  /* ---- Undo / redo (snapshot stacks fed by saveDraw) ---- */
+  async function applyDrawSnapshot(snap, pushTo){
+    drawHist[pushTo].push(drawSnapshot());
+    drawHist.applying = true;
+    try {
+      const st = JSON.parse(snap);
+      drawItems = st.items; drawLayers = st.layers;
+      clearSelection();
+      paintCache.clear();
+      buildLayerUi(); renderDraw();
+      return await saveDraw();
+    } finally { drawHist.applying = false; }
+  }
+  async function undoDraw(){
+    if (!drawHist.undo.length) return false;
+    return applyDrawSnapshot(drawHist.undo.pop(), "redo");
+  }
+  async function redoDraw(){
+    if (!drawHist.redo.length) return false;
+    return applyDrawSnapshot(drawHist.redo.pop(), "undo");
+  }
+  $("drawRedo").addEventListener("click", async () => {
+    const had = drawHist.redo.length > 0;
+    const ok = await redoDraw();
+    drawStatusEl.textContent = ok ? "Redone — the table sees it." : (had ? "Redo didn't save — refreshed." : "Nothing to redo.");
+    if (!ok && had) loadDraw(true);
+  });
+
+  /* ---- Brush controls: slider mirrors the width presets ---- */
+  $("drawWidthRange").addEventListener("input", () => {
+    const v = $("drawWidthRange").value, sel = $("drawWidth");
+    if (![...sel.options].some(o => o.value === v)) { const o = document.createElement("option"); o.value = v; o.textContent = "Custom " + v; sel.appendChild(o); }
+    sel.value = v;
+  });
+  $("drawWidth").addEventListener("change", () => { $("drawWidthRange").value = $("drawWidth").value; });
+
+  /* ---- Layer tabs: the chips are the tabs — tap a name to draw on it ---- */
+  function refreshLayerTabs(){
+    const cur = $("drawLayerSel").value;
+    $("drawLayerChips").querySelectorAll(".layer-chip").forEach(chip => {
+      const eye = chip.querySelector(".chip-eye");
+      const on = !!eye && eye.dataset.layer === cur;
+      chip.classList.toggle("active", on);
+      chip.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    const def = drawLayerDef(cur);
+    $("layerOpacity").value = typeof def.opacity === "number" ? def.opacity : 1;
+  }
+  new MutationObserver(refreshLayerTabs).observe($("drawLayerChips"), { childList: true });
+  $("drawLayerSel").addEventListener("change", refreshLayerTabs);
+  refreshLayerTabs();
+  $("drawLayerChips").addEventListener("click", ev => {
+    if (ev.target.closest("button")) return;
+    const chip = ev.target.closest(".layer-chip");
+    if (!chip) return;
+    const eye = chip.querySelector(".chip-eye");
+    if (!eye) return;
+    const sel = $("drawLayerSel");
+    if (sel.value !== eye.dataset.layer) { sel.value = eye.dataset.layer; sel.dispatchEvent(new Event("change")); }
+    refreshLayerTabs();
+  });
+  $("layerOpacity").addEventListener("input", () => {
+    const def = drawLayerDef($("drawLayerSel").value);
+    def.opacity = parseFloat($("layerOpacity").value) || 1;
+    renderDraw();
+  });
+  $("layerOpacity").addEventListener("change", async () => {
+    const ok = await saveDraw();
+    drawStatusEl.textContent = ok ? "Layer opacity saved for the table." : "Layer opacity didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+  $("layerRenameBtn").addEventListener("click", async () => {
+    const def = drawLayerDef($("drawLayerSel").value);
+    const name = prompt("Rename this layer:", def.name);
+    if (!name || !name.trim() || name.trim() === def.name) return;
+    def.name = name.trim().slice(0, 30);
+    buildLayerUi();
+    const ok = await saveDraw();
+    drawStatusEl.textContent = ok ? `Layer renamed to "${def.name}".` : "Rename didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+  $("layerDelBtn").addEventListener("click", async () => {
+    const id = $("drawLayerSel").value;
+    if (id === "shared" || id === "gm") { alert("The Shared and GM only layers always stay — they are the two original layers."); return; }
+    const def = drawLayerDef(id);
+    if (!confirm(`Delete the layer "${def.name}" and everything drawn on it? Everybody loses them.`)) return;
+    drawItems = drawItems.filter(it => layerOf(it) !== id);
+    drawLayers = drawLayers.filter(l => l.id !== id);
+    paintCache.delete(id);
+    $("drawLayerSel").value = "shared";
+    buildLayerUi(); renderDraw();
+    const ok = await saveDraw();
+    drawStatusEl.textContent = ok ? `Layer "${def.name}" deleted.` : "Delete didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+
+  /* ---- Select / move / duplicate / delete ---- */
+  let selItem = null, selDrag = null;
+  function itemAnchor(it){
+    if (it.type === "line" || it.type === "poly") return it.pts[0];
+    if (it.type === "arrow") return it.a;
+    return [it.x, it.y];
+  }
+  function itemTranslate(it, dx, dy){
+    if (it.type === "line" || it.type === "poly") it.pts = it.pts.map(q => [q[0] + dx, q[1] + dy]);
+    else if (it.type === "arrow") { it.a = [it.a[0] + dx, it.a[1] + dy]; it.b = [it.b[0] + dx, it.b[1] + dy]; }
+    else { it.x += dx; it.y += dy; }
+  }
+  function itemBBox(it){
+    if (it.type === "line" || it.type === "poly") {
+      const xs = it.pts.map(q => q[0]), ys = it.pts.map(q => q[1]);
+      return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+    }
+    if (it.type === "arrow") return { x: Math.min(it.a[0], it.b[0]), y: Math.min(it.a[1], it.b[1]), w: Math.abs(it.a[0] - it.b[0]), h: Math.abs(it.a[1] - it.b[1]) };
+    if (it.type === "rect") return { x: it.x, y: it.y, w: it.w, h: it.h };
+    if (it.type === "circle") { const ry = it.r * MW / MH; return { x: it.x - it.r, y: it.y - ry, w: it.r * 2, h: ry * 2 }; }
+    if (it.type === "ellipse") return { x: it.x - it.rx, y: it.y - it.ry, w: it.rx * 2, h: it.ry * 2 };
+    if (it.type === "stamp") { const w = (it.size || 2) * CELL / MW * 100, h = (it.size || 2) * CELL / MH * 100; return { x: it.x - w / 2, y: it.y - h / 2, w, h }; }
+    if (it.type === "template") { const half = (it.sizeFt || 20) / feetPerSquare * CELL / 2; return { x: it.x - half / MW * 100, y: it.y - half / MH * 100, w: half / MW * 200, h: half / MH * 200 }; }
+    return { x: it.x - 2, y: it.y - 1.5, w: 8, h: 3 };
+  }
+  function hitItem(p){
+    const ux = p.x / 100 * MW, uy = p.y / 100 * MH, tol = CELL * 0.45;
+    const seg = (ax, ay, bx, by) => { const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1; let t = ((ux - ax) * dx + (uy - ay) * dy) / L2; t = Math.max(0, Math.min(1, t)); return Math.hypot(ux - (ax + t * dx), uy - (ay + t * dy)); };
+    const P = q => [q[0] / 100 * MW, q[1] / 100 * MH];
+    const gm = effectiveGm();
+    for (let i = drawItems.length - 1; i >= 0; i--) {
+      const it = drawItems[i];
+      if (it.type === "paint") continue;
+      const ldef = drawLayerDef(layerOf(it));
+      if (ldef.hidden || (ldef.gm && !gm) || (it.gm && !gm)) continue;
+      let hit = false;
+      if (it.type === "line" || it.type === "poly") { const pts = it.pts.map(P); for (let k = 0; k + 1 < pts.length && !hit; k++) hit = seg(pts[k][0], pts[k][1], pts[k + 1][0], pts[k + 1][1]) < tol; if (it.type === "poly" && pts.length > 2 && !hit) hit = seg(pts[pts.length - 1][0], pts[pts.length - 1][1], pts[0][0], pts[0][1]) < tol; }
+      else if (it.type === "arrow") { const A = P(it.a), B = P(it.b); hit = seg(A[0], A[1], B[0], B[1]) < tol; }
+      else if (it.type === "rect") { const a = P([it.x, it.y]), b = P([it.x + it.w, it.y + it.h]); hit = ux > Math.min(a[0], b[0]) - tol && ux < Math.max(a[0], b[0]) + tol && uy > Math.min(a[1], b[1]) - tol && uy < Math.max(a[1], b[1]) + tol; }
+      else if (it.type === "circle") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < it.r / 100 * MW + tol; }
+      else if (it.type === "ellipse") { const c = P([it.x, it.y]); const nx = (ux - c[0]) / Math.max(1, it.rx / 100 * MW), ny = (uy - c[1]) / Math.max(1, it.ry / 100 * MH); hit = (nx * nx + ny * ny) <= 1.2; }
+      else if (it.type === "stamp") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < (it.size || 2) * CELL / 2 + tol / 2; }
+      else if (it.type === "text" || it.type === "template") { const c = P([it.x, it.y]); hit = Math.hypot(ux - c[0], uy - c[1]) < CELL; }
+      if (hit) return it;
+    }
+    return null;
+  }
+  function renderSelection(){
+    artFx.clearLayers();
+    const ok = !!selItem && drawItems.includes(selItem);
+    if (!ok) selItem = null;
+    $("drawDupBtn").hidden = $("drawDelSelBtn").hidden = !ok;
+    if (!ok) return;
+    const b = itemBBox(selItem);
+    artFx.addLayer(L.rectangle([toLatLng(b.x, b.y), toLatLng(b.x + b.w, b.y + b.h)], { color: "#e8a33d", weight: 2, dashArray: "6 4", fill: false, interactive: false }));
+  }
+  function clearSelection(){ selItem = null; selDrag = null; renderSelection(); }
+  async function deleteSelected(){
+    if (!selItem) return;
+    drawItems = drawItems.filter(it => it !== selItem);
+    clearSelection();
+    const ok = await saveDraw(); renderDraw();
+    drawStatusEl.textContent = ok ? "Deleted — the table sees it." : "Delete didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  }
+  $("drawDelSelBtn").addEventListener("click", deleteSelected);
+  $("drawDupBtn").addEventListener("click", async () => {
+    if (!selItem || selItem.type === "paint") return;
+    const copy = JSON.parse(JSON.stringify(selItem));
+    itemTranslate(copy, 2, 2);
+    drawItems.push(copy);
+    selItem = copy;
+    const ok = await saveDraw(); renderDraw(); renderSelection();
+    drawStatusEl.textContent = ok ? "Duplicated." : "Duplicate didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+  document.addEventListener("keydown", e => {
+    if ((e.key === "Delete" || e.key === "Backspace") && selItem && document.activeElement && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { e.preventDefault(); deleteSelected(); }
+  });
+
+  /* ---- Stamps: the token symbols + library art, placed as drawings ---- */
+  let curStamp = null;
+  function buildStampLib(){
+    const syms = LIB_SYMBOLS.map(([sym, name, color]) => `<button type="button" class="lib-item" data-ssym="${sym}" data-sname="${name}" data-scolor="${color}" title="${name}"><span class="lib-sym" style="background:${LIB_HEX[color]}33;border:2px solid ${LIB_HEX[color]}">${sym}</span><span class="lib-cap">${name}</span></button>`).join("");
+    const art = LIB_ART.map(([src, name]) => `<button type="button" class="lib-item" data-simg="${src}" data-sname="${name}" title="${name}"><img src="${src}" alt="${name}" loading="lazy"><span class="lib-cap">${name}</span></button>`).join("");
+    $("stampGrid").innerHTML = syms + art;
+    $("stampGrid").querySelectorAll(".lib-item").forEach(b => b.addEventListener("click", () => {
+      curStamp = b.dataset.simg ? { img: b.dataset.simg } : { sym: b.dataset.ssym, color: b.dataset.scolor || "amber" };
+      $("stampGrid").querySelectorAll(".lib-item").forEach(x => x.classList.toggle("stamp-picked", x === b));
+      drawStatusEl.textContent = `Stamp picked: ${b.dataset.sname || "stamp"} — tap the map to stamp it.`;
+    }));
+    const first = $("stampGrid").querySelector(".lib-item");
+    if (first) first.click();
+  }
+  buildStampLib();
+  $("drawTool").addEventListener("change", () => {
+    const t = $("drawTool").value;
+    $("stampLib").hidden = t !== "stamp";
+    $("stampSizeField").hidden = $("stampRotField").hidden = t !== "stamp";
+    if (t !== "select") clearSelection();
+  });
+  function placeStamp(p){
+    if (!curStamp) return;
+    const it = { type: "stamp", x: p.x, y: p.y, size: parseFloat($("stampSize").value) || 2, rot: parseInt($("stampRot").value, 10) || 0, ...curLayerPatch() };
+    if (curStamp.img) it.img = curStamp.img;
+    else { it.sym = curStamp.sym; it.color = curStamp.color; }
+    const o = curDrawOpacity();
+    if (o < 1) it.opacity = Math.round(o * 100) / 100;
+    drawItems.push(it);
+    saveDraw().then(ok => { renderDraw(); drawStatusEl.textContent = ok ? "Stamped." : "Stamp didn't save — refreshed."; if (!ok) loadDraw(true); });
+  }
+  /* ---- Raster paint layer: one canvas per drawing layer, kept as a
+     "paint" item in the same store. Working resolution is capped at
+     1280px on the long side — that cap applies to the PAINT layer only;
+     maps themselves are always stored and shown at full resolution. */
+  const paintFx = L.layerGroup().addTo(map);
+  const cloneFx = L.layerGroup().addTo(map);
+  const PAINT_MAX = 1280;
+  const paintCache = new Map();
+  function paintDims(){
+    const s = Math.min(1, PAINT_MAX / Math.max(MW, MH));
+    return { w: Math.max(2, Math.round(MW * s)), h: Math.max(2, Math.round(MH * s)) };
+  }
+  function paintItemFor(layerId){ return drawItems.find(it => it.type === "paint" && layerOf(it) === layerId) || null; }
+  async function ensurePaint(layerId){
+    const it = paintItemFor(layerId);
+    const cached = paintCache.get(layerId);
+    if (cached && cached.data === (it ? it.data : null) && cached.mapId === currentMapId) return cached;
+    const { w, h } = paintDims();
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const rec = { data: it ? it.data : null, mapId: currentMapId, canvas, ctx: canvas.getContext("2d") };
+    paintCache.set(layerId, rec);
+    if (it && it.data) { try { const im = await loadCanvasImage(it.data); rec.ctx.drawImage(im, 0, 0, w, h); } catch(e) { /* unreadable paint data — start blank */ } }
+    return rec;
+  }
+  function serializePaint(layerId){
+    const rec = paintCache.get(layerId);
+    if (!rec) return;
+    let data = "";
+    try { data = rec.canvas.toDataURL("image/webp", 0.85); } catch(e) { data = ""; }
+    if (!data || !data.startsWith("data:image/webp")) { try { data = rec.canvas.toDataURL("image/png"); } catch(e) { data = ""; } }
+    if (!data) return;
+    let it = paintItemFor(layerId);
+    if (!it) { it = { type: "paint", data, ...patchForLayer(layerId) }; drawItems.push(it); }
+    else it.data = data;
+    rec.data = data;
+  }
+  function patchForLayer(layerId){ const def = drawLayerDef(layerId); return { layer: def.id, gm: !!def.gm }; }
+  function layerLop(id){ const d = drawLayerDef(id); return typeof d.opacity === "number" ? d.opacity : 1; }
+  function brushRadius(rec){ return Math.max(1, (curDrawWidth() * CELL / 2) / MW * rec.canvas.width); }
+  let paintLive = null, paintLiveAt = 0;
+  function paintPreviewTick(rec, layerId){
+    const now = Date.now();
+    if (now - paintLiveAt < 120) return;
+    paintLiveAt = now;
+    let url;
+    try { url = rec.canvas.toDataURL("image/png"); } catch(e) { return; }
+    if (!paintLive) paintLive = L.imageOverlay(url, [[0, 0], [MH, MW]], { interactive: false, opacity: layerLop(layerId) }).addTo(paintFx);
+    else { paintLive.setUrl(url); paintLive.setOpacity(layerLop(layerId)); }
+  }
+  async function endRasterStroke(layerId){
+    if (paintLive) { paintFx.removeLayer(paintLive); paintLive = null; }
+    serializePaint(layerId);
+    const ok = await saveDraw(); renderDraw();
+    drawStatusEl.textContent = ok ? "Painting saved — the table sees it." : "Painting didn't save — refreshed.";
+    if (!ok) { paintCache.delete(layerId); loadDraw(true); }
+  }
+  let paintStroke = null;
+  function paintXY(rec, p){ return { x: p.x / 100 * rec.canvas.width, y: p.y / 100 * rec.canvas.height }; }
+  async function paintBegin(p, erase){
+    const layerId = $("drawLayerSel").value;
+    const rec = await ensurePaint(layerId);
+    paintStroke = { layerId, rec, erase: !!erase, last: null };
+    paintStampAt(p);
+  }
+  function paintStampAt(p){
+    if (!paintStroke) return;
+    const rec = paintStroke.rec, ctx = rec.ctx, pt = paintXY(rec, p);
+    ctx.save();
+    if (paintStroke.erase) ctx.globalCompositeOperation = "destination-out";
+    ctx.globalAlpha = paintStroke.erase ? 1 : curDrawOpacity();
+    ctx.fillStyle = curDrawColor();
+    ctx.beginPath(); ctx.arc(pt.x, pt.y, brushRadius(rec), 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    paintStroke.last = pt;
+    paintPreviewTick(rec, paintStroke.layerId);
+  }
+  function paintMove(p){
+    if (!paintStroke) return;
+    const rec = paintStroke.rec, ctx = rec.ctx, pt = paintXY(rec, p), last = paintStroke.last || pt;
+    ctx.save();
+    if (paintStroke.erase) ctx.globalCompositeOperation = "destination-out";
+    ctx.globalAlpha = paintStroke.erase ? 1 : curDrawOpacity();
+    ctx.strokeStyle = curDrawColor();
+    ctx.lineWidth = brushRadius(rec) * 2;
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(pt.x, pt.y); ctx.stroke();
+    ctx.restore();
+    paintStroke.last = pt;
+    paintPreviewTick(rec, paintStroke.layerId);
+  }
+
+  /* ---- Clone stamp (Photoshop-style point clone) + eyedropper sample.
+     The sample is a composite: the loaded map image (readable when it is
+     same-origin or served with CORS — both true for the built-ins and
+     for storage-hosted drops) plus every visible paint layer. Vector
+     drawings and tokens are screen furniture, not pixels, so the clone
+     does not lift them. ---- */
+  let cloneSrc = null, cloneStroke = null, sampleCanvas = null, cloneMark = null;
+  async function buildSample(){
+    const { w, h } = paintDims();
+    const c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const x = c.getContext("2d");
+    try {
+      const def = MAPS[currentMapId];
+      const im = await loadCanvasImage(def.img);
+      const tc = document.createElement("canvas");
+      tc.width = w; tc.height = h;
+      const tx = tc.getContext("2d");
+      tx.drawImage(im, 0, 0, w, h);
+      tx.getImageData(0, 0, 1, 1);
+      x.drawImage(im, 0, 0, w, h);
+    } catch(err) { /* base image not readable here — sample paint layers only */ }
+    for (const it of drawItems) {
+      if (it.type !== "paint") continue;
+      const ldef = drawLayerDef(layerOf(it));
+      if (ldef.hidden) continue;
+      try { const im = await loadCanvasImage(it.data); x.globalAlpha = layerLop(layerOf(it)); x.drawImage(im, 0, 0, w, h); x.globalAlpha = 1; } catch(e) { /* skip unreadable layer */ }
+    }
+    sampleCanvas = c;
+    return c;
+  }
+  function setCloneSource(p){
+    cloneSrc = { x: p.x, y: p.y };
+    cloneFx.clearLayers();
+    cloneMark = L.marker(toLatLng(p.x, p.y), { interactive: false, icon: L.divIcon({ className: "atlas-icon", html: '<span class="ruler-label">clone source</span>', iconAnchor: [0, 0] }) }).addTo(cloneFx);
+    drawStatusEl.textContent = "Clone source set — now paint where it should copy to.";
+  }
+  async function cloneBegin(p){
+    const layerId = $("drawLayerSel").value;
+    const rec = await ensurePaint(layerId);
+    await buildSample();
+    cloneStroke = { layerId, rec, brush0: { x: p.x, y: p.y }, src0: { x: cloneSrc.x, y: cloneSrc.y }, last: null };
+    cloneStampAt(p);
+  }
+  function cloneStampAt(p){
+    if (!cloneStroke || !sampleCanvas) return;
+    const rec = cloneStroke.rec, ctx = rec.ctx, r = brushRadius(rec);
+    const bx = p.x / 100 * rec.canvas.width, by = p.y / 100 * rec.canvas.height;
+    const sp = { x: cloneStroke.src0.x + (p.x - cloneStroke.brush0.x), y: cloneStroke.src0.y + (p.y - cloneStroke.brush0.y) };
+    const sx = sp.x / 100 * rec.canvas.width, sy = sp.y / 100 * rec.canvas.height;
+    ctx.save();
+    ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2); ctx.clip();
+    ctx.globalAlpha = curDrawOpacity();
+    ctx.drawImage(sampleCanvas, sx - r, sy - r, r * 2, r * 2, bx - r, by - r, r * 2, r * 2);
+    ctx.restore();
+    paintPreviewTick(rec, cloneStroke.layerId);
+  }
+  function cloneMove(p){
+    if (!cloneStroke) return;
+    const last = cloneStroke.last || cloneStroke.brush0;
+    const steps = Math.max(1, Math.ceil(Math.hypot(p.x - last.x, p.y - last.y) / 0.4));
+    for (let i = 1; i <= steps; i++) cloneStampAt({ x: last.x + (p.x - last.x) * i / steps, y: last.y + (p.y - last.y) * i / steps });
+    cloneStroke.last = { x: p.x, y: p.y };
+  }
+  function hex2(v){ return Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0"); }
+  function setDrawColor(hex){
+    const sel = $("drawColor");
+    if (![...sel.options].some(o => o.value === hex)) { const o = document.createElement("option"); o.value = hex; o.textContent = "Custom " + hex; sel.appendChild(o); }
+    sel.value = hex;
+    $("drawColorAny").value = hex;
+    drawStatusEl.textContent = `Color picked: ${hex}.`;
+  }
+  async function pickColor(p){
+    const hit = hitItem(p);
+    if (hit && hit.color) { setDrawColor(hit.color); return; }
+    await buildSample();
+    if (!sampleCanvas) return;
+    const { w, h } = paintDims();
+    try {
+      const d = sampleCanvas.getContext("2d").getImageData(Math.min(w - 1, Math.max(0, Math.round(p.x / 100 * w))), Math.min(h - 1, Math.max(0, Math.round(p.y / 100 * h))), 1, 1).data;
+      if (d[3] < 10) { drawStatusEl.textContent = "Nothing readable at that spot."; return; }
+      setDrawColor("#" + hex2(d[0]) + hex2(d[1]) + hex2(d[2]));
+    } catch(e) { drawStatusEl.textContent = "That spot's color couldn't be read here."; }
+  }
+  function floodFill(rec, px, py, colorHex, alpha){
+    const w = rec.canvas.width, h = rec.canvas.height, ctx = rec.ctx;
+    const img = ctx.getImageData(0, 0, w, h), d = img.data;
+    const si = (py * w + px) * 4;
+    const sr = d[si], sg = d[si + 1], sb = d[si + 2], sa = d[si + 3];
+    const fr = parseInt(colorHex.slice(1, 3), 16), fg = parseInt(colorHex.slice(3, 5), 16), fb = parseInt(colorHex.slice(5, 7), 16);
+    const fa = Math.round(alpha * 255);
+    if (sr === fr && sg === fg && sb === fb && sa === fa) return;
+    const seen = new Uint8Array(w * h);
+    const match = i => Math.abs(d[i] - sr) < 14 && Math.abs(d[i + 1] - sg) < 14 && Math.abs(d[i + 2] - sb) < 14 && Math.abs(d[i + 3] - sa) < 14;
+    const stack = [[px, py]];
+    while (stack.length) {
+      const [cx, cy] = stack.pop();
+      const vi = cy * w + cx, i = vi * 4;
+      if (seen[vi] || !match(i)) continue;
+      seen[vi] = 1;
+      d[i] = fr; d[i + 1] = fg; d[i + 2] = fb; d[i + 3] = fa;
+      if (cx > 0) stack.push([cx - 1, cy]);
+      if (cx < w - 1) stack.push([cx + 1, cy]);
+      if (cy > 0) stack.push([cx, cy - 1]);
+      if (cy < h - 1) stack.push([cx, cy + 1]);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  async function bucketFill(p){
+    const layerId = $("drawLayerSel").value;
+    const rec = await ensurePaint(layerId);
+    const px = Math.min(rec.canvas.width - 1, Math.max(0, Math.round(p.x / 100 * rec.canvas.width)));
+    const py = Math.min(rec.canvas.height - 1, Math.max(0, Math.round(p.y / 100 * rec.canvas.height)));
+    floodFill(rec, px, py, curDrawColor(), curDrawOpacity());
+    await endRasterStroke(layerId);
+  }
+
+  /* ---- Pointer router for the art tools. The original handlers stay in
+     charge of the original tools; these listen alongside and only act on
+     the new tool values (plus the raster half of the eraser). ---- */
+  let artStart = null;
+  function ellipsePreview(a, p){
+    artFx.clearLayers();
+    if (selItem) renderSelection();
+    const cx = (a.x + p.x) / 2, cy = (a.y + p.y) / 2, rx = Math.abs(p.x - a.x) / 2, ry = Math.abs(p.y - a.y) / 2;
+    const pts = [], ux = cx / 100 * MW, uy = cy / 100 * MH;
+    for (let k = 0; k < 40; k++) { const t = k / 40 * Math.PI * 2; pts.push(uToLatLng(ux + Math.cos(t) * rx / 100 * MW, uy + Math.sin(t) * ry / 100 * MH)); }
+    artFx.addLayer(L.polygon(pts, { color: curDrawColor(), weight: 2, fillColor: curDrawColor(), fillOpacity: 0.15, interactive: false }));
+  }
+  map.on("mousedown", async e => {
+    if (isProjecting() || armedMode !== "draw") return;
+    const tool = $("drawTool").value;
+    const p = toXY(e.latlng);
+    if (tool === "stamp") { placeStamp(p); return; }
+    if (tool === "pick") { pickColor(p); return; }
+    if (tool === "bucket") { bucketFill(p); return; }
+    if (tool === "select") {
+      selItem = hitItem(p);
+      selDrag = selItem ? { last: p, moved: false } : null;
+      renderSelection();
+      return;
+    }
+    if (tool === "ellipse") { artStart = { tool, p }; return; }
+    if (tool === "paint" || tool === "erase") { await paintBegin(p, tool === "erase"); return; }
+    if (tool === "clone") {
+      if (!cloneSrc || (e.originalEvent && e.originalEvent.altKey)) { setCloneSource(p); return; }
+      await cloneBegin(p);
+    }
+  });
+  map.on("mousemove", e => {
+    if (isProjecting()) return;
+    const p = toXY(e.latlng);
+    if (selDrag && selItem) {
+      const dx = p.x - selDrag.last.x, dy = p.y - selDrag.last.y;
+      if (dx || dy) { itemTranslate(selItem, dx, dy); selDrag.last = p; selDrag.moved = true; renderDraw(); renderSelection(); }
+      return;
+    }
+    if (paintStroke) { paintMove(p); return; }
+    if (cloneStroke) { cloneMove(p); return; }
+    if (artStart && artStart.tool === "ellipse") ellipsePreview(artStart.p, p);
+  });
+  map.on("mouseup", async e => {
+    const p = toXY(e.latlng);
+    if (selDrag) {
+      if (selDrag.moved && selItem) {
+        const ok = await saveDraw();
+        drawStatusEl.textContent = ok ? "Moved — saved for everybody." : "Move didn't save — refreshed.";
+        if (!ok) loadDraw(true);
+      }
+      selDrag = null;
+    }
+    if (paintStroke) { const l = paintStroke.layerId; paintStroke = null; await endRasterStroke(l); }
+    if (cloneStroke) { const l = cloneStroke.layerId; cloneStroke = null; await endRasterStroke(l); }
+    if (artStart && artStart.tool === "ellipse") {
+      const a = artStart.p;
+      artStart = null;
+      artFx.clearLayers();
+      if (selItem) renderSelection();
+      const rx = Math.abs(p.x - a.x) / 2, ry = Math.abs(p.y - a.y) / 2;
+      if (armedMode === "draw" && rx > 0.1 && ry > 0.1) {
+        drawItems.push(withOp({ type: "ellipse", x: (a.x + p.x) / 2, y: (a.y + p.y) / 2, rx, ry, color: curDrawColor(), w: curDrawWidth(), fill: curDrawFill(), ...curLayerPatch() }));
+        const ok = await saveDraw(); renderDraw();
+        drawStatusEl.textContent = ok ? "Ellipse saved — the table sees it." : "Ellipse didn't save — try again.";
+        if (!ok) loadDraw(true);
+      }
+    }
+  });
+  let artMapId = currentMapId;
+  setInterval(() => {
+    if (currentMapId !== artMapId) {
+      artMapId = currentMapId;
+      cloneSrc = null;
+      cloneFx.clearLayers();
+      clearSelection();
+      paintCache.clear();
+    }
+  }, 1500);
+
+  /* ---- Full screen: the whole panel, controls at the edges ---- */
+  $("fsBtn").addEventListener("click", () => {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    const el = $("mapPanel");
+    try { if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(() => {}); } }
+    catch(err) { /* fullscreen unavailable here — the Expand view still works */ }
+  });
+  document.addEventListener("fullscreenchange", () => setTimeout(() => window.dispatchEvent(new Event("resize")), 120));
+
+  /* ---- Drag-and-drop maps: original bytes, never re-encoded. The file
+     goes to the shared artwork bucket (vtt-maps/) so every screen can
+     load it, and the registry rides the same shared store; a device
+     copy also lands in IndexedDB on the dropping device. ---- */
+  const DROP_BUCKET = "cody-artwork", DROP_REG_KEY = "vtt_dropmaps";
+  let dropMaps = [];
+  const localOnlyIds = new Set();
+  const dropCell = (w, h) => Math.max(10, Math.round(Math.max(w, h) / 60));
+  function dropPublicUrl(path){ return `${SUPABASE_URL}/storage/v1/object/public/${DROP_BUCKET}/${path}`; }
+  function registerDropMap(rec, localUrl){
+    MAPS[rec.id] = { name: rec.name, img: localUrl || dropPublicUrl(rec.path), w: rec.w, h: rec.h, cell: dropCell(rec.w, rec.h), drop: true };
+    let opt = $("mapSelect").querySelector(`option[value="${rec.id}"]`);
+    if (!opt) { opt = document.createElement("option"); opt.value = rec.id; $("mapSelect").appendChild(opt); }
+    opt.textContent = rec.name;
+  }
+  async function loadDropRegistry(){
+    if (!db) return;
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", DROP_REG_KEY).maybeSingle();
+    if (error) return;
+    const list = (data && data.value && Array.isArray(data.value.maps)) ? data.value.maps : [];
+    dropMaps = list;
+    for (const rec of list) if (!MAPS[rec.id]) registerDropMap(rec);
+    for (const opt of [...$("mapSelect").querySelectorAll("option")]) {
+      if (opt.value.startsWith("drop-") && !localOnlyIds.has(opt.value) && !list.some(m => m.id === opt.value)) { opt.remove(); delete MAPS[opt.value]; }
+    }
+    if (currentMapId.startsWith("drop-") && !MAPS[currentMapId]) switchMap("faerun");
+  }
+  async function saveDropRegistry(){
+    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: DROP_REG_KEY, value: { maps: dropMaps }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    return !error;
+  }
+  function idbOpen(){
+    return new Promise((res, rej) => {
+      const r = indexedDB.open("apoc-vtt", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("maps", { keyPath: "id" });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  async function idbPut(rec){ try { const d = await idbOpen(); d.transaction("maps", "readwrite").objectStore("maps").put(rec); } catch(e) { /* device copy is a bonus */ } }
+  async function idbDel(id){ try { const d = await idbOpen(); d.transaction("maps", "readwrite").objectStore("maps").delete(id); } catch(e) { /* device copy is a bonus */ } }
+  async function idbAll(){
+    try {
+      const d = await idbOpen();
+      return await new Promise(res => {
+        const out = [];
+        const rq = d.transaction("maps").objectStore("maps").openCursor();
+        rq.onsuccess = () => { const c = rq.result; if (c) { out.push(c.value); c.continue(); } else res(out); };
+        rq.onerror = () => res(out);
+      });
+    } catch(e) { return []; }
+  }
+  async function addDroppedFile(file){
+    if (!file || !/^image\/(png|jpeg|webp|gif)/.test(file.type)) return;
+    const url = URL.createObjectURL(file);
+    let dims = null;
+    try { const im = await loadCanvasImage(url); dims = { w: im.naturalWidth, h: im.naturalHeight }; } catch(e) { dims = null; }
+    if (!dims || !dims.w || !dims.h) { drawStatusEl.textContent = "That image couldn't be read."; return; }
+    const id = "drop-" + Date.now().toString(36);
+    const name = (file.name || "Dropped map").replace(/\.[a-z0-9]+$/i, "").slice(0, 60) || "Dropped map";
+    const ext = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+    const path = `vtt-maps/${id}.${ext}`;
+    await idbPut({ id, name, w: dims.w, h: dims.h, blob: file });
+    let shared = false;
+    try {
+      const { error } = await db.storage.from(DROP_BUCKET).upload(path, file, { contentType: file.type, upsert: false });
+      shared = !error;
+    } catch(e) { shared = false; }
+    const rec = { id, name, w: dims.w, h: dims.h, path };
+    if (shared) {
+      dropMaps = [...dropMaps.filter(m => m.id !== id), rec];
+      await saveDropRegistry();
+      registerDropMap(rec);
+      drawStatusEl.textContent = `"${name}" added at full resolution (${dims.w}×${dims.h}) — shared with the table.`;
+      switchMap(id);
+      await saveActiveMap();
+    } else {
+      localOnlyIds.add(id);
+      registerDropMap(rec, url);
+      const opt = $("mapSelect").querySelector(`option[value="${id}"]`);
+      if (opt) opt.textContent = `${name} (this device)`;
+      drawStatusEl.textContent = `"${name}" added at full resolution (${dims.w}×${dims.h}) on this device — the shared upload didn't go through, so other screens can't load it yet.`;
+      switchMap(id);
+    }
+  }
+  const panelEl = $("mapPanel");
+  panelEl.addEventListener("dragenter", e => { e.preventDefault(); $("apocMap").classList.add("drag-over"); });
+  panelEl.addEventListener("dragover", e => { e.preventDefault(); $("apocMap").classList.add("drag-over"); });
+  panelEl.addEventListener("dragleave", e => { if (!panelEl.contains(e.relatedTarget)) $("apocMap").classList.remove("drag-over"); });
+  panelEl.addEventListener("drop", e => {
+    e.preventDefault();
+    $("apocMap").classList.remove("drag-over");
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) addDroppedFile(f);
+  });
+  setInterval(() => {
+    const def = MAPS[$("mapSelect").value];
+    $("dropRemoveBtn").hidden = !(def && def.drop);
+  }, 1000);
+  $("dropRemoveBtn").addEventListener("click", async () => {
+    const id = $("mapSelect").value;
+    const def = MAPS[id];
+    if (!def || !def.drop) return;
+    if (!confirm(`Remove the map "${def.name}" from the VTT? The map leaves the switcher for everybody; its tokens, fog and drawings stay in the shared store under its key.`)) return;
+    const rec = dropMaps.find(m => m.id === id);
+    dropMaps = dropMaps.filter(m => m.id !== id);
+    await saveDropRegistry();
+    if (rec && rec.path) { try { await db.storage.from(DROP_BUCKET).remove([rec.path]); } catch(e) { /* registry removal already unshares it */ } }
+    await idbDel(id);
+    const opt = $("mapSelect").querySelector(`option[value="${id}"]`);
+    if (opt) opt.remove();
+    delete MAPS[id];
+    if (currentMapId === id) { switchMap("faerun"); await saveActiveMap(); }
+    drawStatusEl.textContent = `"${def.name}" removed from the switcher.`;
+  });
+  (async () => {
+    await loadDropRegistry();
+    const local = await idbAll();
+    for (const rec of local) {
+      if (!MAPS[rec.id]) {
+        localOnlyIds.add(rec.id);
+        registerDropMap({ id: rec.id, name: rec.name, w: rec.w, h: rec.h, path: "" }, URL.createObjectURL(rec.blob));
+        const opt = $("mapSelect").querySelector(`option[value="${rec.id}"]`);
+        if (opt) opt.textContent = `${rec.name} (this device)`;
+      }
+    }
+    loadActiveMap();
+  })();
+  setInterval(loadDropRegistry, 60000);
 })();
 </script>
 <script>
