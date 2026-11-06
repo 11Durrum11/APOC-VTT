@@ -114,15 +114,6 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .mk-altered .mk-dot{background:#57b8a2}
 .apoc-on .leaflet-image-layer{filter:grayscale(.55) sepia(.14) brightness(.93) contrast(1.03)}
 #apocMap:fullscreen{height:100%;width:100%;border:none;border-radius:0}
-body.projecting #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:2000;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:5px;margin:0;border-radius:0}
-body.projecting .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
-body.projecting .apoc-map{height:100%;min-height:0}
-body.projecting .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
-body.projecting .mk-label{font-size:1.12rem;padding:4px 12px}
-body.projecting .mk-dot{width:22px;height:22px}
-body.projecting .atlas-dot{width:14px;height:14px}
-.proj-exit-wrap{display:none}
-body.projecting .proj-exit-wrap{display:block}
 body.map-expanded{overflow:hidden}
 body.map-expanded #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:1600;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:5px;margin:0;border-radius:0}
 body.map-expanded .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
@@ -146,7 +137,6 @@ body.map-expanded .expand-exit-wrap{display:block}
 .tk-status{display:flex;gap:3px;justify-content:center;margin-top:3px;min-height:9px}
 .tk-status i{width:9px;height:9px;border-radius:50%;border:1px solid #0d0f14;display:block}
 .tk-label{display:block;text-align:center;margin-top:3px;background:rgba(10,12,16,.8);color:#f2e7c8;padding:2px 7px;border-radius:999px;font-size:.72rem;font-weight:600;white-space:nowrap;border:1px solid rgba(255,255,255,.22);width:max-content;margin-left:auto;margin-right:auto}
-body.projecting .tk-label{font-size:1.12rem;padding:4px 12px}
 .status-chips{display:flex;flex-wrap:wrap;gap:7px}
 .status-chips button{min-height:40px}
 .status-chips button[aria-pressed="true"]{background:transparent;color:var(--primary);border-color:var(--primary)}
@@ -154,7 +144,6 @@ body.projecting .tk-label{font-size:1.12rem;padding:4px 12px}
 .scale-input{width:96px}
 .tk-gm .tk-disc{border-style:dashed;border-color:#e8a33d}
 .draw-text{background:rgba(10,12,16,.82);padding:2px 8px;border-radius:6px;font-weight:700;font-size:.85rem;white-space:nowrap;border:1px solid rgba(255,255,255,.25)}
-body.projecting .draw-text{font-size:1.1rem}
 .lib-panel{border:1px solid hsl(222 18% 26%);border-radius:12px;padding:12px;margin:4px 0 10px}
 .lib-head{font-weight:700;margin:10px 0 6px}
 .lib-grid{display:flex;flex-wrap:wrap;gap:8px}
@@ -183,7 +172,6 @@ body.projecting .draw-text{font-size:1.1rem}
 .init-row .init-name{flex:1;font-weight:600;cursor:pointer;min-width:0;overflow-wrap:anywhere}
 .init-row input{width:70px}
 .init-strip{background:rgba(10,12,16,.87);color:#f2e7c8;padding:6px 10px;border-radius:8px;font-size:.8rem;border:1px solid rgba(255,255,255,.25);max-width:48vw;line-height:1.45}
-body.projecting .init-strip{font-size:1.05rem}
 .form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px 16px;margin-top:14px}
 .field{display:flex;flex-direction:column;gap:5px;min-width:0}
 .field.full{grid-column:1/-1}
@@ -368,7 +356,6 @@ body.displaying .marker-form,
 body.displaying .vtt-panel,
 body.displaying .map-repo,
 body.displaying #repoTab,
-body.displaying .proj-exit-wrap,
 body.displaying .expand-exit-wrap,
 body.displaying .map-status,
 body.displaying #placeCard,
@@ -431,7 +418,6 @@ body.displaying .init-strip{font-size:1.05rem}
       </div>
       <label class="atlas-toggle"><input type="checkbox" id="atlasToggle" checked> Atlas places</label>
       <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
-      <button type="button" class="btn primary" id="projBtn">Project to TV</button>
       <button type="button" class="btn primary" id="pushTvBtn" title="Open a second, map-only copy for the TV — this laptop copy keeps all the controls">Push to TV</button>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
       <button type="button" class="btn" id="fsBtn">Full screen</button>
@@ -988,8 +974,10 @@ setInterval(loadSharedEntries, 60000);
   });
   /* v1.07: the ?display TV copy counts as projecting for every guard —
      player view only, no GM material, no editing — while never touching
-     the laptop control copy's own screen. */
-  const isProjecting = () => document.body.classList.contains("projecting") || document.body.classList.contains("displaying");
+     the laptop control copy's own screen. (v1.10: the old Project to TV
+     button and its own-screen "projecting" mode are removed; Push to TV's
+     ?display copy is the only projecting view, via the displaying class.) */
+  const isProjecting = () => document.body.classList.contains("displaying");
   const toLatLng = (x, y) => [MH * (1 - y / 100), MW * (x / 100)];
   const toXY = ll => ({ x: Math.round(ll.lng / MW * 10000) / 100, y: Math.round((1 - ll.lat / MH) * 10000) / 100 });
   const iconFor = (kind, name, temp) => L.divIcon({
@@ -1178,37 +1166,6 @@ setInterval(loadSharedEntries, 60000);
   });
   searchInput.addEventListener("keydown", ev => { if (ev.key === "Escape") resultsBox.hidden = true; });
   document.addEventListener("click", ev => { if (!ev.target.closest(".map-tools")) resultsBox.hidden = true; });
-  /* ---- Projection mode: REUSABLE — every map on this site gets this exact
-        treatment (Shaun's standing rule, 2026-11-05: any map he has or will have).
-        A new map surface calls makeProjectable(itsMap, itsContainerId, itsButtonId)
-        and inherits full-screen landscape projection, big room-readable labels
-        (the global body.projecting CSS), the full perimeter of controls stays at the edges, simple exit. ---- */
-  function makeProjectable(lmap, containerId, buttonId){
-    const setP = on => { document.body.classList.toggle("projecting", on); setTimeout(() => lmap.invalidateSize(), 260); };
-    $(buttonId).addEventListener("click", () => {
-      setP(true);
-      const el = $(containerId);
-      try {
-        if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(() => {}); }
-        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-      } catch(e) { /* the full-window projection class still applies */ }
-    });
-    document.addEventListener("fullscreenchange", () => { if (!document.fullscreenElement) setP(false); });
-    const exitCtl = L.control({ position: "bottomright" });
-    exitCtl.onAdd = () => {
-      const d = L.DomUtil.create("div", "proj-exit-wrap");
-      d.innerHTML = '<button type="button" class="btn primary">Exit projection</button>';
-      L.DomEvent.on(d.querySelector("button"), "click", () => {
-        if (document.fullscreenElement) document.exitFullscreen();
-        else setP(false);
-      });
-      return d;
-    };
-    exitCtl.addTo(lmap);
-    return setP;
-  }
-  makeProjectable(map, "mapPanel", "projBtn");
-
   /* ---- Push to TV (v1.07, Shaun): opens a SECOND copy of this page in
         ?display mode for the TV — map only, player view, editing locked.
         This laptop copy stays exactly as it is, with all the controls.
@@ -1258,7 +1215,7 @@ setInterval(loadSharedEntries, 60000);
   };
   expandExitCtl.addTo(map);
   document.addEventListener("fullscreenchange", () => {
-    if (!document.fullscreenElement && document.body.classList.contains("map-expanded") && !document.body.classList.contains("projecting")) setExpanded(false);
+    if (!document.fullscreenElement && document.body.classList.contains("map-expanded")) setExpanded(false);
   });
 
   /* ================= VTT Phase 1: grid, shared scale, tokens, ruler =================
