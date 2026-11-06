@@ -195,6 +195,9 @@ input,select,textarea{
     padding:10px 11px;min-height:44px;
   }
 textarea{min-height:96px;resize:vertical}
+/* Shaun (2026-11-06): the dropdown menus rendered white on white —
+   unreadable. Every select's opened list is black text on white. */
+select option,select optgroup{background:#ffffff;color:#000000}
 .button-row{display:flex;gap:9px;flex-wrap:wrap;margin-top:15px}
 .btn{
     border:1px solid var(--card-border);background:var(--secondary);color:var(--foreground);
@@ -723,7 +726,6 @@ body.displaying .td-ui{display:none}
         <input id="stampRot" type="range" min="0" max="360" step="5" value="0" style="width:110px">
       </div>
       <div class="field" style="flex:1 1 100%">
-        <button type="button" class="btn" id="paintPalHead" aria-expanded="false" title="Show or hide the colour wheel">Color wheel ▸</button>
         <div class="paint-pal" id="paintPalette" hidden></div>
       </div>
       <button type="button" class="btn" id="drawUndo">Undo drawing</button>
@@ -735,6 +737,7 @@ body.displaying .td-ui{display:none}
       <button type="button" class="btn" id="tplAnchorBtn" hidden>Anchor to token</button>
       <button type="button" class="btn danger" id="drawDelSelBtn" hidden>Delete selected</button>
       <span class="muted small" id="drawStatus"></span>
+      <button type="button" class="btn" id="paintPalHead" aria-expanded="false" title="Show or hide the colour wheel">Color wheel ▸</button>
       <button type="button" class="btn" id="fsBtn">Full screen</button>
       <button type="button" class="btn" id="view3dBtn">3D view</button>
     </div>
