@@ -34,7 +34,7 @@
     /* Interim hotlink: the scene files sit in this repo under
        assets/scenes/ (same paths as the tracker) once uploaded; until
        then the backdrop loads them from the tracker site. */
-    --scene-image:url("https://11durrum11.github.io/APOC-Campaign-Tracker/assets/scenes/bastion-streets.webp");
+    --scene-image:url("assets/scenes/bastion-streets.webp");
   }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;overflow-x:hidden;overflow-x:clip}
@@ -3347,7 +3347,7 @@ setInterval(loadSharedEntries, 60000);
    they are uploaded to this repo under assets/scenes/ — the local
    copies sit at those same relative paths. */
 (function(){
-  const SCENE_BASE = "https://11durrum11.github.io/APOC-Campaign-Tracker/";
+  const SCENE_BASE = "";
   const SCENES = {
     "bastion-streets":      "assets/scenes/bastion-streets.webp",
     "market-guild-streets": "assets/scenes/market-guild-streets.webp",
