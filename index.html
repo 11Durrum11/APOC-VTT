@@ -125,6 +125,8 @@ body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-to
 .expand-exit-wrap{display:none}
 body.map-expanded .expand-exit-wrap{display:block}
 body.map-fs .expand-exit-wrap{display:block}
+#gmBtn{opacity:.48;filter:saturate(.3)}
+#gmBtn[aria-pressed="true"]{opacity:1;filter:none}
 .tk-icon{background:none;border:none}
 .tk{position:relative}
 .tk-disc{border-radius:50%;border:3px solid #0d0f14;box-shadow:0 2px 8px rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-weight:700;color:#101319;overflow:hidden;margin:0 auto}
@@ -557,7 +559,7 @@ body.displaying .td-ui{display:none}
       <button type="button" class="btn" id="pingBtn" aria-pressed="false">Ping</button>
       <button type="button" class="btn" id="libBtn" aria-pressed="false">Token repository</button>
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
-      <button type="button" class="btn" id="gmBtn" aria-pressed="false">GM view: off</button>
+      <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>GM view: off</button>
       <span class="muted small" id="tokenStatus"></span>
       <span class="muted small" id="gmStatus"></span>
     </div>
@@ -1834,7 +1836,24 @@ setInterval(loadSharedEntries, 60000);
     else sessionStorage.removeItem("apocGm");
     applyGmUi();
   });
-  if (sessionStorage.getItem("apocGm") === "1") gmView = true;
+  /* The GM view button appears only on screens marked as the GM's — in
+     practice Shaun's laptop (his offer, 2026-11-06). Mark a screen once by
+     opening the site with ?gmhere=1; the mark lives in that browser only.
+     Everywhere else the button stays hidden and GM view stays off. This is
+     convenience, not real security — the page and its store are public. */
+  let gmScreen = false;
+  try {
+    if (new URLSearchParams(location.search).get("gmhere") === "1") {
+      localStorage.setItem("apocGmScreen", "1");
+      const u = new URL(location.href); u.searchParams.delete("gmhere");
+      history.replaceState(null, "", u.pathname + u.search + u.hash);
+    }
+    gmScreen = localStorage.getItem("apocGmScreen") === "1";
+  } catch(e) { /* storage unavailable — button stays hidden */ }
+  if (gmScreen) {
+    $("gmBtn").hidden = false;
+    if (sessionStorage.getItem("apocGm") === "1") gmView = true;
+  }
 
   /* ---- Fog of war ---- */
   async function loadFog(quiet){
