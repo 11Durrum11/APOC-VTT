@@ -345,9 +345,43 @@ input,select,textarea{font-size:16px}
 .map-stage{margin-top:6px}
 .marker-form{margin-top:6px}
 .vtt-panel{margin-top:8px}
+
+/* ---- v1.07: Push to TV display mode (?display=1) ----
+   The TV copy of this same page: JUST THE MAP — player view, no
+   controls, no perimeter groups, no panels, no header, no story
+   text, no GM-only material, editing locked (the isProjecting()
+   guards treat displaying exactly like projecting). It follows the
+   shared state live — active map, tokens, fog, drawings, pings —
+   while the laptop copy keeps every control. This is the one
+   explicit exception to the v1.06 perimeter-always rule. */
+body.displaying{background:#000}
+body.displaying .page{max-width:none;padding:0}
+body.displaying .vtt-head,
+body.displaying #mapPanel>p,
+body.displaying .map-tools,
+body.displaying .marker-form,
+body.displaying .vtt-panel,
+body.displaying .map-repo,
+body.displaying #repoTab,
+body.displaying .proj-exit-wrap,
+body.displaying .expand-exit-wrap,
+body.displaying .map-status,
+body.displaying #placeCard,
+body.displaying .leaflet-control-container{display:none !important}
+body.displaying #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;margin:0;padding:0;border:0;border-radius:0;background:#000;overflow:hidden}
+body.displaying .map-stage{margin:0;height:100%}
+body.displaying .map-side{flex:1 1 auto;min-width:0;height:100%}
+body.displaying .apoc-map{height:100% !important;min-height:0}
+body.displaying .mk-label{font-size:1.12rem;padding:4px 12px}
+body.displaying .mk-dot{width:22px;height:22px}
+body.displaying .atlas-dot{width:14px;height:14px}
+body.displaying .tk-label{font-size:1.12rem;padding:4px 12px}
+body.displaying .draw-text{font-size:1.1rem}
+body.displaying .init-strip{font-size:1.05rem}
 </style>
 </head>
 <body data-scene="bastion-streets">
+<script>/* v1.07: Push to TV — a ?display copy of this page is the map-only TV view; flag it before first paint so no controls ever flash. */ if (new URLSearchParams(location.search).has("display")) document.body.classList.add("displaying");</script>
 <div class="page">
   <header class="vtt-head">
     <h1>APOC VTT</h1>
@@ -376,6 +410,7 @@ input,select,textarea{font-size:16px}
       <label class="atlas-toggle"><input type="checkbox" id="atlasToggle" checked> Atlas places</label>
       <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
       <button type="button" class="btn primary" id="projBtn">Project to TV</button>
+      <button type="button" class="btn primary" id="pushTvBtn" title="Open a second, map-only copy for the TV — this laptop copy keeps all the controls">Push to TV</button>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
       <button type="button" class="btn" id="fsBtn">Full screen</button>
       <button type="button" class="btn danger" id="dropRemoveBtn" hidden>Remove map</button>
@@ -862,7 +897,10 @@ setInterval(loadSharedEntries, 60000);
     $("apocMap").classList.toggle("apoc-on", ev.target.checked);
     if (ev.target.checked) veilLayer.addTo(map); else map.removeLayer(veilLayer);
   });
-  const isProjecting = () => document.body.classList.contains("projecting");
+  /* v1.07: the ?display TV copy counts as projecting for every guard —
+     player view only, no GM material, no editing — while never touching
+     the laptop control copy's own screen. */
+  const isProjecting = () => document.body.classList.contains("projecting") || document.body.classList.contains("displaying");
   const toLatLng = (x, y) => [MH * (1 - y / 100), MW * (x / 100)];
   const toXY = ll => ({ x: Math.round(ll.lng / MW * 10000) / 100, y: Math.round((1 - ll.lat / MH) * 10000) / 100 });
   const iconFor = (kind, name, temp) => L.divIcon({
@@ -1081,6 +1119,20 @@ setInterval(loadSharedEntries, 60000);
     return setP;
   }
   makeProjectable(map, "mapPanel", "projBtn");
+
+  /* ---- Push to TV (v1.07, Shaun): opens a SECOND copy of this page in
+        ?display mode for the TV — map only, player view, editing locked.
+        This laptop copy stays exactly as it is, with all the controls.
+        Both copies read the same shared store (active map, tokens, fog,
+        drawings, pings), so everything changed here shows there live. ---- */
+  $("pushTvBtn").addEventListener("click", () => {
+    const u = new URL(location.href);
+    u.searchParams.set("display", "1");
+    u.searchParams.delete("v");
+    u.hash = "";
+    window.open(u.href, "_blank", "noopener");
+    setStatus("TV copy opened in a new tab — put that tab on the TV. This copy keeps the controls; everything you change here shows there live.");
+  });
 
   /* Expand map: the button stays in the tools row, but it opens the MAP
      WINDOW itself (#apocMap) full screen — Shaun's correction, 2026-11-05.
