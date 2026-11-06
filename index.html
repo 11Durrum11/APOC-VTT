@@ -262,7 +262,18 @@ input,select,textarea{font-size:16px}
 .chip-eye{min-width:40px}
 .apoc-map.drag-over{outline:3px dashed var(--primary);outline-offset:-3px}
 /* ===== v1.04: Paint palette, template handles, repo drawer (Roll20 right dock) ===== */
-.paint-pal{display:flex;flex-wrap:wrap;gap:4px}
+.paint-pal{display:block}
+.wheel-wrap{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;padding:6px 2px}
+.wheel-disc-wrap{position:relative;width:220px;height:220px;flex:none}
+#wheelCanvas{width:220px;height:220px;border-radius:50%;cursor:crosshair;touch-action:none;display:block}
+.wheel-marker{position:absolute;width:16px;height:16px;border:2px solid #fff;outline:1px solid rgba(0,0,0,.65);border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}
+.wheel-side{display:flex;flex-direction:column;gap:8px;min-width:200px;flex:1 1 200px}
+.wheel-chip{height:38px;border:1px solid hsl(222 18% 30%);border-radius:8px}
+.wheel-side input[type="text"]{width:92px;text-transform:lowercase}
+.wheel-rgb{display:flex;gap:10px;flex-wrap:wrap}
+.wheel-rgb input[type="number"]{width:60px}
+.wheel-side label{font-size:.82rem;color:var(--muted-foreground);display:flex;align-items:center;gap:8px}
+.wheel-side input[type="range"]{flex:1 1 auto;min-width:110px}
 .pal-swatch{width:30px;height:30px;min-height:30px;border:1px solid hsl(222 18% 30%);border-radius:6px;padding:0;cursor:pointer}
 .pal-swatch[aria-pressed="true"]{outline:2px solid var(--primary);outline-offset:1px}
 .lib-item{touch-action:none}
@@ -708,7 +719,7 @@ body.displaying .td-ui{display:none}
         <input id="stampRot" type="range" min="0" max="360" step="5" value="0" style="width:110px">
       </div>
       <div class="field" style="flex:1 1 100%">
-        <button type="button" class="btn" id="paintPalHead" aria-expanded="false" title="Show or hide the paint palette">Paint palette ▸</button>
+        <button type="button" class="btn" id="paintPalHead" aria-expanded="false" title="Show or hide the colour wheel">Color wheel ▸</button>
         <div class="paint-pal" id="paintPalette" hidden></div>
       </div>
       <button type="button" class="btn" id="drawUndo">Undo drawing</button>
@@ -3008,6 +3019,7 @@ setInterval(loadSharedEntries, 60000);
     sel.value = hex;
     $("drawColorAny").value = hex;
     drawStatusEl.textContent = `Color picked: ${hex}.`;
+    if (window.__wheelSync) window.__wheelSync(hex);
   }
   async function pickColor(p){
     const hit = hitItem(p);
@@ -3620,15 +3632,122 @@ setInterval(loadSharedEntries, 60000);
     const out = e.originalEvent && (e.originalEvent.altKey || e.originalEvent.shiftKey);
     map.setZoomAround(e.latlng, map.getZoom() + (out ? -1 : 1));
   });
-  const PAINT28 = ["#000000", "#808080", "#800000", "#808000", "#008000", "#008080", "#000080", "#800080", "#808040", "#004040", "#0080ff", "#004080", "#8000ff", "#804000", "#ffffff", "#c0c0c0", "#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff", "#ffff80", "#00ff80", "#80ffff", "#8080ff", "#ff0080", "#ff8040"];
-  $("paintPalette").innerHTML = PAINT28.map(c => `<button type="button" class="pal-swatch" data-pal="${c}" style="background:${c}" title="${c}" aria-label="Paint colour ${c}"></button>`).join("");
-  $("paintPalette").querySelectorAll("[data-pal]").forEach(b => b.addEventListener("click", () => setDrawColor(b.dataset.pal)));
-  /* Paint palette stays minimized under its header until clicked (Shaun). */
+  /* ---- Colour wheel (Shaun, 2026-11-06: a very in-depth colour wheel
+     INSTEAD of the multi-panel swatch palette). A full HSV disc — hue by
+     angle, saturation by radius — with a brightness slider, an editable
+     hex field, RGB fields and a live preview. Everything funnels into
+     setDrawColor, and the wheel re-syncs whenever the colour changes
+     elsewhere (eyedropper, the named-colour select, the Any colour box). */
+  (() => {
+    const host = $("paintPalette");
+    host.innerHTML = `
+      <div class="wheel-wrap">
+        <div class="wheel-disc-wrap">
+          <canvas id="wheelCanvas" width="220" height="220" aria-label="Colour wheel: drag to pick hue and saturation"></canvas>
+          <div class="wheel-marker" id="wheelMarker"></div>
+        </div>
+        <div class="wheel-side">
+          <div class="wheel-chip" id="wheelChip"></div>
+          <label>Brightness <input type="range" id="wheelVal" min="2" max="100" value="100"></label>
+          <label>Hex <input type="text" id="wheelHex" value="#e8a33d" spellcheck="false" autocomplete="off"></label>
+          <div class="wheel-rgb">
+            <label>R <input type="number" id="wheelR" min="0" max="255"></label>
+            <label>G <input type="number" id="wheelG" min="0" max="255"></label>
+            <label>B <input type="number" id="wheelB" min="0" max="255"></label>
+          </div>
+          <div class="muted small" id="wheelHsv"></div>
+        </div>
+      </div>`;
+    const cv = $("wheelCanvas"), ctx = cv.getContext("2d");
+    const SIZE = 220, C = SIZE / 2, R = SIZE / 2 - 2;
+    let wH = 36, wS = 0.72, wV = 0.91, syncing = false;
+    function hsvToRgb(h, s, v){
+      h = ((h % 360) + 360) % 360;
+      const c = v * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = v - c;
+      let r = 0, g = 0, b = 0;
+      if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; }
+      else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; }
+      else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+      return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+    }
+    function rgbToHsv(r, g, b){
+      r /= 255; g /= 255; b /= 255;
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+      let h = 0;
+      if (d) { if (mx === r) h = 60 * (((g - b) / d) % 6); else if (mx === g) h = 60 * ((b - r) / d + 2); else h = 60 * ((r - g) / d + 4); }
+      return [((h + 360) % 360), mx ? d / mx : 0, mx];
+    }
+    function hexToRgb(hex){
+      const m = /^#?([0-9a-f]{6})$/i.exec(String(hex).trim());
+      if (!m) return null;
+      const n = parseInt(m[1], 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    }
+    const toHex = (r, g, b) => "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join("");
+    function drawDisc(){
+      const img = ctx.createImageData(SIZE, SIZE), d = img.data;
+      for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
+        const dx = x - C, dy = y - C, dist = Math.hypot(dx, dy), i = (y * SIZE + x) * 4;
+        if (dist > R) { d[i + 3] = 0; continue; }
+        const h = (Math.atan2(-dy, dx) * 180 / Math.PI + 360) % 360;
+        const [r, g, b] = hsvToRgb(h, Math.min(1, dist / R), wV);
+        d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = 255;
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+    function refresh(fromWheel){
+      const [r, g, b] = hsvToRgb(wH, wS, wV), hex = toHex(r, g, b);
+      const a = wH * Math.PI / 180;
+      const mk = $("wheelMarker");
+      mk.style.left = (C + Math.cos(a) * wS * R) + "px";
+      mk.style.top = (C - Math.sin(a) * wS * R) + "px";
+      mk.style.background = hex;
+      $("wheelChip").style.background = hex;
+      if (document.activeElement !== $("wheelHex")) $("wheelHex").value = hex;
+      if (document.activeElement !== $("wheelR")) $("wheelR").value = r;
+      if (document.activeElement !== $("wheelG")) $("wheelG").value = g;
+      if (document.activeElement !== $("wheelB")) $("wheelB").value = b;
+      $("wheelVal").value = Math.round(wV * 100);
+      $("wheelHsv").textContent = `H ${Math.round(wH)}° · S ${Math.round(wS * 100)}% · V ${Math.round(wV * 100)}%`;
+      if (fromWheel && !syncing) setDrawColor(hex);
+    }
+    function setFromHex(hex, apply){
+      const rgb = hexToRgb(hex); if (!rgb) return false;
+      const [h, s, v] = rgbToHsv(rgb[0], rgb[1], rgb[2]);
+      wH = h; wS = s; wV = Math.max(0.02, v);
+      drawDisc(); refresh(apply);
+      return true;
+    }
+    window.__wheelSync = (hex) => { syncing = true; setFromHex(hex, false); syncing = false; };
+    function pickAt(ev){
+      const rect = cv.getBoundingClientRect();
+      const dx = (ev.clientX - rect.left) * (SIZE / rect.width) - C;
+      const dy = (ev.clientY - rect.top) * (SIZE / rect.height) - C;
+      const dist = Math.hypot(dx, dy);
+      wH = (Math.atan2(-dy, dx) * 180 / Math.PI + 360) % 360;
+      wS = Math.min(1, dist / R);
+      refresh(true);
+    }
+    let dragging = false;
+    cv.addEventListener("pointerdown", (ev) => { dragging = true; cv.setPointerCapture(ev.pointerId); pickAt(ev); });
+    cv.addEventListener("pointermove", (ev) => { if (dragging) pickAt(ev); });
+    cv.addEventListener("pointerup", () => { dragging = false; });
+    cv.addEventListener("pointercancel", () => { dragging = false; });
+    $("wheelVal").addEventListener("input", () => { wV = Math.max(0.02, Number($("wheelVal").value) / 100); drawDisc(); refresh(true); });
+    $("wheelHex").addEventListener("change", () => { if (!setFromHex($("wheelHex").value, true)) refresh(false); });
+    ["wheelR", "wheelG", "wheelB"].forEach(id => $(id).addEventListener("change", () => {
+      const r = Number($("wheelR").value) || 0, g = Number($("wheelG").value) || 0, b = Number($("wheelB").value) || 0;
+      setFromHex(toHex(Math.min(255, r), Math.min(255, g), Math.min(255, b)), true);
+    }));
+    setFromHex($("drawColor").value || "#e8a33d", false);
+  })();
+  /* Colour wheel stays minimized under its header until clicked (Shaun). */
   $("paintPalHead").addEventListener("click", () => {
     const pal = $("paintPalette"), open = pal.hidden;
     pal.hidden = !open;
     $("paintPalHead").setAttribute("aria-expanded", String(open));
-    $("paintPalHead").textContent = open ? "Paint palette ▾" : "Paint palette ▸";
+    $("paintPalHead").textContent = open ? "Color wheel ▾" : "Color wheel ▸";
+    if (open && window.__wheelSync) window.__wheelSync($("drawColor").value);
   });
   $("drawFrontBtn").addEventListener("click", async () => {
     if (!selItem) return;
