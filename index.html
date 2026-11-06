@@ -567,7 +567,6 @@ body.displaying .td-ui{display:none}
       <button type="button" class="btn" id="fogHideBtn" aria-pressed="false">Hide area</button>
       <button type="button" class="btn" id="fogAllBtn">Reveal all (fog off)</button>
       <button type="button" class="btn" id="fogNoneBtn">Hide all</button>
-      <button type="button" class="btn" id="gmPinBtn">Set GM PIN</button>
     </div>
     <div class="map-tools" id="lightControls" hidden>
       <label class="atlas-toggle"><input type="checkbox" id="lightEnabled"> Dynamic lighting on this map</label>
@@ -1774,11 +1773,10 @@ setInterval(loadSharedEntries, 60000);
     db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); }).subscribe();
   } catch(e) { /* realtime is a bonus; the 60-second refresh stands */ }
 
-  /* ================= VTT Phase 2: GM gate, fog of war, GM layer, drawing =================
-     Fog and drawings are per-map (same key pattern as tokens). The GM PIN is a
-     convenience gate only: it lives in the shared store like everything else
-     on this public page. GM view is per-screen (this browser session);
-     projection is always the player view. */
+  /* ================= VTT Phase 2: GM view, fog of war, GM layer, drawing =================
+     Fog and drawings are per-map (same key pattern as tokens). GM view is a
+     plain per-screen on/off toggle (this browser session) — no PIN, no lock
+     (Shaun, 2026-11-06). Projection is always the player view. */
   function effectiveGm(){ return gmView && !isProjecting(); }
   /* Fog renders in the GM layer (layerGm, z400) per Shaun's fixed stack —
      it used to sit in its own pane at z640, above the tokens. */
@@ -1820,14 +1818,9 @@ setInterval(loadSharedEntries, 60000);
     }));
   }
 
-  /* ---- GM gate ---- */
-  async function getGmPin(){
-    const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", "gm_pin").maybeSingle();
-    return data && data.value && data.value.pin ? String(data.value.pin) : null;
-  }
-  async function setGmPin(pin){
-    await db.from(SETTINGS_TABLE).upsert({ key: "gm_pin", value: { pin }, updated_at: new Date().toISOString() }, { onConflict: "key" });
-  }
+  /* ---- GM view: a plain per-screen on/off toggle. There is NO PIN and
+     no lock (Shaun, 2026-11-06: "That GM view just on or off. I don't
+     need no security pin.") ---- */
   function applyGmUi(){
     $("gmBtn").textContent = gmView ? "GM view: on" : "GM view: off";
     $("gmBtn").setAttribute("aria-pressed", String(gmView));
@@ -1835,27 +1828,11 @@ setInterval(loadSharedEntries, 60000);
     $("lightControls").hidden = !gmView;
     renderFog(); drawTokens(); renderDraw();
   }
-  $("gmBtn").addEventListener("click", async () => {
-    if (gmView) { gmView = false; sessionStorage.removeItem("apocGm"); applyGmUi(); return; }
-    const existing = await getGmPin();
-    if (!existing) {
-      const pin = prompt("No GM PIN is set yet. Choose the campaign's GM PIN (convenience gate only — it just keeps the GM controls out of casual reach):");
-      if (!pin) return;
-      await setGmPin(pin.trim());
-    } else {
-      const pin = prompt("GM PIN:");
-      if (pin === null) return;
-      if (pin.trim() !== existing) { alert("That PIN doesn't match."); return; }
-    }
-    gmView = true;
-    sessionStorage.setItem("apocGm", "1");
+  $("gmBtn").addEventListener("click", () => {
+    gmView = !gmView;
+    if (gmView) sessionStorage.setItem("apocGm", "1");
+    else sessionStorage.removeItem("apocGm");
     applyGmUi();
-  });
-  $("gmPinBtn").addEventListener("click", async () => {
-    const pin = prompt("Set a new GM PIN for the campaign:");
-    if (!pin) return;
-    await setGmPin(pin.trim());
-    $("gmStatus").textContent = "GM PIN updated.";
   });
   if (sessionStorage.getItem("apocGm") === "1") gmView = true;
 
