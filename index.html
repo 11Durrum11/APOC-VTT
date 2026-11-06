@@ -31,7 +31,10 @@
     --input:hsl(220 16% 26%);
     --ring:hsl(38 92% 50%);
     --radius:12px;
-    --scene-image:url("assets/scenes/bastion-streets.webp");
+    /* Interim hotlink: the scene files sit in this repo under
+       assets/scenes/ (same paths as the tracker) once uploaded; until
+       then the backdrop loads them from the tracker site. */
+    --scene-image:url("https://11durrum11.github.io/APOC-Campaign-Tracker/assets/scenes/bastion-streets.webp");
   }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;overflow-x:hidden;overflow-x:clip}
@@ -40,6 +43,17 @@ body{
     font-family:Georgia,"Times New Roman",serif;line-height:1.5;
     overflow-x:hidden;overflow-x:clip;min-height:100vh;
   }
+/* The backdrop: the tracker shell's layer, ported as-is — a PLAIN fixed
+   layer, no transform, no filter, no will-change. The tracker's settled
+   end-state layers NOTHING in front of it (every veil/sheen/scrim off —
+   only the backdrop picture, the text and the borders remain), so the
+   ::after scrim is display:none here too. */
+body::before{
+    content:"";position:fixed;left:0;top:0;width:100%;height:100vh;height:100lvh;z-index:-2;
+    background-image:var(--scene-image);background-size:cover;background-position:center;
+    opacity:var(--bg-opacity,.45);transition:opacity 1.5s ease;
+  }
+body::after{display:none}
 a{color:var(--primary)}
 button,input,select,textarea{font:inherit}
 button,select,input,textarea{color:var(--foreground)}
@@ -202,9 +216,15 @@ textarea{min-height:96px;resize:vertical}
 .ping-dot{position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:#e8a33d;box-shadow:0 0 6px #000;pointer-events:none}
 @keyframes pingring{0%{transform:scale(.4);opacity:1}100%{transform:scale(3.4);opacity:0}}
 
-/* ---- Usability pass (v1.01): phone-first tap targets, layout, hints ----
-   Presentation only: no ids, keys or behaviour change here. */
-.hint{flex-basis:100%;margin:2px 0 0;font-size:.85rem;color:var(--muted-foreground)}
+/* ---- Usability pass (v1.01) + site treatment (v1.02) ----
+   Presentation only: no ids, keys or shared-state shapes change here.
+   Buttons take the hub treatment (transparent, amber on hover/tap and
+   when pressed); the backdrop rules sit with the body rule above. */
+.btn:hover{background:transparent;color:var(--primary);border-color:var(--primary)}
+.btn[aria-pressed="true"]{background:transparent;color:var(--primary);border-color:var(--primary)}
+#ambBtn[aria-pressed="true"]{color:var(--primary);border-color:var(--primary)}
+body.bg-animated::before{animation:none}
+@media (prefers-reduced-motion: reduce){body::before{animation:none !important}}
 .map-tools .btn{min-height:48px;padding:12px 18px;font-size:1rem}
 .map-tools .atlas-toggle{min-height:48px}
 .lib-item{min-height:64px}
@@ -231,18 +251,18 @@ input,select,textarea{font-size:16px}
 }
 </style>
 </head>
-<body>
+<body data-scene="bastion-streets">
 <div class="page">
   <header class="vtt-head">
     <h1>APOC VTT</h1>
     <span class="muted small" id="siteVersion" hidden></span>
+    <button class="btn" id="ambBtn" type="button" aria-pressed="false" title="Toggle animated scenes and ambient sound">🔇 Ambience off</button>
   </header>
   <section class="panel" id="mapPanel" aria-label="The VTT — Maps">
     <p class="eyebrow">Campaign map</p>
     <p class="muted">The Realms as Forgotten Realms canon left them when the APOC hit — Shaun's thousand years of lore layer over this.</p>
     <p class="map-note"><strong>The Bastion of Last Hope</strong> — on this map, it is the city on the Sword Coast printed as <strong>Waterdeep</strong>: Waterdeep is its original name, and the Bastion of Last Hope is the name it carries now. Everything the map shows for Waterdeep — its streets, Undermountain below it, its history — is the Bastion's own pre-APOC past, altered by what the APOC did to it.</p>
     <p class="muted">The world was decimated. Everywhere else is pretty much a ghost town or dead. Life did come back to the surface but diminished. Changed. Altered. The grey over this map is the Fog of Life — always grey, no sun, no stars — and the surviving cities are the pockets that held. What is dead, what is ruined, and what came back changed, the table marks as it learns.</p>
-    <p class="hint">Everything here is shared live — the map, tokens, dice and turn order are the same on every screen at the table.</p>
     <div class="map-tools">
       <div class="field">
         <label for="placeSearch">Find a place — the atlas, stripped down and APOC-screened</label>
@@ -260,7 +280,6 @@ input,select,textarea{font-size:16px}
       <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
       <button type="button" class="btn primary" id="projBtn">Project to TV</button>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
-      <p class="hint">Switch the shared map, or expand it — Project sends a clean player-only view to the TV.</p>
     </div>
     <div class="map-tools">
       <label class="atlas-toggle"><input type="checkbox" id="gridToggle"> Grid</label>
@@ -279,13 +298,11 @@ input,select,textarea{font-size:16px}
       <button type="button" class="btn" id="pingBtn" aria-pressed="false">Ping</button>
       <button type="button" class="btn" id="libBtn" aria-pressed="false">Token repository</button>
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
-      <span class="muted small" id="tokenStatus">Tokens load from the shared board…</span>
-      <p class="hint">Arm Ruler or Ping, then tap the map. The token repository holds ready-made tokens — pick one, then tap Place.</p>
+      <span class="muted small" id="tokenStatus"></span>
     </div>
     <div class="map-tools">
       <button type="button" class="btn" id="gmBtn" aria-pressed="false">GM view: off</button>
       <span class="muted small" id="gmStatus"></span>
-      <span class="hint">For the DM — fog controls and GM-only tokens stay hidden until GM view is on.</span>
     </div>
     <div class="map-tools" id="fogControls" hidden>
       <label class="atlas-toggle"><input type="checkbox" id="fogEnabled"> Fog of war on this map</label>
@@ -400,7 +417,6 @@ input,select,textarea{font-size:16px}
       </aside>
     </div>
     <form id="markerForm" class="marker-form" hidden>
-      <p class="hint">This marker saves to the shared map — everybody sees it.</p>
       <div class="form-grid">
         <div class="field">
           <label for="markerName">Marker name</label>
@@ -432,7 +448,6 @@ input,select,textarea{font-size:16px}
       </div>
     </form>
     <form id="tokenForm" class="marker-form" hidden>
-      <p class="hint">HP and status markers show on the token for the whole table.</p>
       <div class="form-grid">
         <div class="field">
           <label for="tokenName">Token name</label>
@@ -496,7 +511,6 @@ input,select,textarea{font-size:16px}
     <div class="vtt-panel">
       <div class="vtt-col">
         <h3>Dice roller — shared log</h3>
-        <p class="hint">Tap a die or type a roll like 2d6+3 — every roll lands in the shared log for the whole table.</p>
         <div class="form-grid">
           <div class="field">
             <label for="diceName">Rolling as</label>
@@ -534,7 +548,6 @@ input,select,textarea{font-size:16px}
       </div>
       <div class="vtt-col">
         <h3>Initiative — turn order</h3>
-        <p class="hint">Start from the tokens on the map, then step through the turns with Next.</p>
         <p class="muted small" id="initMeta">No combat running.</p>
         <div class="map-actions">
           <button type="button" class="btn primary" id="initStartBtn">Start from tokens</button>
@@ -1945,5 +1958,154 @@ setInterval(loadSharedEntries, 60000);
           })
           .catch(function () {});
       </script>
+<script>
+"use strict";
+/* ================= Backdrop slideshow — the tracker shell's, ported =================
+   The backdrop stays pinned in place (body::before) while it cycles
+   through every scene background; a scene picked in the tracker's
+   Campaign Status jumps the show to that scene, then it keeps cycling.
+   The scene lives in the same shared store (site_settings key
+   "campaign_status"), read here on the same 60-second rhythm as the
+   entry links. Scene files are hotlinked from the tracker site until
+   they are uploaded to this repo under assets/scenes/ — the local
+   copies sit at those same relative paths. */
+(function(){
+  const SCENE_BASE = "https://11durrum11.github.io/APOC-Campaign-Tracker/";
+  const SCENES = {
+    "bastion-streets":      "assets/scenes/bastion-streets.webp",
+    "market-guild-streets": "assets/scenes/market-guild-streets.webp",
+    "lower-quarter":        "assets/scenes/lower-quarter.webp",
+    "city-approach":        "assets/scenes/city-approach.webp",
+    "winding-dock-road":    "assets/scenes/winding-dock-road.webp",
+    "watch-precinct":       "assets/scenes/watch-precinct.webp",
+    "broad-avenue":         "assets/scenes/broad-avenue.webp"
+  };
+  const BG_FILES = [...new Set(Object.values(SCENES).map(f => SCENE_BASE + f))];
+  let bgIdx = 0;
+  BG_FILES.forEach(f => { const im = new Image(); im.src = f; });
+  function paintBackdrop(){
+    document.body.style.setProperty("--scene-image", `url("${BG_FILES[bgIdx]}")`);
+  }
+  function cycleBackdrop(){
+    document.body.style.setProperty("--bg-opacity", "0");
+    setTimeout(() => {
+      bgIdx = (bgIdx + 1) % BG_FILES.length;
+      paintBackdrop();
+      document.body.style.setProperty("--bg-opacity", ".45");
+    }, 1500);
+  }
+  function jumpBackdropTo(sceneKey){
+    const f = SCENES[sceneKey];
+    const i = f ? BG_FILES.indexOf(SCENE_BASE + f) : -1;
+    if (i >= 0) { bgIdx = i; paintBackdrop(); document.body.dataset.scene = sceneKey; }
+  }
+  if (BG_FILES.length > 1) {
+    setInterval(cycleBackdrop, 14000);
+  }
+  let lastScene = null;
+  async function syncScene(){
+    if (!db) return;
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", "campaign_status").maybeSingle();
+    if (error || !data || !data.value) return;
+    const s = data.value.scene;
+    if (s && s !== lastScene) { lastScene = s; jumpBackdropTo(s); }
+  }
+  syncScene();
+  setInterval(syncScene, 60000);
+})();
+</script>
+<script>
+/* Ambience for APOC VTT — the tracker shell's engine, ported
+   (2026-11-06): synthesized ambient sound, one toggle. Sound is
+   synthesized live with Web Audio — no audio files. The toggle click
+   is the user gesture browsers require, so sound can start the moment
+   it is switched on. Volume is wallpaper-low. Scene accents follow the
+   map loaded in the VTT (tracked locally): the Faerûn world map rides
+   the engine's stronger "world" wind; Saint James's tavern takes its
+   hearth-crackle "quests" profile. The toggle state keeps the
+   tracker's localStorage key, so it carries across the APOC sites. */
+(function(){
+  var MAP_SCENE = { 'faerun':'world', 'saint-james':'quests' };
+  var currentScene = 'world';
+  function setScene(mapId){
+    currentScene = MAP_SCENE[mapId] || 'world';
+    var panel = document.getElementById('mapPanel');
+    if (panel) panel.dataset.scene = currentScene;
+  }
+  setScene('faerun');
+  var mapSel = document.getElementById('mapSelect');
+  if (mapSel) {
+    setScene(mapSel.value);
+    mapSel.addEventListener('change', function(){ setScene(mapSel.value); });
+    setInterval(function(){ setScene(mapSel.value); }, 2000);
+  }
+
+  var on = false, ctx = null, master = null, windGain = null, windFilter = null, timer = null;
+  try { on = window.localStorage.getItem('livetracker:ambience') === '1'; } catch(e) {}
+  var btn = document.getElementById('ambBtn');
+
+  function noiseBuffer(){
+    var len = ctx.sampleRate * 2, buf = ctx.createBuffer(1, len, ctx.sampleRate), d = buf.getChannelData(0), last = 0;
+    for (var i=0;i<len;i++){ var w = Math.random()*2-1; last = (last + 0.02*w)/1.02; d[i] = last*3.2; }
+    return buf;
+  }
+  function startAudio(){
+    if (ctx) { ctx.resume(); return; }
+    var AC = window.AudioContext || window.webkitAudioContext; if(!AC) return;
+    ctx = new AC();
+    master = ctx.createGain(); master.gain.value = 0.0; master.connect(ctx.destination);
+    var src = ctx.createBufferSource(); src.buffer = noiseBuffer(); src.loop = true;
+    windFilter = ctx.createBiquadFilter(); windFilter.type='lowpass'; windFilter.frequency.value = 420;
+    windGain = ctx.createGain(); windGain.gain.value = 0.55;
+    src.connect(windFilter); windFilter.connect(windGain); windGain.connect(master);
+    src.start();
+    var lfo = ctx.createOscillator(); lfo.frequency.value = 0.07;
+    var lfoGain = ctx.createGain(); lfoGain.gain.value = 130;
+    lfo.connect(lfoGain); lfoGain.connect(windFilter.frequency); lfo.start();
+    master.gain.linearRampToValueAtTime(0.5, ctx.currentTime + 1.5);
+    scheduleAccents();
+  }
+  function crackle(){ // tavern hearth / forge-like pops
+    if(!ctx || !on) return;
+    var t = ctx.currentTime, dur = 0.03 + Math.random()*0.05;
+    var s = ctx.createBufferSource(); s.buffer = noiseBuffer();
+    var f = ctx.createBiquadFilter(); f.type='bandpass'; f.frequency.value = 900 + Math.random()*1600; f.Q.value = 6;
+    var g = ctx.createGain(); g.gain.setValueAtTime(0.25 + Math.random()*0.3, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random()*1.2, dur + 0.05);
+  }
+  function tick(vol, freq){ // clock / page tick
+    if(!ctx || !on) return;
+    var t = ctx.currentTime, o = ctx.createOscillator(); o.type='square'; o.frequency.value = freq;
+    var g = ctx.createGain(); g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+    o.connect(g); g.connect(master); o.start(t); o.stop(t + 0.06);
+  }
+  function scheduleAccents(){
+    if (timer) clearInterval(timer);
+    timer = setInterval(function(){
+      if(!on || !ctx) return;
+      var scene = currentScene;
+      if (scene === 'quests'){ if (Math.random() < 0.85) crackle(); if (Math.random() < 0.4) setTimeout(crackle, 90 + Math.random()*220); }
+      else if (scene === 'time'){ tick(0.12, 1900); }
+      else if (scene === 'journal' || scene === 'lore'){ if (Math.random() < 0.35) tick(0.05, 2600 + Math.random()*600); }
+      else if (scene === 'world'){ windFilter.frequency.value = 520; }
+      if (scene !== 'world' && windFilter) windFilter.frequency.value = 420;
+    }, 1000);
+  }
+  function apply(){
+    if (btn) { btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.textContent = on ? '🔊 Ambience on' : '🔇 Ambience off'; }
+    document.body.classList.toggle('bg-animated', on);
+    try { window.localStorage.setItem('livetracker:ambience', on ? '1' : '0'); } catch(e) {}
+    if (on) startAudio();
+    else if (ctx && master) master.gain.linearRampToValueAtTime(0.0, ctx.currentTime + 0.6);
+  }
+  if (btn) btn.addEventListener('click', function(){ on = !on; apply(); });
+  if (on) { document.body.classList.add('bg-animated'); if (btn) { btn.setAttribute('aria-pressed','true'); btn.textContent='🔊 Ambience on'; }
+    var arm = function(){ startAudio(); window.removeEventListener('pointerdown', arm); window.removeEventListener('keydown', arm); };
+    window.addEventListener('pointerdown', arm); window.addEventListener('keydown', arm); }
+})();
+</script>
 </body>
 </html>
