@@ -129,7 +129,10 @@ body.map-fs .expand-exit-wrap{display:block}
 .map-stage:fullscreen{position:relative;width:100%;height:100%;background:#05070a;align-items:stretch}
 .map-stage:fullscreen .map-side{display:flex;flex-direction:column}
 .map-stage:fullscreen .apoc-map{flex:1 1 auto;height:100%;min-height:0}
-.map-stage:fullscreen .fs-tools{position:absolute;left:50%;transform:translateX(-50%);bottom:10px;z-index:1200;max-width:94vw;background:hsla(222,20%,10%,.55);border:1px solid hsl(220 16% 34%);border-radius:12px;padding:6px 10px}
+.map-stage:fullscreen .fs-edge{position:absolute;left:50%;transform:translateX(-50%);z-index:1200;width:max-content;max-width:96vw;display:flex;flex-direction:column;gap:6px;background:hsla(222,20%,10%,.55);border:1px solid hsl(220 16% 34%);border-radius:12px;padding:6px 10px;backdrop-filter:blur(3px)}
+.map-stage:fullscreen .fs-edge-top{top:10px}
+.map-stage:fullscreen .fs-edge-bottom{bottom:10px;max-height:44vh;overflow-y:auto}
+.map-stage:fullscreen .fs-edge .map-tools{margin-top:0}
 #gmBtn{opacity:.48;filter:saturate(.3);transition:opacity .18s ease,filter .18s ease}
 #gmBtn.holding{opacity:.85;filter:saturate(.7)}
 #gmBtn[aria-pressed="true"]{opacity:1;filter:none}
@@ -1416,15 +1419,15 @@ setInterval(loadSharedEntries, 60000);
     setTimeout(() => map.invalidateSize(), 280);
   }
   $("mapExpandBtn").addEventListener("click", () => {
-    /* Shaun (2026-11-06, restated): Expand map expands the MAP AREA ONLY —
-       the Leaflet element itself, edge to edge. Not the stage, not the
-       library, not the tool rows. (The separate "Full screen" button in
-       the draw row keeps the stage treatment with the art tools along.)
-       The old whole-panel overlay (setExpanded) remains only as the
-       fallback when element fullscreen is unavailable or refused. */
+    /* Shaun (2026-11-06, final shape): Expand map enlarges the MAP AREA —
+       the stage (map + its docked library) fills the screen — and while
+       it's enlarged, ALL the utensils float around the map's edges
+       (fsToolsIn below). The old whole-panel overlay (setExpanded)
+       remains only as the fallback when element fullscreen is
+       unavailable or refused. */
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
     if (document.body.classList.contains("map-expanded")) { setExpanded(false); return; }
-    const el = $("apocMap");
+    const el = document.querySelector(".map-stage");
     let started = false;
     try {
       if (el.requestFullscreen) { const r = el.requestFullscreen(); started = true; if (r && r.catch) r.catch(() => setExpanded(true)); }
@@ -1443,40 +1446,41 @@ setInterval(loadSharedEntries, 60000);
     return d;
   };
   expandExitCtl.addTo(map);
-  /* When the map is maximized (the stage is the fullscreen element), the
-     art utensils come along: the Draw & paint row floats at the bottom
-     edge of the fullscreen map, translucent, nothing over the middle of
-     the play area (Shaun's standing fullscreen spec, restated 2026-11-06).
-     On exit the row goes back to its exact home below the map. */
-  let fsToolsHome = null;
+  /* When the map is enlarged (the stage is the fullscreen element), ALL
+     the utensils float around the map's edges (Shaun's spec, stated
+     three times 2026-11-06): every tool row leaves its place below the
+     map and hovers, translucent, along the edges of the enlarged map —
+     the first row at the top edge, the rest stacked along the bottom
+     edge — nothing over the middle of the play area. On exit every row
+     goes back to its exact home below the map. */
+  let fsEdgeHomes = null;
   function fsToolsIn(){
-    const row = $("drawStatus") ? $("drawStatus").closest(".map-tools") : null;
     const stage = document.querySelector(".map-stage");
-    if (!row || !stage || fsToolsHome) return;
-    fsToolsHome = { parent: row.parentNode, next: row.nextSibling };
-    row.classList.add("fs-tools");
-    stage.appendChild(row);
+    if (!stage || fsEdgeHomes) return;
+    const rows = Array.from(document.querySelectorAll("#mapPanel .map-tools")).filter(r => !stage.contains(r));
+    if (!rows.length) return;
+    fsEdgeHomes = rows.map(r => ({ row: r, parent: r.parentNode, next: r.nextSibling }));
+    const top = document.createElement("div"); top.className = "fs-edge fs-edge-top";
+    const bot = document.createElement("div"); bot.className = "fs-edge fs-edge-bottom";
+    rows.forEach((r, i) => (i === 0 ? top : bot).appendChild(r));
+    stage.appendChild(top); stage.appendChild(bot);
   }
   function fsToolsOut(){
-    if (!fsToolsHome) return;
-    const row = document.querySelector(".map-tools.fs-tools");
-    if (row) {
-      row.classList.remove("fs-tools");
-      if (fsToolsHome.next && fsToolsHome.next.parentNode === fsToolsHome.parent) fsToolsHome.parent.insertBefore(row, fsToolsHome.next);
-      else fsToolsHome.parent.appendChild(row);
+    if (!fsEdgeHomes) return;
+    for (let i = fsEdgeHomes.length - 1; i >= 0; i--) {
+      const h = fsEdgeHomes[i];
+      if (h.next && h.next.parentNode === h.parent) h.parent.insertBefore(h.row, h.next);
+      else h.parent.appendChild(h.row);
     }
-    fsToolsHome = null;
+    document.querySelectorAll(".fs-edge").forEach(e => e.remove());
+    fsEdgeHomes = null;
   }
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && document.body.classList.contains("map-expanded")) setExpanded(false);
-    const fsEl = document.fullscreenElement;
-    const stageFs = !!fsEl && fsEl.classList.contains("map-stage");
-    const mapOnlyFs = !!fsEl && fsEl.id === "apocMap";
-    /* map-fs (the on-map Exit control) shows for EITHER fullscreen; the
-       floating art tools come along only for the stage treatment. */
-    document.body.classList.toggle("map-fs", stageFs || mapOnlyFs);
+    const stageFs = !!document.fullscreenElement && document.fullscreenElement.classList.contains("map-stage");
+    document.body.classList.toggle("map-fs", stageFs);
     if (stageFs) fsToolsIn(); else fsToolsOut();
-    if (!document.body.classList.contains("map-expanded")) $("mapExpandBtn").textContent = (stageFs || mapOnlyFs) ? "⛶ Exit full screen" : "⛶ Expand map";
+    if (!document.body.classList.contains("map-expanded")) $("mapExpandBtn").textContent = stageFs ? "⛶ Exit full screen" : "⛶ Expand map";
     setTimeout(() => map.invalidateSize(), 200);
   });
 
