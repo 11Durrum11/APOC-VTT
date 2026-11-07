@@ -465,6 +465,27 @@ body.displaying .td-ui{display:none}
 /* ---- map generator ---- */
 #genNest{flex:1 1 100%}
 .gen-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:4px 2px}
+
+/* ---- v1.54: map maximized in its bubble (Shaun, 2026-11-06 ~21:25-21:28):
+   the map viewing area uses the whole panel edge to edge on all four
+   sides — flush at the top (no margin holding the stage down), flush
+   left (the black side strip gone), opened all the way up (wider
+   page, taller box) and extending all the way down to the point
+   where the under-map status text sat (no bottom band reserved for
+   it: the status line keeps no margin, and an emptied status line
+   takes no space at all). The fit script at the end of the body
+   sizes the Leaflet box to the current map's own aspect inside this
+   maximized stage, so the map image itself fills the box edge to
+   edge with no letterbox strip on any side. Fullscreen / Expand /
+   TV display keep their own full-bleed rules — the script clears
+   its inline sizing in those modes. */
+.page{width:min(1720px,100%)}
+#mapPanel{padding-top:6px}
+#mapPanel .map-stage{margin-top:0}
+.apoc-map{height:min(88vh,980px)}
+#tdWrap{margin-top:0}
+.map-status{margin-top:0}
+#mapStatus:empty{display:none}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -5652,7 +5673,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-06-2212";
+        var BUILD_STAMP = "2026-11-06-2215";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6475,6 +6496,87 @@ function floorConnected(L, cols, rows){
   window.addEventListener("resize", applyAll);
   document.addEventListener("fullscreenchange", function(){ setTimeout(applyAll, 180); });
   if (mq.addEventListener) mq.addEventListener("change", function(){ repoDefault(); applyAll(); });
+})();
+</script>
+
+<script>
+/* ================= v1.54: map fills its bubble (Shaun) =================
+   Sizes the Leaflet box to the current map's aspect inside the
+   maximized stage: flush left, flush top, as large as the stage
+   allows, all the way down — no black letterbox strip on any side
+   and no dead band under the map. Pure view sizing: tokens, fog,
+   drawings, lighting and markers all live in map coordinates, so a
+   box resize cannot misalign anything (Leaflet reprojects on
+   invalidateSize). On a map switch or rotation — the moments the
+   engine itself fits the full frame — the fit is redone at the new
+   size, captured from the engine's own current bounds so the frame
+   units are always the engine's. The opening Faerun slice view is
+   left exactly as authored. Fullscreen, Expand and the TV display
+   copy clear the inline sizing and keep their full-bleed CSS. */
+(function(){
+  var el = document.getElementById("apocMap");
+  if (!el || !window.L) return;
+  var mq = window.matchMedia("(min-width: 821px)");
+  var curImg = null, primed = false, timer = 0;
+  function blocked(){
+    return !mq.matches || !!document.fullscreenElement ||
+      document.body.classList.contains("displaying") ||
+      document.body.classList.contains("map-expanded") ||
+      document.body.classList.contains("map-fs");
+  }
+  function baseImg(){
+    var panes = el.querySelectorAll(".leaflet-pane");
+    for (var i = 0; i < panes.length; i++){
+      if (panes[i].style.zIndex === "205"){
+        var img = panes[i].querySelector("img.leaflet-image-layer");
+        if (img) return img;
+      }
+    }
+    return el.querySelector("img.leaflet-image-layer");
+  }
+  function fit(refit){
+    var m = window.map;
+    if (blocked()){ el.style.width = ""; el.style.height = ""; if (m && m.invalidateSize) m.invalidateSize({ pan: false }); return; }
+    var img = baseImg();
+    if (!img || !img.naturalWidth || !img.naturalHeight) return;
+    var keep = null;
+    if (refit && m && m.getBounds){ try { keep = m.getBounds(); } catch(e) { keep = null; } }
+    var side = el.parentElement;
+    var availW = side ? side.clientWidth : el.clientWidth;
+    if (!availW) return;
+    var maxH = Math.min(Math.round(window.innerHeight * 0.88), 980);
+    var a = img.naturalWidth / img.naturalHeight;
+    var w = availW, h = Math.round(w / a);
+    if (h > maxH){ h = maxH; w = Math.round(h * a); }
+    if (h < 320){ h = Math.min(320, maxH); w = Math.round(h * a); if (w > availW){ w = availW; h = Math.round(w / a); } }
+    el.style.width = w + "px";
+    el.style.height = h + "px";
+    el.style.marginLeft = "0";
+    el.style.marginRight = "auto";
+    if (m && m.invalidateSize){
+      m.invalidateSize({ pan: false });
+      if (refit && keep){ try { m.fitBounds(keep); } catch(e) {} }
+    }
+  }
+  function schedule(refit){
+    clearTimeout(timer);
+    timer = setTimeout(function(){ fit(refit); }, 60);
+  }
+  function watch(){
+    var img = baseImg();
+    if (img === curImg) return;
+    var isNew = primed;
+    curImg = img; primed = true;
+    if (!img) return;
+    if (img.complete && img.naturalWidth) schedule(isNew);
+    else img.addEventListener("load", function(){ schedule(isNew); }, { once: true });
+  }
+  new MutationObserver(watch).observe(el, { childList: true, subtree: true });
+  new MutationObserver(function(){ schedule(false); }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  window.addEventListener("resize", function(){ schedule(false); });
+  document.addEventListener("fullscreenchange", function(){ schedule(false); });
+  watch();
+  schedule(false);
 })();
 </script>
 </body>
