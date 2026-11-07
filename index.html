@@ -2848,8 +2848,8 @@ setInterval(loadSharedEntries, 60000);
     db.channel("markers-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE, filter: "key=eq.map_markers" }, () => loadMarkers(true)).subscribe();
   } catch(e) { /* realtime is a bonus; the 60-second refresh stands */ }
 
-  /* ---- Ping (Roll20): arm Ping, tap the map, every screen at the table sees
-        the pulse. Shared through the same store: key vtt_ping (per-map suffix
+  /* ---- Ping (Roll20): arm Ping, press-and-hold the map, every screen at
+        the table sees the pulse. Shared through the same store: key vtt_ping (per-map suffix
         rule like the other VTT keys), value {x, y, ts, by} in map % coords.
         One shot: dropping a ping disarms the tool again. ---- */
   const pingKey = () => currentMapId === "faerun" ? "vtt_ping" : `vtt_ping_${currentMapId}`;
@@ -2880,12 +2880,52 @@ setInterval(loadSharedEntries, 60000);
     if (db) await db.from(SETTINGS_TABLE).upsert({ key: pingKey(), value: rec, updated_at: new Date().toISOString() }, { onConflict: "key" });
   }
   $("pingBtn").addEventListener("click", () => setArmed(armedMode === "ping" ? null : "ping"));
-  map.on("click", e => {
+  /* Roll20 rule (Shaun, 2026-11-06): with Ping armed, an ordinary tap must
+     NOT ping, and neither must a grab — arming disables map dragging, so a
+     grab-and-drag ended as a plain Leaflet click and dropped a ping every
+     time he caught the map. A ping now needs a deliberate press-and-hold in
+     place (~700 ms without drifting more than a few px); letting go early
+     or moving cancels it. Still one shot: a dropped ping disarms the tool. */
+  const PING_HOLD_MS = 700, PING_HOLD_SLOP = 6;
+  let pingHoldTimer = null, pingHoldAt = null, pingHoldLatLng = null, pingFired = false;
+  function cancelPingHold(){
+    if (pingHoldTimer) { clearTimeout(pingHoldTimer); pingHoldTimer = null; }
+    pingHoldAt = null; pingHoldLatLng = null;
+  }
+  const pingSurface = map.getContainer();
+  pingSurface.addEventListener("pointerdown", e => {
     if (armedMode !== "ping" || isProjecting() || rulerOn) return;
-    const p = toXY(e.latlng);
-    setArmed(null);
-    dropPing(p);
+    cancelPingHold();
+    pingHoldAt = { x: e.clientX, y: e.clientY };
+    try { pingHoldLatLng = map.mouseEventToLatLng(e); } catch (err) { pingHoldLatLng = null; }
+    if (!pingHoldLatLng) { pingHoldAt = null; return; }
+    pingHoldTimer = setTimeout(() => {
+      pingHoldTimer = null;
+      if (armedMode !== "ping" || isProjecting() || rulerOn || !pingHoldLatLng) { cancelPingHold(); return; }
+      const p = toXY(pingHoldLatLng);
+      cancelPingHold();
+      /* Disarm on release, not here: the pointerup that ends the hold also
+         produces a Leaflet click, and the other click handlers must still
+         see Ping armed when it lands — otherwise the marker editor opens
+         on top of the ping. pingRelease() below does the disarm. */
+      pingFired = true;
+      dropPing(p);
+    }, PING_HOLD_MS);
   });
+  pingSurface.addEventListener("pointermove", e => {
+    if (!pingHoldAt) return;
+    if (Math.abs(e.clientX - pingHoldAt.x) > PING_HOLD_SLOP || Math.abs(e.clientY - pingHoldAt.y) > PING_HOLD_SLOP) cancelPingHold();
+  });
+  function pingRelease(){
+    if (pingFired) {
+      pingFired = false;
+      setTimeout(() => { if (armedMode === "ping") setArmed(null); }, 60);
+    }
+    cancelPingHold();
+  }
+  pingSurface.addEventListener("pointerup", pingRelease);
+  pingSurface.addEventListener("pointercancel", pingRelease);
+  pingSurface.addEventListener("pointerleave", cancelPingHold);
   setInterval(() => loadPing(true), 4000);
   loadPing(true);
 
@@ -5668,7 +5708,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-06-2316";
+        var BUILD_STAMP = "2026-11-06-2321";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
