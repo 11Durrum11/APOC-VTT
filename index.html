@@ -142,9 +142,27 @@ body.map-fs .expand-exit-wrap{display:block}
 .map-stage:fullscreen .fs-rail .vtt-col{flex:none;width:100%;max-width:none}
 .map-stage:fullscreen .fs-rail .ff-grip{display:none}
 .ff-grip{display:none}
-#gmBtn{opacity:.48;filter:saturate(.3);transition:opacity .18s ease,filter .18s ease}
+#gmBtn{touch-action:none;opacity:.48;filter:saturate(.3);transition:opacity .18s ease,filter .18s ease}
 #gmBtn.holding{opacity:.85;filter:saturate(.7)}
 #gmBtn[aria-pressed="true"]{opacity:1;filter:none}
+  /* v1.60: ONE row of buttons under the map (Shaun, voice call 2026-11-06 ~23:29).
+     Every control set lives nested inside exactly one row button, collapsed on
+     load; opening one closes the others. The row sits in page flow — the
+     perimeter/parking system never touches it. */
+  .ctl-row { margin: 10px 0 4px; }
+  .ctl-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .ctl-bar > #gmBtn { margin-left: 0; }
+  .ctl-bar > #gmStatus { flex-basis: 100%; margin: 0; }
+  .ctl-tab { font: inherit; font-size: 0.95rem; padding: 9px 16px; border-radius: 10px; border: 1px solid #6b5a33; background: #241d12; color: #f3e2b3; cursor: pointer; }
+  .ctl-tab[aria-expanded="true"] { background: #6b5a33; color: #fff7e0; }
+  .ctl-tab .ctl-caret { opacity: 0.75; font-size: 0.8em; margin-left: 5px; }
+  .ctl-set { margin-top: 8px; border: 1px solid #3a3f47; border-radius: 12px; padding: 10px 12px; background: rgba(16, 19, 24, 0.65); }
+  .ctl-set[hidden] { display: none; }
+  .ctl-set > .map-tools, .ctl-set > .vtt-panel { margin: 0 0 8px; }
+  .ctl-set > .map-tools:last-child, .ctl-set > .vtt-panel:last-child { margin-bottom: 0; }
+  .ctl-set > form.marker-form { position: static; margin: 8px 0 0; }
+  .ctl-set .vtt-panel { display: flex; gap: 14px; flex-wrap: wrap; }
+  .ctl-set .vtt-col { flex: 1 1 320px; min-width: 280px; }
 .tk-icon{background:none;border:none}
 .tk{position:relative}
 .tk-disc{border-radius:50%;border:3px solid #0d0f14;box-shadow:0 2px 8px rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-weight:700;color:#101319;overflow:hidden;margin:0 auto}
@@ -392,6 +410,7 @@ body.displaying .page{max-width:none;padding:0}
 body.displaying .vtt-head,
 body.displaying #mapPanel>p,
 body.displaying .map-tools,
+body.displaying .ctl-row,
 body.displaying .marker-form,
 body.displaying .vtt-panel,
 body.displaying .map-repo,
@@ -607,7 +626,6 @@ body.displaying .td-ui{display:none}
       <label class="atlas-toggle"><input type="checkbox" id="tokensToggle" checked> Tokens</label>
       <button type="button" class="btn" id="rulerBtn" aria-pressed="false">Ruler</button>
       <button type="button" class="btn" id="pingBtn" aria-pressed="false">Ping</button>
-      <button type="button" class="btn" id="libBtn" aria-pressed="false">Token repository</button>
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
       <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>GM view: off</button>
       <span class="muted small" id="tokenStatus"></span>
@@ -625,6 +643,7 @@ body.displaying .td-ui{display:none}
       <button type="button" class="btn" id="lightPreviewBtn" aria-pressed="false">Preview as player</button>
       <button type="button" class="btn" id="wallBtn" aria-pressed="false">Wall</button>
       <button type="button" class="btn" id="doorBtn" aria-pressed="false">Door</button>
+      <button type="button" class="btn" id="windowBtn" aria-pressed="false">Window</button>
       <div class="field" style="flex:0 1 auto">
         <label for="lightPreset">Light source</label>
         <select id="lightPreset">
@@ -635,7 +654,7 @@ body.displaying .td-ui{display:none}
         </select>
       </div>
       <button type="button" class="btn" id="lightPlaceBtn" aria-pressed="false">Place light</button>
-      <button type="button" class="btn" id="wallEraseBtn" aria-pressed="false">Erase wall / door</button>
+      <button type="button" class="btn" id="wallEraseBtn" aria-pressed="false">Erase wall / door / window</button>
       <button type="button" class="btn" id="wallClearBtn">Clear walls</button>
       <span class="muted small" id="lightStatus"></span>
     </div>
@@ -1965,17 +1984,6 @@ setInterval(loadSharedEntries, 60000);
     }));
   }
   buildLibrary();
-  $("libBtn").addEventListener("click", () => {
-    const p = $("tokenLib");
-    p.hidden = !p.hidden;
-    $("libBtn").setAttribute("aria-pressed", String(!p.hidden));
-    if (!p.hidden) {
-      const al = $("artLibrary");
-      if (al && !al.classList.contains("open")) { al.classList.add("open"); const ah = al.querySelector(":scope > .nest-head"); if (ah) ah.setAttribute("aria-expanded", "true"); }
-      p.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  });
-
   $("tokenCancel").addEventListener("click", closeTokenEditor);
   $("tokenColorBtn").addEventListener("click", () => {
     toggleWheelFor((hex) => {
@@ -2132,6 +2140,8 @@ setInterval(loadSharedEntries, 60000);
     $("gmBtn").setAttribute("aria-pressed", String(gmView));
     $("fogControls").hidden = !gmView;
     $("lightControls").hidden = !gmView;
+    const fT = $("fogTab"); if (fT) fT.hidden = !gmView; /* v1.60: the row's Fog/Lighting buttons exist only while GM is on */
+    const lT = $("lightTab"); if (lT) lT.hidden = !gmView;
     renderFog(); drawTokens(); renderDraw();
   }
   /* Hold-to-toggle (Shaun, 2026-11-06): he doesn't want to hit GM view by
@@ -2159,6 +2169,7 @@ setInterval(loadSharedEntries, 60000);
     const HOLD_MS = 800;
     btn.title = "Hold for a second to switch GM view on or off — a plain click does nothing, so it can't be hit by accident";
     let timer = null, tick = null, t0 = 0, hintTimer = null;
+    let startX = 0, startY = 0;
     const hint = (msg) => {
       if (!status) return;
       status.textContent = msg;
@@ -2170,7 +2181,15 @@ setInterval(loadSharedEntries, 60000);
       btn.style.background = "linear-gradient(90deg, rgba(240,180,60,.45) " + (p * 100) + "%, transparent " + (p * 100) + "%)";
     };
     const clearPaint = () => { btn.style.background = ""; };
-    const start = () => {
+    const start = (e) => {
+      /* v1.60 hardening: capture the pointer so a small drift off the
+         button mid-hold no longer cancels the switch through
+         pointerleave (the v1.59 failure mode); only a deliberate
+         drag-away (>56px) cancels, via the pointermove check below. */
+      if (e && e.pointerId !== undefined) {
+        startX = e.clientX; startY = e.clientY;
+        try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+      }
       btn.classList.add("holding");
       t0 = Date.now();
       paint();
@@ -2198,6 +2217,10 @@ setInterval(loadSharedEntries, 60000);
       if (shortPress) hint("Keep holding — GM view switches after a second.");
     };
     btn.addEventListener("pointerdown", start);
+    btn.addEventListener("pointermove", (e) => {
+      if (!timer) return;
+      if (Math.abs(e.clientX - startX) > 56 || Math.abs(e.clientY - startY) > 56) cancel(false);
+    });
     btn.addEventListener("pointerup", () => cancel(true));
     btn.addEventListener("pointerleave", () => cancel(false));
     btn.addEventListener("pointercancel", () => cancel(false));
@@ -4309,7 +4332,17 @@ setInterval(loadSharedEntries, 60000);
     curStamp = b.dataset.simg ? { img: b.dataset.simg } : { sym: b.dataset.ssym, color: b.dataset.scolor || "amber" };
     placeStamp(p);
   });
-  $("repoTab").addEventListener("click", () => $("libBtn").click());
+  $("repoTab").addEventListener("click", () => {
+    /* v1.60: the below-map Token repository button is gone (Shaun's order);
+       the Art Library dock stands on its own — this tab does its toggle. */
+    const p = $("tokenLib"); if (!p) return;
+    p.hidden = !p.hidden;
+    if (!p.hidden) {
+      const al = $("artLibrary");
+      if (al && !al.classList.contains("open")) { al.classList.add("open"); const ah = al.querySelector(":scope > .nest-head"); if (ah) ah.setAttribute("aria-expanded", "true"); }
+      p.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  });
 
 
   /* ================= v1.09: Dynamic lighting — walls, light sources, token vision =================
@@ -4319,9 +4352,11 @@ setInterval(loadSharedEntries, 60000);
      (layerForeground, z560, fgFx group) sits above it, reserved for
      overhead material — no foreground content exists yet.
      State per map in the shared store, key vtt_light / vtt_light_<mapId>:
-     { enabled, walls:[{id,kind:"wall"|"door",a:[x,y],b:[x,y],open}],
+     { enabled, walls:[{id,kind:"wall"|"door"|"window",a:[x,y],b:[x,y],open}],
        lights:[{id,name,x,y,bright,dim,color,flame}] } — positions in map %,
-     radii in feet (converted with the map's shared scale). Realtime +
+     radii in feet (converted with the map's shared scale). Windows (v1.60)
+     never block: light and vision pass straight through them; they are
+     drawn as boundaries in GM view and persist with the walls. Realtime +
      30-second refresh, same pattern as fog/drawings.
      Visibility: raycast polygon per emitter — rays only at wall-endpoint
      angles (±0.0001 rad), nearest segment hit clamped to the radius, arc
@@ -4394,6 +4429,7 @@ setInterval(loadSharedEntries, 60000);
     const segs = [];
     for (const w of lightState.walls) {
       if (w.kind === "door" && w.open) continue;
+      if (w.kind === "window") continue; /* v1.60: windows never occlude — light and vision pass straight through */
       const a = toUnits({ x: w.a[0], y: w.a[1] }), b = toUnits({ x: w.b[0], y: w.b[1] });
       segs.push([a[0], a[1], b[0], b[1]]);
     }
@@ -4430,6 +4466,10 @@ setInterval(loadSharedEntries, 60000);
       for (const w of lightState.walls) {
         const a = toLatLng(w.a[0], w.a[1]), b = toLatLng(w.b[0], w.b[1]);
         if (w.kind === "door") wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }));
+        else if (w.kind === "window") { /* v1.60: glass — dark-blue frame line under a pale-blue pane line */
+          wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#3d7ea6", weight: 5, opacity: 0.9, interactive: false }));
+          wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#bfe6f5", weight: 2, opacity: 0.95, interactive: false }));
+        }
         else wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#9aa0a8", weight: 3, interactive: false }));
       }
       for (const src of lightState.lights) {
@@ -4495,17 +4535,18 @@ setInterval(loadSharedEntries, 60000);
   /* ---- GM lighting controls ---- */
   function setLightArmed(mode){
     setArmed(mode);
-    for (const [id, m] of [["wallBtn", "wall"], ["doorBtn", "door"], ["lightPlaceBtn", "light-place"], ["wallEraseBtn", "wall-erase"]])
+    for (const [id, m] of [["wallBtn", "wall"], ["doorBtn", "door"], ["windowBtn", "window"], ["lightPlaceBtn", "light-place"], ["wallEraseBtn", "wall-erase"]])
       $(id).setAttribute("aria-pressed", String(mode === m));
-    if (mode !== "wall" && mode !== "door") { lightSegStart = null; previewLayer.clearLayers(); }
+    if (mode !== "wall" && mode !== "door" && mode !== "window") { lightSegStart = null; previewLayer.clearLayers(); }
   }
   $("wallBtn").addEventListener("click", () => setLightArmed(armedMode === "wall" ? null : "wall"));
   $("doorBtn").addEventListener("click", () => setLightArmed(armedMode === "door" ? null : "door"));
+  $("windowBtn").addEventListener("click", () => setLightArmed(armedMode === "window" ? null : "window"));
   $("lightPlaceBtn").addEventListener("click", () => setLightArmed(armedMode === "light-place" ? null : "light-place"));
   $("wallEraseBtn").addEventListener("click", () => setLightArmed(armedMode === "wall-erase" ? null : "wall-erase"));
   $("wallClearBtn").addEventListener("click", async () => {
     if (!lightState.walls.length) { lightStatusEl.textContent = "No walls on this map."; return; }
-    if (!confirm(`Clear all ${lightState.walls.length} wall / door segments on this map? Everybody loses them.`)) return;
+    if (!confirm(`Clear all ${lightState.walls.length} wall / door / window segments on this map? Everybody loses them.`)) return;
     lightState.walls = [];
     const ok = await saveLighting(); renderLighting();
     lightStatusEl.textContent = ok ? "Walls cleared for this map." : "Clear didn't save — refreshed.";
@@ -4540,12 +4581,12 @@ setInterval(loadSharedEntries, 60000);
   map.on("mousedown", e => {
     if (isProjecting() || !gmView) return;
     const p = toXY(e.latlng);
-    if (armedMode === "wall" || armedMode === "door") { lightSegStart = lightSegStart || p; return; }
+    if (armedMode === "wall" || armedMode === "door" || armedMode === "window") { lightSegStart = lightSegStart || p; return; }
     if (armedMode === "wall-erase") {
       const w = nearestSeg(p, null);
       if (w) {
         lightState.walls = lightState.walls.filter(x => x.id !== w.id);
-        saveLighting().then(ok => { renderLighting(); lightStatusEl.textContent = ok ? `${w.kind === "door" ? "Door" : "Wall"} erased.` : "Erase didn't save — refreshed."; if (!ok) loadLighting(true); });
+        saveLighting().then(ok => { renderLighting(); lightStatusEl.textContent = ok ? `${w.kind === "door" ? "Door" : w.kind === "window" ? "Window" : "Wall"} erased.` : "Erase didn't save — refreshed."; if (!ok) loadLighting(true); });
       }
       return;
     }
@@ -4558,12 +4599,12 @@ setInterval(loadSharedEntries, 60000);
     }
   });
   map.on("mousemove", e => {
-    if (!lightSegStart || (armedMode !== "wall" && armedMode !== "door")) return;
+    if (!lightSegStart || (armedMode !== "wall" && armedMode !== "door" && armedMode !== "window")) return;
     previewLayer.clearLayers();
-    previewLayer.addLayer(L.polyline([toLatLng(lightSegStart.x, lightSegStart.y), e.latlng], { color: armedMode === "door" ? "#e07b39" : "#9aa0a8", weight: 3, dashArray: "5 5", interactive: false }));
+    previewLayer.addLayer(L.polyline([toLatLng(lightSegStart.x, lightSegStart.y), e.latlng], { color: armedMode === "door" ? "#e07b39" : armedMode === "window" ? "#6ec7e8" : "#9aa0a8", weight: 3, dashArray: "5 5", interactive: false }));
   });
   map.on("mouseup", async e => {
-    if (!lightSegStart || (armedMode !== "wall" && armedMode !== "door")) return;
+    if (!lightSegStart || (armedMode !== "wall" && armedMode !== "door" && armedMode !== "window")) return;
     const start = lightSegStart, p = toXY(e.latlng);
     previewLayer.clearLayers();
     const d = Math.hypot((p.x - start.x) / 100 * MW, (p.y - start.y) / 100 * MH);
@@ -4583,11 +4624,11 @@ setInterval(loadSharedEntries, 60000);
     lightState.walls.push({ id: newId(), kind: armedMode, a: [start.x, start.y], b: [p.x, p.y], open: false });
     lightSegStart = p; /* chain: the next segment starts where this one ended */
     const ok = await saveLighting(); renderLighting();
-    lightStatusEl.textContent = ok ? `${armedMode === "door" ? "Door" : "Wall"} segment saved — keep tapping to chain, or toggle the tool off.` : "Segment didn't save — refreshed.";
+    lightStatusEl.textContent = ok ? `${armedMode === "door" ? "Door" : armedMode === "window" ? "Window" : "Wall"} segment saved — keep tapping to chain, or toggle the tool off.` : "Segment didn't save — refreshed.";
     if (!ok) loadLighting(true);
   });
   document.addEventListener("keydown", e => {
-    if (e.key === "Escape" && (armedMode === "wall" || armedMode === "door")) { lightSegStart = null; previewLayer.clearLayers(); setLightArmed(null); }
+    if (e.key === "Escape" && (armedMode === "wall" || armedMode === "door" || armedMode === "window")) { lightSegStart = null; previewLayer.clearLayers(); setLightArmed(null); }
   });
   /* ---- Light source editor ---- */
   function openLightEditor(src){
@@ -5519,6 +5560,14 @@ function floorConnected(L, cols, rows){
         wallsGrp.add(hinge);
         const lintelH = (10 / feetPerSquare) - hU;
         if (lintelH > 0.05) { const lin = new THREE.Mesh(new THREE.BoxGeometry(len, lintelH, 0.22), wallMat); lin.position.set((ax + bx) / 2, hU + lintelH / 2, (az + bz) / 2); lin.rotation.y = -ang; wallsGrp.add(lin); }
+      } else if (w.kind === "window") {
+        /* v1.60: a window stands as a glass pane on a sill with a lintel, not a solid wall */
+        const sill = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.32, 0.26), wallMat);
+        sill.position.set((ax + bx) / 2, hU * 0.16, (az + bz) / 2); sill.rotation.y = -ang; wallsGrp.add(sill);
+        const linW = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.18, 0.26), wallMat);
+        linW.position.set((ax + bx) / 2, hU * 0.91, (az + bz) / 2); linW.rotation.y = -ang; wallsGrp.add(linW);
+        const glass = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.5, 0.06), new THREE.MeshStandardMaterial({ color: 0x9fd4ee, transparent: true, opacity: 0.4, roughness: 0.1 }));
+        glass.position.set((ax + bx) / 2, hU * 0.57, (az + bz) / 2); glass.rotation.y = -ang; wallsGrp.add(glass);
       } else {
         const seg = new THREE.Mesh(new THREE.BoxGeometry(len, hU, 0.24), wallMat);
         seg.position.set((ax + bx) / 2, hU / 2, (az + bz) / 2); seg.rotation.y = -ang;
@@ -5767,7 +5816,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-06-2332";
+        var BUILD_STAMP = "2026-11-06-2356";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6411,6 +6460,164 @@ function floorConnected(L, cols, rows){
 </script>
 
 <script>
+/* v1.60 — one row of buttons under the map (Shaun, voice call 2026-11-06
+   ~23:29–23:31): "I want a row of buttons under the map. And each button
+   has nested within it different sets of controls." + "everything's sets
+   as collapsed into each one of those buttons."
+   This script runs BEFORE the perimeter script: it gathers every control
+   group that used to sit (parked, floating, scattered) below the map into
+   ONE row placed directly under the stage. Each row button opens its set
+   nested under the row (accordion: opening one closes the others) and
+   EVERY set starts COLLAPSED on every load — no open state is stored.
+   The row sits in page flow; because the groups are no longer direct
+   children of #mapPanel, the perimeter script finds only the Art Library
+   dock, and the fullscreen rail script finds no loose groups to move.
+   Nothing is cloned: every control keeps its own handlers and state.
+   The Token repository button below the map was removed at Shaun's order
+   (~23:25) — the Art Library stands on its own in its dock beside the map.
+   The Fog and Lighting row buttons exist only while GM view is on (their
+   panels are GM-only) — applyGmUi() hides/shows the tabs with the panels. */
+(function () {
+  "use strict";
+  var panel = document.getElementById("mapPanel");
+  if (!panel) return;
+  var stage = panel.querySelector(":scope > .map-stage");
+  if (!stage) return;
+  var $ = function (id) { return document.getElementById(id); };
+  function mk(tag, cls, text) {
+    var el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text != null) el.textContent = text;
+    return el;
+  }
+  function moveKids(from, to) {
+    if (!from || !to) return;
+    while (from.firstChild) to.appendChild(from.firstChild);
+  }
+  /* Drop the perimeter dressing (parked/collapsible classes, drag grip) so
+     a re-homed group renders as a plain block inside its set. */
+  function cleanSlate(root) {
+    if (!root) return;
+    root.classList.remove("per-group", "per-parked", "per-collapsible", "per-collapsed");
+    root.removeAttribute("data-per");
+    var grip = root.querySelector(":scope > .per-grip");
+    if (grip) grip.remove();
+  }
+  function fieldOf(el) { if (!el || !el.closest) return el; return el.closest(".field") || el.closest("label") || el; }
+
+  var row = mk("div", "ctl-row"); row.id = "ctlRow";
+  var bar = mk("div", "ctl-bar"); row.appendChild(bar);
+  stage.insertAdjacentElement("afterend", row);
+
+  /* GM view stays a DIRECT button in the row (hold-to-switch, v1.59); its
+     status line rides along under the bar. */
+  var gmBtn = $("gmBtn"), gmStatus = $("gmStatus");
+  if (gmBtn) bar.appendChild(gmBtn);
+  if (gmStatus) bar.appendChild(gmStatus);
+
+  var ORDER = ["map", "markers", "tools", "fog", "lighting", "draw", "layers", "generate", "dice"];
+  var LABELS = { map: "Map", markers: "Markers", tools: "Tools", fog: "Fog", lighting: "Lighting", draw: "Draw", layers: "Layers", generate: "Generate", dice: "Dice" };
+  var tabs = {}, sets = {};
+  ORDER.forEach(function (name) {
+    var b = mk("button", "ctl-tab", LABELS[name]);
+    b.type = "button"; b.id = name + "Tab";
+    b.setAttribute("aria-expanded", "false");
+    var caret = mk("span", "ctl-caret", "▾"); b.appendChild(caret);
+    bar.appendChild(b); tabs[name] = b;
+    var s = mk("div", "ctl-set"); s.id = "set-" + name; s.hidden = true;
+    row.appendChild(s); sets[name] = s;
+    b.addEventListener("click", function () { openSet(sets[name].hidden ? name : null); });
+  });
+  function openSet(name) {
+    ORDER.forEach(function (n) {
+      var on = n === name;
+      sets[n].hidden = !on;
+      tabs[n].setAttribute("aria-expanded", String(on));
+    });
+    if (name) sets[name].scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  window.ctlOpen = openSet;
+  window.ctlCloseAll = function () { openSet(null); };
+  if (gmStatus) { tabs.fog.id = "fogTab"; tabs.lighting.id = "lightTab"; tabs.fog.hidden = !(window.effectiveGm && window.effectiveGm()); tabs.lighting.hidden = tabs.fog.hidden; }
+
+  /* Rows by position: [0] search row, [1] grid row, [2] fogControls,
+     [3] lightControls, [4] draw row, [5] layers row, [6] generate row. */
+  var rows = panel.querySelectorAll(":scope > .map-tools");
+  var rowSearch = rows[0], rowGrid = rows[1], rowDraw = rows[4], rowLayers = rows[5], rowGen = rows[6];
+
+  /* Map — search & switching, grid, screen buttons (moved, not cloned). */
+  [fieldOf($("placeSearch")), fieldOf($("mapSelect")), $("mapExpandBtn"), $("fsBtn"), $("view3dBtn"),
+   fieldOf($("gridToggle")), fieldOf($("gridType")), fieldOf($("scaleFeet"))].forEach(function (el) {
+    if (el) sets.map.appendChild(el);
+  });
+  /* Markers — Add marker, Add place (GM), the two editing forms. */
+  [$("addMarkerBtn"), $("addPlaceBtn"), $("markerForm"), $("placeForm")].forEach(function (el) {
+    if (el) sets.markers.appendChild(el);
+  });
+  /* Tools — Ruler, Ping, Add token, the token editor. */
+  [$("rulerBtn"), $("pingBtn"), $("addTokenBtn"), $("tokenStatus"), $("tokenForm")].forEach(function (el) {
+    if (el) sets.tools.appendChild(el);
+  });
+  /* Fog — the whole GM fog panel. */
+  var fogC = $("fogControls"); if (fogC) sets.fog.appendChild(fogC);
+  /* Lighting — the whole GM lighting panel plus the light editor form. */
+  var lightC = $("lightControls"); if (lightC) sets.lighting.appendChild(lightC);
+  if ($("lightForm")) sets.lighting.appendChild($("lightForm"));
+  /* Draw — whatever the draw row still holds (colour wheel button incl.). */
+  if (rowDraw) moveKids(rowDraw, sets.draw);
+  /* Layers — the layers row plus the map overlays toggles from the grid row. */
+  if (rowLayers) moveKids(rowLayers, sets.layers);
+  [fieldOf($("atlasToggle")), fieldOf($("apocToggle")), fieldOf($("drawToggle")), fieldOf($("tokensToggle"))].forEach(function (el) {
+    if (el) sets.layers.appendChild(el);
+  });
+  /* Generate — Generate map + Templates library. */
+  if (rowGen) sets.generate.appendChild(rowGen);
+  var tpl = $("tplLib"); if (tpl) sets.generate.appendChild(tpl);
+  /* Dice — dice roller + initiative, undressed from the perimeter. */
+  var dicePanel = panel.querySelector(":scope > .vtt-panel");
+  if (dicePanel) {
+    dicePanel.querySelectorAll(".vtt-col").forEach(cleanSlate);
+    sets.dice.appendChild(dicePanel);
+  }
+  /* Remove the emptied husks of the old scattered rows. */
+  [rowSearch, rowGrid, rowDraw, rowLayers].forEach(function (r) {
+    if (r && !r.children.length && !r.textContent.trim()) r.remove();
+  });
+
+  /* When a workflow unhides something living inside a set (an editing form
+     opening, the templates library), open that set so it is on screen. */
+  var mo = new MutationObserver(function (muts) {
+    for (var i = 0; i < muts.length; i++) {
+      var t = muts[i].target;
+      if (t.nodeType !== 1 || t.hidden) continue;
+      for (var n = 0; n < ORDER.length; n++) {
+        if (sets[ORDER[n]].contains(t) && sets[ORDER[n]].hidden) { openSet(ORDER[n]); break; }
+      }
+    }
+  });
+  ["markerForm", "placeForm", "tokenForm", "lightForm", "tplLib"].forEach(function (id) {
+    var el = $(id); if (el) mo.observe(el, { attributes: true, attributeFilter: ["hidden"] });
+  });
+
+  /* Stage fullscreen: the row rides into the stage as the right-hand rail
+     (Shaun's fullscreen rule: map left, buttons right) and returns on exit. */
+  var home = { parent: row.parentNode, next: row.nextSibling };
+  document.addEventListener("fullscreenchange", function () {
+    var fsEl = document.fullscreenElement;
+    if (fsEl && (fsEl === stage || fsEl.contains(stage))) {
+      if (row.parentNode !== fsEl) {
+        row.style.cssText = "position:absolute;top:0;right:0;bottom:0;width:min(430px,44%);overflow-y:auto;padding:10px;background:rgba(10,12,16,.93);z-index:1200;margin:0;";
+        fsEl.appendChild(row);
+      }
+    } else if (row.parentNode !== home.parent) {
+      row.style.cssText = "";
+      if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(row, home.next);
+      else home.parent.appendChild(row);
+    }
+  });
+})();
+</script>
+<script>
 "use strict";
 /* ================= v1.06: perimeter-always, movable groups =================
    Desktop/table only (phones keep the right-edge repository drawer).
@@ -6447,8 +6654,12 @@ function floorConnected(L, cols, rows){
   function def(el, id, label){ if (el) defs.push({ el: el, id: id, label: label }); }
   def(rows[0], "tools-main", "Search & map");
   def(rows[1], "tools-grid", "Grid, tokens & GM");
-  def(document.getElementById("fogControls"), "tools-fog", "Fog");
-  def(document.getElementById("lightControls"), "tools-light", "Lighting & walls");
+  /* v1.60: fogControls / lightControls are NOT perimeter groups any
+     more — they live inside the Fog / Lighting sets of the one row under
+     the map (see the row script above), which must stay in page flow.
+     The perimeter now stewards only the Art Library dock (repo, below);
+     the old row/col defs above and below match nothing since the
+     restructure and are kept inert for the reset button's sake. */
   def(rows[4], "tools-draw", "Draw & paint");
   def(rows[5], "tools-layers", "Layers");
   def(rows[6], "tools-gen", "Generate map");
