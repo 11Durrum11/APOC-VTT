@@ -2124,11 +2124,11 @@ setInterval(loadSharedEntries, 60000);
     }));
   }
 
-  /* ---- GM view: a plain per-screen on/off toggle. There is NO PIN and
+  /* ---- GM view: a plain per-device on/off toggle. There is NO PIN and
      no lock (Shaun, 2026-11-06: "That GM view just on or off. I don't
      need no security pin.") ---- */
   function applyGmUi(){
-    $("gmBtn").textContent = gmView ? "GM view: on" : "GM view: off";
+    $("gmBtn").textContent = gmView ? "GM view: on — hold for off" : "GM view: off — hold for on";
     $("gmBtn").setAttribute("aria-pressed", String(gmView));
     $("fogControls").hidden = !gmView;
     $("lightControls").hidden = !gmView;
@@ -2136,31 +2136,73 @@ setInterval(loadSharedEntries, 60000);
   }
   /* Hold-to-toggle (Shaun, 2026-11-06): he doesn't want to hit GM view by
      accident, so a plain click does nothing — the button must be HELD for
-     ~0.8 seconds to switch. The grayed look is the warning label. */
+     ~0.8 seconds to switch. The grayed look is the warning label.
+     v1.59 fix (Shaun, 2026-11-06 23:24: "now I can't turn the GM view on"
+     / Monsters "is there but not clickable"): the hold mechanism itself
+     was proven working headlessly on the served build — handlers fire,
+     effectiveGm flips, Monsters unlock. What failed in the room: a click
+     is a SILENT no-op (the only explanation was a hover tooltip, and the
+     button is styled to look disabled), and the on-state was remembered
+     per TAB (sessionStorage), so after an evening in one tab where GM
+     stayed on by itself, every fresh versioned link opened a new tab
+     with GM off and a button that ignores clicks. Fixes, hold kept:
+     the button label now says "hold for on/off", a progress fill sweeps
+     the button while it is held, a too-short press answers in the status
+     line next to the button ("Keep holding — GM view switches after a
+     second"), and the on-state persists per DEVICE (localStorage) like
+     every other layout preference on this page. Still no lock by design;
+     the TV copy stays protected because effectiveGm() is false while
+     projecting, whatever this flag says. */
   (() => {
     const btn = $("gmBtn");
+    const status = $("gmStatus");
+    const HOLD_MS = 800;
     btn.title = "Hold for a second to switch GM view on or off — a plain click does nothing, so it can't be hit by accident";
-    let timer = null;
+    let timer = null, tick = null, t0 = 0, hintTimer = null;
+    const hint = (msg) => {
+      if (!status) return;
+      status.textContent = msg;
+      if (hintTimer) clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => { status.textContent = ""; }, 3000);
+    };
+    const paint = () => {
+      const p = Math.min(1, (Date.now() - t0) / HOLD_MS);
+      btn.style.background = "linear-gradient(90deg, rgba(240,180,60,.45) " + (p * 100) + "%, transparent " + (p * 100) + "%)";
+    };
+    const clearPaint = () => { btn.style.background = ""; };
     const start = () => {
       btn.classList.add("holding");
+      t0 = Date.now();
+      paint();
+      tick = setInterval(paint, 40);
       timer = setTimeout(() => {
         timer = null;
+        if (tick) { clearInterval(tick); tick = null; }
+        clearPaint();
         btn.classList.remove("holding");
         gmView = !gmView;
-        if (gmView) sessionStorage.setItem("apocGm", "1");
-        else sessionStorage.removeItem("apocGm");
+        try {
+          if (gmView) { localStorage.setItem("apocGm", "1"); sessionStorage.setItem("apocGm", "1"); }
+          else { localStorage.removeItem("apocGm"); sessionStorage.removeItem("apocGm"); }
+        } catch(e) { /* storage unavailable — the toggle still works for this page */ }
+        hint(gmView ? "GM view on." : "GM view off.");
         applyGmUi();
-      }, 800);
+      }, HOLD_MS);
     };
-    const cancel = () => {
+    const cancel = (fromUp) => {
+      const shortPress = !!timer && !!fromUp;
       if (timer) { clearTimeout(timer); timer = null; }
+      if (tick) { clearInterval(tick); tick = null; }
+      clearPaint();
       btn.classList.remove("holding");
+      if (shortPress) hint("Keep holding — GM view switches after a second.");
     };
     btn.addEventListener("pointerdown", start);
-    btn.addEventListener("pointerup", cancel);
-    btn.addEventListener("pointerleave", cancel);
+    btn.addEventListener("pointerup", () => cancel(true));
+    btn.addEventListener("pointerleave", () => cancel(false));
+    btn.addEventListener("pointercancel", () => cancel(false));
     btn.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && !e.repeat) { e.preventDefault(); start(); } });
-    btn.addEventListener("keyup", (e) => { if (e.key === "Enter" || e.key === " ") cancel(); });
+    btn.addEventListener("keyup", (e) => { if (e.key === "Enter" || e.key === " ") cancel(true); });
     btn.addEventListener("click", (e) => e.preventDefault());
   })();
   /* The GM view button is always shown on the normal control page, on any
@@ -2174,7 +2216,9 @@ setInterval(loadSharedEntries, 60000);
      Convenience, not real security — the page and its store are public. */
   $("gmBtn").hidden = false;
   try {
-    if (sessionStorage.getItem("apocGm") === "1") gmView = true;
+    /* Per-device flag first (v1.59); the old per-tab session flag is
+       honoured too so nobody mid-session loses GM on this upgrade. */
+    if (localStorage.getItem("apocGm") === "1" || sessionStorage.getItem("apocGm") === "1") gmView = true;
   } catch(e) { /* storage unavailable — GM view just starts off */ }
 
   /* ---- Fog of war ---- */
@@ -5723,7 +5767,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-06-2331";
+        var BUILD_STAMP = "2026-11-06-2332";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
