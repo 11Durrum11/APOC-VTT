@@ -2050,7 +2050,9 @@ setInterval(loadSharedEntries, 60000);
      Fog and drawings are per-map (same key pattern as tokens). GM view is a
      plain per-screen on/off toggle (this browser session) — no PIN, no lock
      (Shaun, 2026-11-06). Projection is always the player view. */
-  function effectiveGm(){ return gmView && !isProjecting(); }
+  function effectiveGm(){ try { return gmView && !isProjecting(); } catch(e) { return false; } }
+  /* (TDZ-guarded: the gazetteer calls this during init, before the
+     "let gmView" declaration has run — unguarded it threw on every load.) */
   window.effectiveGm = effectiveGm;
   /* Fog renders in the GM layer (layerGm, z400) per Shaun's fixed stack —
      it used to sit in its own pane at z640, above the tokens. */
@@ -5645,12 +5647,30 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
+        /* BUILD_STAMP must match version.json's "version" at push time.
+           If the served version.json names a NEWER build than the one
+           baked into this page, this tab is running stale code (a cached
+           page, or a tab left open across a push — the old code kept
+           running while the badge showed the new number). Reload ONCE
+           (per version, per tab session) to the fresh build instead. */
+        var BUILD_STAMP = "2026-11-06-2212";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
             var v = d && (d.display || d.version);
             if (el && v) { el.textContent = "v" + v; el.hidden = false; }
+            if (d && d.version && d.version !== BUILD_STAMP) {
+              try {
+                var key = "apocVttReloadedFor";
+                if (sessionStorage.getItem(key) !== d.version) {
+                  sessionStorage.setItem(key, d.version);
+                  var u = new URL(location.href);
+                  u.searchParams.set("v", String(d.version).replace(/\D/g, ""));
+                  location.replace(u.toString());
+                }
+              } catch (e) {}
+            }
           })
           .catch(function () {});
       </script>
@@ -6034,10 +6054,11 @@ function floorConnected(L, cols, rows){
 <script>
 "use strict";
 /* ================= Monster repository — Monster Manual I (DM material) =================
-   Shaun's DM monster shelf, inside Art Library > Monsters. GM-ONLY: the
-   whole nest is hidden unless effectiveGm() (GM view on, not the
-   ?display TV copy) — players never see the contents, and the registry
-   is not even fetched until GM view is first switched on.
+   Shaun's DM monster shelf, inside Art Library > Monsters. GM-ONLY
+   contents: hidden entirely on the ?display TV copy; on the control
+   page the header stays visible labelled "GM view only" while GM view
+   is off (so the shelf is always findable), the body stays hidden, and
+   the registry is not even fetched until GM view is first switched on.
    Data: shared site_settings key "vtt_monsters" (mirrors the
    vtt_dropmaps pattern) — { monsters: [{ slug, name, type, typeLine,
    cr, crNum, status: "found"|"generated"|"none", path, desc, flags }] }.
@@ -6059,6 +6080,7 @@ function floorConnected(L, cols, rows){
   var countEl = document.getElementById("monsterCount");
   var sortEl = document.getElementById("monsterSort");
   var detailEl = document.getElementById("monsterDetail");
+  var bodyEl = nest.querySelector(":scope > .nest-body");
   var FLAG_LABELS = {
     "summoning-does-not-work": "Summoning doesn\u2019t work in the APOC",
     "planar-travel-severed": "Planar travel is severed \u2014 it can\u2019t be called or reached from here",
@@ -6069,13 +6091,26 @@ function floorConnected(L, cols, rows){
   var monsters = [], bySlug = {}, started = false, sortMode = "alpha";
   var groupState = {};
   function pub(path){ return "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/" + path; }
-  function gmOn(){ try { return typeof effectiveGm === "function" && effectiveGm(); } catch(e) { return false; } }
+  function gmOn(){
+    try { if (typeof effectiveGm === "function") return !!effectiveGm(); } catch(e) {}
+    /* Fallback if the main script's exposure ever goes missing again:
+       read the GM button's own pressed state — applyGmUi keeps it true
+       exactly while GM view is on. */
+    var b = document.getElementById("gmBtn");
+    return !!(b && b.getAttribute("aria-pressed") === "true");
+  }
 
-  /* GM gate — poll like the token-light field does; the nest does not
-     exist for players or the TV copy. */
+  /* GM gate — poll like the token-light field does. On the TV copy the
+     nest does not exist at all. On the control page the HEADER stays
+     visible with GM view off (labelled "GM view only", body hidden,
+     registry not fetched) so the repository is always findable; the
+     contents appear only with GM view on. */
   function gate(){
     var gm = gmOn();
-    nest.style.display = gm ? "" : "none";
+    if (document.body.classList.contains("displaying")) { nest.style.display = "none"; return; }
+    nest.style.display = "";
+    if (bodyEl) bodyEl.style.display = gm ? "" : "none";
+    if (!gm && countEl) countEl.textContent = "\u2014 GM view only";
     if (gm && !started) { started = true; loadRegistry(); }
   }
   gate();
