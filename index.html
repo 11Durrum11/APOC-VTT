@@ -451,6 +451,8 @@ body.displaying .init-strip{font-size:1.05rem}
 .mr-name{display:block;font-size:.86rem;line-height:1.15;overflow:hidden;text-overflow:ellipsis}
 .mr-sub{display:block;font-size:.72rem;opacity:.75}
 .mr-del{flex:none;min-width:36px;min-height:36px;border-radius:8px;border:1px solid hsl(0 40% 40%);background:transparent;color:#e08a8a;cursor:pointer}
+.mr-move{flex:none;min-width:36px;min-height:36px;border-radius:8px;border:1px solid hsl(222 18% 32%);background:transparent;color:inherit;cursor:pointer}
+.mr-move-sel{flex:none;max-width:150px;min-height:36px;border-radius:8px;background:transparent;color:inherit;font-size:.78rem}
 .mr-folder{font-size:.78rem;font-weight:700;margin:8px 0 2px;opacity:.85}
 
 /* ---- v1.11: Art Library nesting (Shaun) — everything art-related sits
@@ -5915,7 +5917,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-0523";
+        var BUILD_STAMP = "2026-11-07-0935";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6120,6 +6122,26 @@ function floorConnected(L, cols, rows){
   var FOLDERS = { "arkenforge": "Arkenforge", "my-campaign-a-maps": "Campaign maps",
     "dungeon-alchemist-onedrive": "Dungeon Alchemist", "dropbox-maps": "Dropbox maps",
     "dropbox-transfer-unique": "Dropbox transfer", "loose": "Loose maps", "gen": "Generated maps", "drop": "Dropped at the table" };
+  /* v1.65: Roll20 folder emulation (Shaun 2026-11-07 — "emulate the
+     folder system that Roll20 has and put all the maps in the proper
+     folders like it is in Roll20"). A registry rec carrying an r20
+     assignment — { f: folder name (null = Roll20's unfiled top level),
+     s: subfolder name or null, i: the page's order index } — files
+     into Roll20's own tree: the 7 folders in Roll20 order with Roll20
+     names, subfolders nested, Roll20 page order kept inside each
+     folder. Recs without r20 keep their source-collection folders
+     below the tree. Assignments are matched by name against the
+     recorded Roll20 page list (roll20-folders.json); nothing is
+     force-fit. */
+  var R20_TREE = [
+    { name: "The sphere cosmotalogy", subs: [] },
+    { name: "The bastion", subs: ["Fire Fire", "New Folder 1"] },
+    { name: "Brightstone", subs: [] },
+    { name: "Formian hive nest", subs: [] },
+    { name: "ships", subs: [] },
+    { name: "Undermountain compact", subs: [] },
+    { name: "pre start", subs: [] }
+  ];
   var BUILTINS = [
     { id: "faerun", name: "Faerûn — World Map", thumb: "assets/maps/faerun-3e.webp", w: 4763, h: 3185 },
     { id: "saint-james", name: "Arcanic Rendez-Vous — Saint James's floors", thumb: "assets/maps/saint-james-floors.webp", w: 1662, h: 1077 }
@@ -6162,6 +6184,47 @@ function floorConnected(L, cols, rows){
     render(true);
     statusEl.textContent = "\"" + nm + "\" removed from the repository.";
   }
+  /* v1.65: move-to-folder control on registry rows — the Roll20 tree,
+     Top level, or back to a source-collection folder. Persists through
+     the same shelf save path as Remove. */
+  function moveDestinations(){
+    var out = [];
+    R20_TREE.forEach(function(F){
+      out.push({ label: "📁 " + F.name, r20: { f: F.name, s: null } });
+      F.subs.forEach(function(s){ out.push({ label: "📁 " + F.name + " › " + s, r20: { f: F.name, s: s } }); });
+    });
+    out.push({ label: "📄 Top level (Roll20 unfiled)", r20: { f: null, s: null } });
+    Object.keys(FOLDERS).forEach(function(k){ out.push({ label: "🗂 " + FOLDERS[k], src: k }); });
+    return out;
+  }
+  function openMoveMenu(row, rec){
+    if (row.querySelector(".mr-move-sel")) return;
+    var dests = moveDestinations();
+    var sel = document.createElement("select");
+    sel.className = "mr-move-sel";
+    var cur = document.createElement("option");
+    cur.textContent = "Move to…"; cur.value = ""; sel.appendChild(cur);
+    dests.forEach(function(d, ix){
+      var op = document.createElement("option");
+      op.value = String(ix); op.textContent = d.label; sel.appendChild(op);
+    });
+    sel.addEventListener("click", function(ev){ ev.stopPropagation(); });
+    sel.addEventListener("change", async function(){
+      var v = sel.value;
+      sel.remove();
+      if (v === "") return;
+      var d = dests[Number(v)];
+      if (!d) return;
+      if (d.src) { delete rec.r20; rec.folder = d.src; }
+      else { rec.r20 = { f: d.r20.f, s: d.r20.s, i: 1000000 + (Date.now() % 100000) }; }
+      if (window.__apocShelf) { window.__apocShelf.setRecs(window.__apocShelf.recs()); await window.__apocShelf.saveRegistry(); }
+      lastSig = "";
+      render(true);
+      statusEl.textContent = "\"" + (rec.name || rec.id) + "\" moved to " + d.label.replace(/^[^\w]+/, "") + ".";
+    });
+    row.appendChild(sel);
+    sel.focus();
+  }
   function itemRow(o){
     var row = document.createElement("div");
     row.className = "mr-item" + ((window.__apocShelf && window.__apocShelf.current() === o.id) ? " mr-current" : "");
@@ -6179,6 +6242,12 @@ function floorConnected(L, cols, rows){
     row.title = "Load \"" + o.name + "\" in the VTT";
     row.addEventListener("click", function(){ loadMap(o.id); });
     if (o.rec) {
+      var mv = document.createElement("button");
+      mv.type = "button"; mv.className = "mr-move"; mv.textContent = "→";
+      mv.title = "Move this map to another folder";
+      mv.setAttribute("aria-label", "Move " + o.name + " to another folder");
+      mv.addEventListener("click", function(ev){ ev.stopPropagation(); openMoveMenu(row, o.rec); });
+      row.appendChild(mv);
       var del = document.createElement("button");
       del.type = "button"; del.className = "mr-del"; del.textContent = "✕";
       del.title = "Remove this map from the repository";
@@ -6229,13 +6298,13 @@ function floorConnected(L, cols, rows){
     var st = groupState[body._lazy];
     body._lazy = null;
     if (!st || st.built) return;
-    st.content = buildGroupRows(st.items);
+    st.content = st.build ? st.build() : buildGroupRows(st.items);
     st.built = true;
     body.appendChild(st.content);
   }, true);
   function render(force){
     var recs = (window.__apocShelf && window.__apocShelf.recs()) || [];
-    var sig = recs.length + "|" + recs.map(function(r){ return r.id; }).join(",") + "|" + (window.__apocShelf ? window.__apocShelf.current() : "") + "|" + filter;
+    var sig = recs.length + "|" + recs.map(function(r){ return r.id + (r.r20 ? "@" + (r.r20.f || "-") + "/" + (r.r20.s || "-") + "/" + (r.r20.i || 0) : ""); }).join(",") + "|" + (window.__apocShelf ? window.__apocShelf.current() : "") + "|" + filter;
     if (!force && sig === lastSig) return;
     lastSig = sig;
     var f = filter.trim().toLowerCase();
@@ -6248,33 +6317,103 @@ function floorConnected(L, cols, rows){
       bNest.body.appendChild(itemRow({ id: b.id, name: b.name, thumbUrl: b.thumb, w: b.w, h: b.h, note: "built-in" })); bCount++;
     });
     if (bCount) { listEl.appendChild(bNest.wrap); shown += bCount; }
-    var groups = {};
-    recs.forEach(function(r){
-      var g = r.id.indexOf("drop-") === 0 ? "drop" : (r.folder || "drop");
-      (groups[g] = groups[g] || []).push(r);
+    /* v1.65: partition — recs with an r20 assignment file into the
+       Roll20 tree (folders in Roll20 order, subfolders nested, page
+       order kept; Roll20's unfiled pages as a Top level group); the
+       rest keep their source-collection folders below the tree. */
+    var r20ByF = {}, r20TopAll = [], srcGroups = {};
+    R20_TREE.forEach(function(F){
+      r20ByF[F.name] = { direct: [], subs: {} };
+      F.subs.forEach(function(s){ r20ByF[F.name].subs[s] = []; });
     });
+    recs.forEach(function(r){
+      if (r.r20 && typeof r.r20 === "object") {
+        if (r.r20.f == null) { r20TopAll.push(r); return; }
+        var slot = r20ByF[r.r20.f];
+        if (slot) {
+          if (r.r20.s && slot.subs[r.r20.s]) slot.subs[r.r20.s].push(r); else slot.direct.push(r);
+          return;
+        }
+      }
+      var g = r.id.indexOf("drop-") === 0 ? "drop" : (r.folder || "drop");
+      (srcGroups[g] = srcGroups[g] || []).push(r);
+    });
+    var byR20 = function(a, b){ return ((a.r20.i || 0) - (b.r20.i || 0)) || (a.name || "").localeCompare(b.name || ""); };
     var liveGroups = {};
-    Object.keys(groups).sort(function(a, b){ return (FOLDERS[a] || a).localeCompare(FOLDERS[b] || b); }).forEach(function(g){
-      var all = groups[g].slice().sort(function(a, b){ return (a.name || "").localeCompare(b.name || ""); });
-      var items = all.filter(function(r){ return match(r.name || r.id); });
-      if (!items.length) return;
-      liveGroups[g] = true;
-      var gn = groupNest((FOLDERS[g] || g) + " (" + items.length + ")", !!f);
+    function emitLazy(key, title, rows){
+      /* rows: the rows to show (already filtered + sorted). Lazy in
+         normal browsing; built eagerly while a search is active. */
+      liveGroups[key] = true;
+      var gn = groupNest(title + " (" + rows.length + ")", !!f);
       if (f) {
-        /* Search: build only the matching rows, folder auto-expanded. */
-        gn.body.appendChild(buildGroupRows(items));
+        gn.body.appendChild(buildGroupRows(rows));
       } else {
-        var isig = all.map(function(r){ return r.id; }).join(",");
-        var st = groupState[g];
+        var isig = rows.map(function(r){ return r.id; }).join(",");
+        var st = groupState[key];
         if (st && st.built && st.sig === isig) {
           gn.body.appendChild(st.content);
         } else {
-          groupState[g] = { sig: isig, built: false, items: all, content: null };
-          gn.body._lazy = g;
+          groupState[key] = { sig: isig, built: false, items: rows, content: null };
+          gn.body._lazy = key;
         }
       }
       listEl.appendChild(gn.wrap);
-      shown += items.length;
+      shown += rows.length;
+      return gn;
+    }
+    function emitR20Folder(F){
+      var slot = r20ByF[F.name];
+      var directAll = slot.direct.slice().sort(byR20);
+      var subsAll = F.subs.map(function(s){ return { name: s, all: slot.subs[s].slice().sort(byR20) }; });
+      if (f) {
+        var direct = directAll.filter(function(r){ return match(r.name || r.id); });
+        var subs = subsAll.map(function(sd){ return { name: sd.name, items: sd.all.filter(function(r){ return match(r.name || r.id); }) }; });
+        var tot = direct.length + subs.reduce(function(n, sd){ return n + sd.items.length; }, 0);
+        if (!tot) return;
+        liveGroups["r20:" + F.name] = true;
+        var gn = groupNest(F.name + " (" + tot + ")", true);
+        subs.forEach(function(sd){
+          if (!sd.items.length) return;
+          var sn = groupNest(sd.name + " (" + sd.items.length + ")", true);
+          sn.body.appendChild(buildGroupRows(sd.items));
+          gn.body.appendChild(sn.wrap);
+          shown += sd.items.length;
+        });
+        if (direct.length) { gn.body.appendChild(buildGroupRows(direct)); shown += direct.length; }
+        listEl.appendChild(gn.wrap);
+        return;
+      }
+      var totAll = directAll.length + subsAll.reduce(function(n, sd){ return n + sd.all.length; }, 0);
+      var key = "r20:" + F.name;
+      liveGroups[key] = true;
+      var gn2 = groupNest(F.name + " (" + totAll + ")", false);
+      var isig = directAll.map(function(r){ return r.id; }).join(",") + "|" + subsAll.map(function(sd){ return sd.name + ":" + sd.all.map(function(r){ return r.id; }).join(","); }).join("|");
+      var st = groupState[key];
+      if (st && st.built && st.sig === isig) {
+        gn2.body.appendChild(st.content);
+      } else {
+        groupState[key] = { sig: isig, built: false, items: null, content: null, build: function(){
+          var box = document.createElement("div");
+          subsAll.forEach(function(sd){
+            var sn = groupNest(sd.name + " (" + sd.all.length + ")", false);
+            sn.body.appendChild(buildGroupRows(sd.all));
+            box.appendChild(sn.wrap);
+          });
+          if (directAll.length) box.appendChild(buildGroupRows(directAll));
+          return box;
+        } };
+        gn2.body._lazy = key;
+      }
+      listEl.appendChild(gn2.wrap);
+    }
+    R20_TREE.forEach(emitR20Folder);
+    var topItems = r20TopAll.slice().sort(byR20).filter(function(r){ return match(r.name || r.id); });
+    if (topItems.length) emitLazy("r20top", "Top level", topItems);
+    Object.keys(srcGroups).sort(function(a, b){ return (FOLDERS[a] || a).localeCompare(FOLDERS[b] || b); }).forEach(function(g){
+      var all = srcGroups[g].slice().sort(function(a, b){ return (a.name || "").localeCompare(b.name || ""); });
+      var items = all.filter(function(r){ return match(r.name || r.id); });
+      if (!items.length) return;
+      emitLazy(g, FOLDERS[g] || g, f ? items : all);
     });
     Object.keys(groupState).forEach(function(g){ if (!liveGroups[g]) delete groupState[g]; });
     /* Prune row handles for rows not in the DOM, then refresh the
