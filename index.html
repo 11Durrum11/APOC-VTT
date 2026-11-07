@@ -1179,6 +1179,7 @@ setInterval(loadSharedEntries, 60000);
   let editing = null;
   let tempPin = null;
   const newId = () => "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
+  window.map = map; window.toXY = toXY; window.newId = newId;
   function setStatus(msg){ statusEl.textContent = msg; }
   function draw(){
     layer.clearLayers();
@@ -1817,6 +1818,12 @@ setInterval(loadSharedEntries, 60000);
   const tokenMarkers = {}; /* token id -> marker, for the v1.09 lighting visibility pass */
   const gridLayer = L.layerGroup();
   const tokenStatusEl = $("tokenStatus");
+  /* Sibling scripts (monster repository) place tokens through these —
+     expose them on window; "tokens" is a reassigned let, so it needs a
+     live accessor rather than a snapshot. */
+  window.tokenStatusEl = tokenStatusEl;
+  window.loadTokens = loadTokens; window.saveTokens = saveTokens; window.drawTokens = drawTokens;
+  Object.defineProperty(window, "tokens", { configurable: true, get(){ return tokens; }, set(v){ tokens = v; } });
   const tokenForm = $("tokenForm");
   let editingToken = null, draftStatus = [];
 
@@ -2163,6 +2170,7 @@ setInterval(loadSharedEntries, 60000);
      plain per-screen on/off toggle (this browser session) — no PIN, no lock
      (Shaun, 2026-11-06). Projection is always the player view. */
   function effectiveGm(){ return gmView && !isProjecting(); }
+  window.effectiveGm = effectiveGm;
   /* Fog renders in the GM layer (layerGm, z400) per Shaun's fixed stack —
      it used to sit in its own pane at z640, above the tokens. */
   const fogLayer = L.layerGroup().addTo(map);
@@ -4138,6 +4146,7 @@ setInterval(loadSharedEntries, 60000);
     if (swallowBtn && (e.target === swallowBtn || swallowBtn.contains(e.target))) { e.stopPropagation(); e.preventDefault(); swallowBtn = null; }
   }, true);
   function libDrag(container, onDrop){
+    window.libDrag = libDrag;
     let drag = null;
     container.addEventListener("pointerdown", e => {
       const b = e.target.closest(".lib-item");
