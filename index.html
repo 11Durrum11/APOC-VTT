@@ -140,6 +140,7 @@ body.map-fs .expand-exit-wrap{display:block}
 .map-stage:fullscreen .map-tools.fs-float.ff-v{flex-direction:column;flex-wrap:nowrap;align-items:stretch;width:max-content;max-width:min(340px,60vw);max-height:92vh;overflow-y:auto}
 .map-stage:fullscreen .map-tools.fs-float.ff-h{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;max-width:96vw}
 .map-stage:fullscreen .vtt-col.fs-float{max-width:min(360px,70vw);max-height:92vh;overflow-y:auto}
+.map-stage:fullscreen .fs-piece{position:absolute;z-index:1250;margin:0}
 .ff-grip{display:none}
 .map-stage:fullscreen .fs-float>.ff-grip{display:inline-flex;align-items:center;gap:6px;flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border:1px dashed hsl(220 16% 40%);border-radius:8px;padding:4px 10px;min-height:36px;font-size:.8rem;color:var(--muted-foreground);background:hsla(222,20%,10%,.45);white-space:nowrap}
 .map-stage:fullscreen .fs-float>.ff-grip:active{cursor:grabbing}
@@ -1675,6 +1676,62 @@ setInterval(loadSharedEntries, 60000);
       fsOrient(it.el, stage);
     });
   }
+  /* Any single piece (button, field, select) can also be torn out of
+     its group and floated on its own: press and drag it — a plain
+     press still clicks it; moving it past a small threshold starts
+     the drag instead. Torn-out pieces keep their own saved spots. */
+  let fsPieceHomes = [];
+  function fsPieceSetup(row, rowKey, stage){
+    Array.from(row.children).forEach((child, ci) => {
+      if (child.classList.contains("ff-grip") || child.id === "paintPalette" || child.dataset.fsPieceBound) return;
+      child.dataset.fsPieceBound = "1";
+      child.dataset.fsPieceKey = rowKey + "p" + ci;
+      child.addEventListener("pointerdown", (ev) => {
+        if (ev.button > 0 || !row.classList.contains("fs-float")) return;
+        const sx = ev.clientX, sy = ev.clientY;
+        let torn = false, home = null;
+        const sr0 = stage.getBoundingClientRect();
+        function move(e2){
+          if (!torn) {
+            if (Math.hypot(e2.clientX - sx, e2.clientY - sy) < 10) return;
+            torn = true;
+            home = { parent: child.parentNode, next: child.nextSibling };
+            fsPieceHomes.push({ el: child, parent: home.parent, next: home.next });
+            const r = child.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+            child.classList.add("fs-piece");
+            child.style.width = r.width + "px";
+            stage.appendChild(child);
+            child.style.left = (r.left - sr.left) + "px";
+            child.style.top = (r.top - sr.top) + "px";
+            const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); };
+            child.addEventListener("click", swallow, { capture: true, once: true });
+          }
+          const sr = stage.getBoundingClientRect();
+          let x = e2.clientX - sr.left - child._fsGrabDX;
+          let y = e2.clientY - sr.top - child._fsGrabDY;
+          x = Math.max(0, Math.min(x, Math.max(0, sr.width - child.offsetWidth)));
+          y = Math.max(0, Math.min(y, Math.max(0, sr.height - child.offsetHeight)));
+          child.style.left = x + "px"; child.style.top = y + "px";
+        }
+        function up(){
+          window.removeEventListener("pointermove", move);
+          window.removeEventListener("pointerup", up);
+          window.removeEventListener("pointercancel", up);
+          if (torn) {
+            child.style.width = "";
+            const sr = stage.getBoundingClientRect(), state = fsFloatLoad();
+            state[child.dataset.fsPieceKey] = { x: Math.round((parseFloat(child.style.left) || 0) / sr.width * 1000) / 10, y: Math.round((parseFloat(child.style.top) || 0) / sr.height * 1000) / 10 };
+            fsFloatSave(state);
+          }
+        }
+        const r0 = child.getBoundingClientRect();
+        child._fsGrabDX = sx - r0.left; child._fsGrabDY = sy - r0.top;
+        window.addEventListener("pointermove", move);
+        window.addEventListener("pointerup", up);
+        window.addEventListener("pointercancel", up);
+      });
+    });
+  }
   function fsToolsIn(){
     const stage = document.querySelector(".map-stage");
     const panel = document.getElementById("mapPanel");
@@ -1691,11 +1748,35 @@ setInterval(loadSharedEntries, 60000);
       stage.appendChild(it.el);
     });
     fsPlaceAll(stage, items);
+    /* Pieces torn out in an earlier fullscreen session go straight
+       back to their own saved spots. */
+    const state = fsFloatLoad(), sr = stage.getBoundingClientRect();
+    items.forEach(it => {
+      if (it.key[0] !== "r") return;
+      fsPieceSetup(it.el, it.key, stage);
+      Array.from(it.el.children).forEach(child => {
+        const pk = child.dataset.fsPieceKey, saved = pk ? state[pk] : null;
+        if (!saved || child.classList.contains("ff-grip")) return;
+        fsPieceHomes.push({ el: child, parent: child.parentNode, next: child.nextSibling });
+        child.classList.add("fs-piece");
+        stage.appendChild(child);
+        child.style.left = (saved.x / 100 * sr.width) + "px";
+        child.style.top = (saved.y / 100 * sr.height) + "px";
+      });
+    });
     /* The stage is still settling into fullscreen — re-place once it
        reaches its real size so saved spots land true. */
     setTimeout(() => { if (fsFloatHomes) fsPlaceAll(stage, items); }, 280);
   }
   function fsToolsOut(){
+    for (let i = fsPieceHomes.length - 1; i >= 0; i--) {
+      const h = fsPieceHomes[i];
+      h.el.classList.remove("fs-piece");
+      h.el.style.left = ""; h.el.style.top = ""; h.el.style.width = "";
+      if (h.next && h.next.parentNode === h.parent) h.parent.insertBefore(h.el, h.next);
+      else h.parent.appendChild(h.el);
+    }
+    fsPieceHomes = [];
     if (!fsFloatHomes) return;
     for (let i = fsFloatHomes.length - 1; i >= 0; i--) {
       const h = fsFloatHomes[i];
