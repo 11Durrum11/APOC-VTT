@@ -102,6 +102,7 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .place-results button:last-child{border-bottom:none}
 .place-results button:hover,.place-results button:focus-visible{background:hsl(222,18%,22%)}
 .place-results .pr-kind{color:var(--muted-foreground);font-size:.78rem}
+.place-results .pr-empty{padding:10px 12px;color:var(--muted-foreground);font-size:.9rem}
 .atlas-toggle{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-size:.9rem;color:var(--accent-foreground)}
 .atlas-toggle input{width:20px;height:20px;min-height:20px}
 .atlas-icon{background:none;border:none}
@@ -129,9 +130,19 @@ body.map-fs .expand-exit-wrap{display:block}
 .map-stage:fullscreen{position:relative;width:100%;height:100%;background:#05070a;align-items:stretch}
 .map-stage:fullscreen .map-side{display:flex;flex-direction:column}
 .map-stage:fullscreen .apoc-map{flex:1 1 auto;height:100%;min-height:0}
-/* Shaun (2026-11-06): NO shadow box around the utensils — each row
-   floats bare and separate on the edge of the enlarged map. */
-.map-stage:fullscreen .fs-strip{position:absolute;left:50%;transform:translateX(-50%);z-index:1200;max-width:96vw;background:none;border:none;padding:0;margin-top:0}
+/* Shaun (2026-11-06): in the enlarged view every utensil group floats
+   FREE — no shadow box, no docking. Drag a group by its ⠿ grip and
+   drop it wherever he wants; a group sitting on a side of the screen
+   runs up-and-down, one on the top or bottom runs left-and-right.
+   Positions are remembered per device (apocVttFsFloatV1). */
+.map-stage:fullscreen .fs-float{position:absolute;z-index:1200;margin-top:0;max-width:94vw}
+.map-stage:fullscreen .map-tools.fs-float{background:transparent;border:none;padding:0}
+.map-stage:fullscreen .map-tools.fs-float.ff-v{flex-direction:column;flex-wrap:nowrap;align-items:stretch;width:max-content;max-width:min(340px,60vw);max-height:92vh;overflow-y:auto}
+.map-stage:fullscreen .map-tools.fs-float.ff-h{flex-direction:row;flex-wrap:wrap}
+.map-stage:fullscreen .vtt-col.fs-float{max-width:min(360px,70vw);max-height:92vh;overflow-y:auto}
+.ff-grip{display:none}
+.map-stage:fullscreen .fs-float>.ff-grip{display:inline-flex;align-items:center;gap:6px;flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border:1px dashed hsl(220 16% 40%);border-radius:8px;padding:4px 10px;min-height:36px;font-size:.8rem;color:var(--muted-foreground);background:hsla(222,20%,10%,.45);white-space:nowrap}
+.map-stage:fullscreen .fs-float>.ff-grip:active{cursor:grabbing}
 #gmBtn{opacity:.48;filter:saturate(.3);transition:opacity .18s ease,filter .18s ease}
 #gmBtn.holding{opacity:.85;filter:saturate(.7)}
 #gmBtn[aria-pressed="true"]{opacity:1;filter:none}
@@ -552,6 +563,7 @@ body.displaying .td-ui{display:none}
         <input id="placeSearch" type="text" autocomplete="off" aria-label="Find a place" placeholder="Search — e.g. Silverymoon, Candlekeep, Waterdeep">
         <div id="placeResults" class="place-results" hidden></div>
       </div>
+      <button type="button" class="btn" id="addPlaceBtn" aria-pressed="false" hidden>Add place</button>
       <div class="field" style="flex:0 1 auto">
         <label for="mapSelect">Map loaded in the VTT (shared)</label>
         <select id="mapSelect">
@@ -886,6 +898,23 @@ body.displaying .td-ui{display:none}
         <button type="button" class="btn" id="markerCancel">Cancel</button>
       </div>
     </form>
+    <form id="placeForm" class="marker-form" hidden>
+      <div class="form-grid">
+        <div class="field">
+          <label for="placeName">Place name</label>
+          <input id="placeName" type="text" autocomplete="off" placeholder="e.g. The Ziggaport">
+        </div>
+        <div class="field full">
+          <label for="placeNote">Note (optional)</label>
+          <textarea id="placeNote" rows="2" placeholder="What the table should know about this place"></textarea>
+        </div>
+      </div>
+      <div class="map-actions">
+        <button type="submit" class="btn primary">Save place</button>
+        <button type="button" class="btn danger" id="placeDelete" hidden>Delete place</button>
+        <button type="button" class="btn" id="placeCancel">Cancel</button>
+      </div>
+    </form>
     <form id="tokenForm" class="marker-form" hidden>
       <div class="form-grid">
         <div class="field">
@@ -1102,7 +1131,7 @@ setInterval(loadSharedEntries, 60000);
   if (!window.L) { statusEl.textContent = "The map library could not load — check the connection and refresh."; return; }
   if (!db) { statusEl.textContent = "The shared store could not be reached, so markers can't load or save right now."; return; }
   let MW = 4763, MH = 3185;
-  const MARKERS_KEY = "map_markers";
+  const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
   const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false });
@@ -1152,7 +1181,6 @@ setInterval(loadSharedEntries, 60000);
   function setStatus(msg){ statusEl.textContent = msg; }
   function draw(){
     layer.clearLayers();
-    if (currentMapId !== "faerun") return;
     /* Label collision pass: a marker whose name pill would run over the
        next marker's dot (Silverymoon over Sundabar) drops its pill BELOW
        its own dot instead. Positions are shared data — never moved. */
@@ -1202,7 +1230,7 @@ setInterval(loadSharedEntries, 60000);
     }
   }
   async function loadMarkers(quiet){
-    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", MARKERS_KEY).maybeSingle();
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", markersKey()).maybeSingle();
     if (error) { if (!quiet) setStatus("The shared markers could not be loaded — try again in a few seconds."); return; }
     markers = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers : [];
     draw();
@@ -1210,7 +1238,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveMarkers(){
     const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: MARKERS_KEY, value: { markers }, updated_at: new Date().toISOString() },
+      { key: markersKey(), value: { markers }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
     return !error;
@@ -1230,7 +1258,8 @@ setInterval(loadSharedEntries, 60000);
        the page away from the map (Shaun, 2026-11-06). The editor form
        opens in place below the controls; the page stays where it was. */
   }
-  map.on("click", e => { if (isProjecting()) return; if (document.body.classList.contains("map-expanded")) return; if (typeof armedMode !== "undefined" && armedMode) return; if (typeof rulerOn !== "undefined" && rulerOn) return; const p = toXY(e.latlng); openEditor({ mode: "new", x: p.x, y: p.y }); });
+  let placeArm = false;
+  map.on("click", e => { if (placeArm) return; if (isProjecting()) return; if (document.body.classList.contains("map-expanded")) return; if (typeof armedMode !== "undefined" && armedMode) return; if (typeof rulerOn !== "undefined" && rulerOn) return; const p = toXY(e.latlng); openEditor({ mode: "new", x: p.x, y: p.y }); });
   $("markerCancel").addEventListener("click", closeEditor);
   $("markerDelete").addEventListener("click", async () => {
     if (!editing || editing.mode !== "edit") return;
@@ -1382,19 +1411,137 @@ setInterval(loadSharedEntries, 60000);
   searchInput.addEventListener("input", () => {
     const q = searchInput.value.trim().toLowerCase();
     if (q.length < 2) { resultsBox.hidden = true; return; }
-    const placeHits = PLACES.filter(p => p.n.toLowerCase().includes(q) || (p.alias && p.alias.toLowerCase().includes(q)));
+    const placeHits = currentPlaces().filter(p => p.n.toLowerCase().includes(q) || (p.alias && p.alias.toLowerCase().includes(q)));
     const markerHits = markers.filter(mk => (mk.name || "").toLowerCase().includes(q));
     const hits = [
-      ...placeHits.map(p => ({ label: p.alias && p.n === "Bastion of Last Hope" ? `${p.n} (printed: ${p.alias})` : p.n, kind: p.t, go: () => focusPlace(p.x, p.y, p.n, p.t, p.d) })),
+      ...placeHits.map(p => ({ label: p.alias && p.n === "Bastion of Last Hope" ? `${p.n} (printed: ${p.alias})` : p.n, kind: p.t || "Place — this map", go: () => focusPlace(p.x, p.y, p.n, p.t || "Place — this map", p.d || "") })),
       ...markerHits.map(mk => ({ label: mk.name, kind: "Shared marker — " + mk.kind, go: () => focusPlace(mk.x, mk.y, mk.name, "Shared marker — " + mk.kind, mk.note || "", "Tap the marker itself on the map to edit or move it.") }))
     ].slice(0, 8);
-    if (!hits.length) { resultsBox.innerHTML = ""; resultsBox.hidden = true; return; }
+    if (!hits.length) {
+      if (currentMapId !== "faerun" && !places.length) { resultsBox.innerHTML = `<div class="pr-empty">No places on this map yet${effectiveGm() ? " — the GM can add one with Add place" : ""}.</div>`; resultsBox.hidden = false; return; }
+      resultsBox.innerHTML = ""; resultsBox.hidden = true; return;
+    }
     resultsBox.innerHTML = hits.map((h, i) => `<button type="button" data-hit="${i}">${esc(h.label)} <span class="pr-kind">${esc(h.kind)}</span></button>`).join("");
     resultsBox.hidden = false;
     resultsBox.querySelectorAll("button").forEach((b, i) => b.addEventListener("click", () => hits[i].go()));
   });
   searchInput.addEventListener("keydown", ev => { if (ev.key === "Escape") resultsBox.hidden = true; });
   document.addEventListener("click", ev => { if (!ev.target.closest(".map-tools")) resultsBox.hidden = true; });
+  /* ---- Per-map gazetteer: every map carries its own places list
+        (shared store key "vtt_places_<mapId>"), searched by "Find a
+        place" exactly like the Faerun atlas places. Faerun keeps its
+        built-in PLACES untouched and never uses this store. On other
+        maps the GM adds a place at any spot (Add place, then tap the
+        map); places render as atlas-style dots, the GM can drag them
+        to nudge, click one (GM view) to edit or delete it, and the TV
+        display copy shows them read-only like the atlas dots. ---- */
+  const placesKey = () => `vtt_places_${currentMapId}`;
+  let places = [];
+  let editingPlace = null, tempPlacePin = null;
+  const placesLayer = L.layerGroup().addTo(map);
+  const placeForm = $("placeForm");
+  function currentPlaces(){ return currentMapId === "faerun" ? PLACES : places; }
+  function drawPlaces(){
+    placesLayer.clearLayers();
+    if (currentMapId === "faerun") return;
+    for (const p of places) {
+      const dot = L.marker(toLatLng(p.x, p.y), { pane: "layerMap", draggable: !isProjecting() && effectiveGm(), icon: L.divIcon({ className: "atlas-icon", html: '<span class="atlas-dot"></span>', iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false }).addTo(placesLayer);
+      dot.on("click", () => {
+        if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
+        if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
+        showCard(p.n, "Place — this map", p.d || "", "");
+      });
+      dot.on("dragend", async () => {
+        const xy = toXY(dot.getLatLng()); p.x = xy.x; p.y = xy.y;
+        const ok = await savePlaces();
+        if (!ok) { setStatus("That move didn't save — drag it again or refresh."); loadPlaces(true); }
+        else setStatus(`${p.n} moved — saved for everybody.`);
+      });
+    }
+  }
+  async function loadPlaces(quiet){
+    if (currentMapId === "faerun") { places = []; drawPlaces(); refreshPlaceUI(); return; }
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", placesKey()).maybeSingle();
+    if (error) { if (!quiet) setStatus("This map's places could not be loaded — try again in a few seconds."); return; }
+    places = (data && data.value && Array.isArray(data.value.places)) ? data.value.places : [];
+    drawPlaces();
+    refreshPlaceUI();
+  }
+  async function savePlaces(){
+    const { error } = await db.from(SETTINGS_TABLE).upsert(
+      { key: placesKey(), value: { places }, updated_at: new Date().toISOString() },
+      { onConflict: "key" }
+    );
+    return !error;
+  }
+  let lastPlaceGm = null;
+  function refreshPlaceUI(){
+    const btn = $("addPlaceBtn");
+    const g = effectiveGm();
+    if (btn) {
+      btn.hidden = currentMapId === "faerun" || !g;
+      if (!g && placeArm) { placeArm = false; btn.setAttribute("aria-pressed", "false"); }
+    }
+    if (lastPlaceGm !== null && g !== lastPlaceGm && currentMapId !== "faerun") drawPlaces();
+    lastPlaceGm = g;
+    if (currentMapId === "faerun") searchInput.placeholder = "Search \u2014 e.g. Silverymoon, Candlekeep, Waterdeep";
+    else searchInput.placeholder = places.length ? "Find a place on this map" : "No places on this map yet";
+  }
+  setInterval(refreshPlaceUI, 1000);
+  function closePlaceEditor(){ placeForm.hidden = true; editingPlace = null; if (tempPlacePin) { placesLayer.removeLayer(tempPlacePin); tempPlacePin = null; } }
+  function openPlaceEditor(state){
+    closePlaceEditor();
+    editingPlace = state;
+    const isEdit = state.mode === "edit";
+    $("placeDelete").hidden = !isEdit;
+    $("placeName").value = isEdit ? (state.p.n || "") : "";
+    $("placeNote").value = isEdit ? (state.p.d || "") : "";
+    if (!isEdit) tempPlacePin = L.marker(toLatLng(state.x, state.y), { icon: iconFor("place", "New place", true) }).addTo(placesLayer);
+    placeForm.hidden = false;
+  }
+  $("addPlaceBtn").addEventListener("click", () => {
+    placeArm = !placeArm;
+    $("addPlaceBtn").setAttribute("aria-pressed", String(placeArm));
+    if (placeArm) setStatus("Tap the map where the place goes.");
+  });
+  map.on("click", e => {
+    if (!placeArm || isProjecting() || !effectiveGm()) return;
+    if (typeof armedMode !== "undefined" && armedMode) return;
+    if (typeof rulerOn !== "undefined" && rulerOn) return;
+    placeArm = false;
+    $("addPlaceBtn").setAttribute("aria-pressed", "false");
+    const p = toXY(e.latlng);
+    openPlaceEditor({ mode: "new", x: p.x, y: p.y });
+  });
+  $("placeCancel").addEventListener("click", closePlaceEditor);
+  $("placeDelete").addEventListener("click", async () => {
+    if (!editingPlace || editingPlace.mode !== "edit") return;
+    const p = editingPlace.p;
+    if (!confirm(`Delete the place "${p.n}" from this map? Everybody will stop seeing it.`)) return;
+    places = places.filter(x => x.id !== p.id);
+    const ok = await savePlaces();
+    if (!ok) { setStatus("That delete didn't go through — try again."); loadPlaces(true); return; }
+    closePlaceEditor(); drawPlaces(); refreshPlaceUI(); setStatus(`"${p.n}" deleted for everybody.`);
+  });
+  placeForm.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    if (!editingPlace) return;
+    const name = $("placeName").value.trim();
+    if (!name) { $("placeName").focus(); return; }
+    const note = $("placeNote").value.trim();
+    if (editingPlace.mode === "new") {
+      places.push({ id: newId(), n: name, x: editingPlace.x, y: editingPlace.y, d: note });
+      const ok = await savePlaces();
+      if (!ok) { places.pop(); setStatus("That place didn't save — check the connection and try again."); return; }
+    } else {
+      Object.assign(editingPlace.p, { n: name, d: note });
+      const ok = await savePlaces();
+      if (!ok) { setStatus("That change didn't save — try again."); loadPlaces(true); return; }
+    }
+    closePlaceEditor(); drawPlaces(); refreshPlaceUI(); setStatus(`"${name}" saved — the whole table sees it.`);
+  });
+  loadPlaces(true);
+
   /* ---- Push to TV (v1.07, Shaun): opens a SECOND copy of this page in
         ?display mode for the TV — map only, player view, editing locked.
         This laptop copy stays exactly as it is, with all the controls.
@@ -1456,34 +1603,108 @@ setInterval(loadSharedEntries, 60000);
      the first row at the top edge, the rest stacked along the bottom
      edge — nothing over the middle of the play area. On exit every row
      goes back to its exact home below the map. */
-  let fsEdgeHomes = null;
+  let fsFloatHomes = null;
+  const FS_FLOAT_KEY = "apocVttFsFloatV1";
+  const FS_ROW_LABELS = ["Search & map", "Grid, tokens & GM", "Fog", "Lighting & walls", "Draw & paint", "Layers", "Generate map"];
+  function fsFloatLoad(){ try { return JSON.parse(window.localStorage.getItem(FS_FLOAT_KEY) || "{}") || {}; } catch(e) { return {}; } }
+  function fsFloatSave(state){ try { window.localStorage.setItem(FS_FLOAT_KEY, JSON.stringify(state)); } catch(e) {} }
+  /* Orientation follows where the group sits (Shaun): nearer a side of
+     the screen than the top/bottom → it runs up-and-down (ff-v);
+     nearer the top/bottom → it runs left-and-right (ff-h). No docking:
+     the spot itself stays exactly where he dropped it. */
+  function fsOrient(el, stage){
+    const sr = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
+    if (!sr.width || !r.width) return;
+    const cx = r.left + r.width / 2 - sr.left, cy = r.top + r.height / 2 - sr.top;
+    const dx = Math.min(cx, sr.width - cx), dy = Math.min(cy, sr.height - cy);
+    el.classList.toggle("ff-v", dx < dy);
+    el.classList.toggle("ff-h", dx >= dy);
+  }
+  function fsDragStart(ev, el, grip){
+    if (ev.button > 0) return;
+    const stage = document.querySelector(".map-stage");
+    if (!stage || !el.classList.contains("fs-float")) return;
+    ev.preventDefault();
+    const sr = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const grabDX = ev.clientX - r.left, grabDY = ev.clientY - r.top;
+    el.style.width = r.width + "px";
+    try { grip.setPointerCapture(ev.pointerId); } catch(e) {}
+    function move(e2){
+      let x = e2.clientX - sr.left - grabDX, y = e2.clientY - sr.top - grabDY;
+      x = Math.max(0, Math.min(x, Math.max(0, sr.width - el.offsetWidth)));
+      y = Math.max(0, Math.min(y, Math.max(0, sr.height - el.offsetHeight)));
+      el.style.left = x + "px"; el.style.top = y + "px";
+    }
+    function up(){
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+      el.style.width = "";
+      fsOrient(el, stage);
+      const key = el.dataset.fsKey;
+      if (key) {
+        const s2 = stage.getBoundingClientRect(), state = fsFloatLoad();
+        state[key] = { x: Math.round((parseFloat(el.style.left) || 0) / s2.width * 1000) / 10, y: Math.round((parseFloat(el.style.top) || 0) / s2.height * 1000) / 10 };
+        fsFloatSave(state);
+      }
+    }
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+  }
+  function fsGripFor(el, label){
+    let g = el.querySelector(":scope > .ff-grip");
+    if (!g) {
+      g = document.createElement("span");
+      g.className = "ff-grip";
+      g.textContent = "⠿ " + label;
+      g.title = "Drag to move this group";
+      el.insertBefore(g, el.firstChild);
+      g.addEventListener("pointerdown", (ev) => fsDragStart(ev, el, g));
+    }
+    return g;
+  }
+  function fsPlaceAll(stage, items){
+    const state = fsFloatLoad(), sr = stage.getBoundingClientRect();
+    if (!sr.width) return;
+    items.forEach((it, i) => {
+      const saved = state[it.key];
+      const x = saved ? saved.x : 1, y = saved ? saved.y : Math.min(2 + i * 11, 78);
+      it.el.style.left = (x / 100 * sr.width) + "px";
+      it.el.style.top = (y / 100 * sr.height) + "px";
+      fsOrient(it.el, stage);
+    });
+  }
   function fsToolsIn(){
     const stage = document.querySelector(".map-stage");
-    if (!stage || fsEdgeHomes) return;
-    const rows = Array.from(document.querySelectorAll("#mapPanel .map-tools")).filter(r => !stage.contains(r));
-    if (!rows.length) return;
-    fsEdgeHomes = rows.map(r => ({ row: r, parent: r.parentNode, next: r.nextSibling }));
-    /* No container, no box: each row floats on its own along the edges —
-       the first at the top edge, the rest stacked up from the bottom
-       edge, each measured so they sit separate (Shaun, 2026-11-06). */
-    rows.forEach(r => { r.classList.add("fs-strip"); stage.appendChild(r); });
-    rows[0].style.top = "10px";
-    let bottom = 10;
-    for (let i = 1; i < rows.length; i++) {
-      rows[i].style.bottom = bottom + "px";
-      bottom += (rows[i].offsetHeight || 44) + 6;
-    }
+    const panel = document.getElementById("mapPanel");
+    if (!stage || !panel || fsFloatHomes) return;
+    const items = [];
+    panel.querySelectorAll(":scope > .map-tools").forEach((r, i) => { if (!stage.contains(r)) items.push({ el: r, key: "r" + i, label: FS_ROW_LABELS[i] || "Tools" }); });
+    panel.querySelectorAll(":scope > .vtt-panel > .vtt-col").forEach((c, i) => { const h = c.querySelector("h3"); items.push({ el: c, key: "c" + i, label: h ? h.textContent.trim() : "Panel" }); });
+    if (!items.length) return;
+    fsFloatHomes = items.map(it => ({ el: it.el, parent: it.el.parentNode, next: it.el.nextSibling }));
+    items.forEach(it => {
+      it.el.dataset.fsKey = it.key;
+      it.el.classList.add("fs-float");
+      fsGripFor(it.el, it.label);
+      stage.appendChild(it.el);
+    });
+    fsPlaceAll(stage, items);
+    /* The stage is still settling into fullscreen — re-place once it
+       reaches its real size so saved spots land true. */
+    setTimeout(() => { if (fsFloatHomes) fsPlaceAll(stage, items); }, 280);
   }
   function fsToolsOut(){
-    if (!fsEdgeHomes) return;
-    for (let i = fsEdgeHomes.length - 1; i >= 0; i--) {
-      const h = fsEdgeHomes[i];
-      h.row.classList.remove("fs-strip");
-      h.row.style.top = ""; h.row.style.bottom = "";
-      if (h.next && h.next.parentNode === h.parent) h.parent.insertBefore(h.row, h.next);
-      else h.parent.appendChild(h.row);
+    if (!fsFloatHomes) return;
+    for (let i = fsFloatHomes.length - 1; i >= 0; i--) {
+      const h = fsFloatHomes[i];
+      h.el.classList.remove("fs-float", "ff-v", "ff-h");
+      h.el.style.left = ""; h.el.style.top = ""; h.el.style.width = "";
+      if (h.next && h.next.parentNode === h.parent) h.parent.insertBefore(h.el, h.next);
+      else h.parent.appendChild(h.el);
     }
-    fsEdgeHomes = null;
+    fsFloatHomes = null;
   }
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && document.body.classList.contains("map-expanded")) setExpanded(false);
@@ -1853,7 +2074,7 @@ setInterval(loadSharedEntries, 60000);
   loadTokens();
   setInterval(() => { loadTokens(true); loadVttSettings(true); }, 60000);
   try {
-    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); }).subscribe();
+    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); loadMarkers(true); loadPlaces(true); }).subscribe();
   } catch(e) { /* realtime is a bonus; the 60-second refresh stands */ }
 
   /* ================= VTT Phase 2: GM view, fog of war, GM layer, drawing =================
@@ -2535,14 +2756,20 @@ setInterval(loadSharedEntries, 60000);
     map.fitBounds(bounds);
     drawGrid();
     if (gridOn) gridLayer.addTo(map);
+    layer.addTo(map);
+    markers = [];
+    draw();
+    places = [];
+    drawPlaces();
     if (id === "faerun") {
-      layer.addTo(map);
-      draw();
       if ($("atlasToggle").checked) atlasLayer.addTo(map);
+      if ($("apocToggle").checked) veilLayer.addTo(map);
     } else {
-      map.removeLayer(layer);
       map.removeLayer(atlasLayer);
+      map.removeLayer(veilLayer);
     }
+    loadMarkers(true);
+    loadPlaces(true);
     loadTokens(true);
     loadVttSettings(true);
     setStatus(`Map loaded in the VTT: ${def.name}. Grid, tokens, ruler and projection work on it; its tokens are its own.`);
@@ -2564,6 +2791,7 @@ setInterval(loadSharedEntries, 60000);
 
   loadMarkers();
   setInterval(() => loadMarkers(true), 60000);
+  setInterval(() => loadPlaces(true), 60000);
   try {
     db.channel("markers-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE, filter: "key=eq.map_markers" }, () => loadMarkers(true)).subscribe();
   } catch(e) { /* realtime is a bonus; the 60-second refresh stands */ }
@@ -6009,6 +6237,9 @@ function floorConnected(L, cols, rows){
   }
   function applyPark(d, park){
     var el = d.el;
+    /* Enlarged-view floaters (fs-float) own their position — the retired
+       perimeter passes must never strip it. */
+    if (el.classList.contains("fs-float")) return;
     el.classList.remove("per-parked", "per-h", "per-v");
     el.style.left = el.style.right = el.style.top = el.style.bottom = "";
     if (!park || !mq.matches) return;
