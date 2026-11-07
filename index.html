@@ -658,7 +658,7 @@ body.displaying .td-ui{display:none}
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
       <button type="button" class="btn primary" id="pushTvBtn">Push to TV</button>
       <button class="btn" id="ambBtn" type="button" aria-pressed="false">🔇 Ambience off</button>
-      <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>GM view: off</button>
+      <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>GM view</button>
       <span class="muted small" id="tokenStatus"></span>
       <span class="muted small" id="gmStatus"></span>
     </div>
@@ -2208,7 +2208,7 @@ setInterval(loadSharedEntries, 60000);
      no lock (Shaun, 2026-11-06: "That GM view just on or off. I don't
      need no security pin.") ---- */
   function applyGmUi(){
-    $("gmBtn").textContent = gmView ? "GM view: on — hold for off" : "GM view: off — hold for on";
+    $("gmBtn").textContent = "GM view"; /* v1.66 (Shaun): label is just "GM view" — the on/off state reads from aria-pressed styling; hold-to-switch unchanged */
     $("gmBtn").setAttribute("aria-pressed", String(gmView));
     $("fogControls").hidden = !gmView;
     $("lightControls").hidden = !gmView;
@@ -2228,7 +2228,8 @@ setInterval(loadSharedEntries, 60000);
      per TAB (sessionStorage), so after an evening in one tab where GM
      stayed on by itself, every fresh versioned link opened a new tab
      with GM off and a button that ignores clicks. Fixes, hold kept:
-     the button label now says "hold for on/off", a progress fill sweeps
+     the button used to carry the instruction in its label (v1.66:
+     Shaun had it cut to just "GM view"), a progress fill sweeps
      the button while it is held, a too-short press answers in the status
      line next to the button ("Keep holding — GM view switches after a
      second"), and the on-state persists per DEVICE (localStorage) like
@@ -5917,7 +5918,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-0935";
+        var BUILD_STAMP = "2026-11-07-0958";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7074,7 +7075,16 @@ function floorConnected(L, cols, rows){
    size, captured from the engine's own current bounds so the frame
    units are always the engine's. The opening Faerun slice view is
    left exactly as authored. Fullscreen, Expand and the TV display
-   copy clear the inline sizing and keep their full-bleed CSS. */
+   copy clear the inline sizing and keep their full-bleed CSS.
+   v1.66 (Shaun): the WINDOW fills its corner — full column width,
+   all the way up to the Art Library, and down to the button row:
+   its height is whatever the closed page leaves between the map's
+   top and the row (measured live off the row's own position, so
+   the page stays exactly one screen with a few px to spare on any
+   map). A taller-than-wide map no longer shrinks the window to
+   its fitted width; Leaflet fits the frame inside the window,
+   image aspect untouched. The aspect-under-cap sizing remains
+   only as the fallback for when the row can't be measured. */
 (function(){
   var el = document.getElementById("apocMap");
   if (!el || !window.L) return;
@@ -7108,9 +7118,25 @@ function floorConnected(L, cols, rows){
     if (!availW) return;
     var maxH = Math.min(Math.round(window.innerHeight - 120), 980); /* v1.63: reserve the closed-page chrome (panel + button row) so the map and the row fit one screen with every set collapsed; matches the .apoc-map CSS cap */
     var a = img.naturalWidth / img.naturalHeight;
-    var w = availW, h = Math.round(w / a);
-    if (h > maxH){ h = maxH; w = Math.round(h * a); }
-    if (h < 320){ h = Math.min(320, maxH); w = Math.round(h * a); if (w > availW){ w = availW; h = Math.round(w / a); } }
+    /* v1.66: window width is the column's full width (up to the Art
+       Library) on every map; window height fills down to the button
+       row — measured live: the row's position with the window at
+       its aspect height gives the page's fixed chrome, and the
+       window takes everything the viewport leaves above the row
+       (10px gap kept, a few px of page spare). The v1.63 cap
+       survives as the fallback when the row can't be measured. */
+    var w = availW;
+    var aspectH = Math.round(w / a);
+    var row = document.getElementById("ctlRow");
+    var fillH = 0;
+    if (row){
+      var pageH = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+      var spare = pageH - window.innerHeight; /* 0 once the page fits */
+      var chrome = pageH - (el.getBoundingClientRect().top + (parseFloat(el.style.height) || aspectH));
+      fillH = window.innerHeight + spare - chrome - 10;
+    }
+    var h = fillH > 0 ? fillH : Math.min(aspectH, maxH);
+    if (h < 320){ h = Math.min(320, maxH); }
     el.style.width = w + "px";
     el.style.height = h + "px";
     el.style.marginLeft = "0";
