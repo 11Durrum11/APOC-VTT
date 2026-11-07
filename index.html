@@ -6111,7 +6111,7 @@ function floorConnected(L, cols, rows){
     } catch(e) { monsters = []; }
     bySlug = {};
     monsters.forEach(function(m){ bySlug[m.slug] = m; });
-    if (countEl) countEl.textContent = monsters.length ? "\u2014 " + monsters.length + " (Monster Manual I)" : "";
+    if (countEl) countEl.textContent = monsters.length ? "\u2014 " + monsters.length + " monsters" : "";
     if (note) note.textContent = monsters.length ? "" : "The monster repository is empty \u2014 the registry read came back with nothing.";
     render();
   }
@@ -6240,7 +6240,7 @@ function floorConnected(L, cols, rows){
       : (m.status === "found" ? "Art: book art, enhanced; the original is preserved."
       : "Art: none \u2014 this is a template entry, listed without art rather than given an invented picture.");
     detailEl.innerHTML = "<h4>" + esc(m.name) + "</h4>"
-      + "<p class=\"muted small\">" + esc(m.typeLine) + " \u00b7 CR " + esc(m.cr) + " \u00b7 Monster Manual I</p>"
+      + "<p class=\"muted small\">" + esc(m.typeLine) + " \u00b7 CR " + esc(m.cr) + " \u00b7 " + esc((m.books && m.books.length) ? m.books.join(", ") : "Monster Manual I") + "</p>"
       + (flags ? "<p>" + flags + "</p>" : "")
       + "<p>" + esc(m.desc || "") + "</p>"
       + "<p class=\"muted small\">" + art + "</p>"
