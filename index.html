@@ -6349,14 +6349,24 @@ function floorConnected(L, cols, rows){
     else if (park.edge === "right") { el.style.right = "6px"; el.style.top = Math.min(Math.max(along, textBottom), Math.max(textBottom, pr.height - h - 6)) + "px"; }
   }
   function applyAll(){
-    /* Shaun's layout calls: v1.20 retired the perimeter parking (groups
-       stay in page flow); v1.49 (2026-11-06 ~21:22) moved EVERYTHING UP —
+    /* Shaun's layout calls: v1.49 (2026-11-06 ~21:22) moved EVERYTHING UP —
        all the button rows, the editing forms and dice/initiative now sit
        ABOVE the map in one top cluster with the Expand / Exit-full-screen
        button (the grid checkbox and the squares/hexes dropdown sit in
        that first row, right beside it), and the map hangs below them,
-       clear. Do not move the groups back below the map. */
-    defs.forEach(function(d){ applyPark(d, null); });
+       clear. Do not move the groups back below the map.
+       v1.51 fix (Shaun, 2026-11-06 ~21:29): a dragged group MOVED but
+       would not STICK — the drop handler saved {edge, along} to
+       localStorage and parked the group, but applyAll() then re-applied
+       "no park" to every group (on load, on window resize, on
+       fullscreenchange — and on the drop handler's own 60ms synthetic
+       resize), snapping the group straight back into page flow, and the
+       saved arrangement was never restored after a reload. applyAll()
+       now re-applies each group's SAVED park: where Shaun drops a group
+       is where it stays, per device, across reloads. Groups never
+       dragged have no saved park and stay in the page flow above. */
+    var state = load();
+    defs.forEach(function(d){ applyPark(d, state[d.id] || null); });
   }
   applyAll();
 
