@@ -102,6 +102,7 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .place-results button:last-child{border-bottom:none}
 .place-results button:hover,.place-results button:focus-visible{background:hsl(222,18%,22%)}
 .place-results .pr-kind{color:var(--muted-foreground);font-size:.78rem}
+.place-results .pr-empty{padding:10px 12px;color:var(--muted-foreground);font-size:.9rem}
 .atlas-toggle{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-size:.9rem;color:var(--accent-foreground)}
 .atlas-toggle input{width:20px;height:20px;min-height:20px}
 .atlas-icon{background:none;border:none}
@@ -552,6 +553,7 @@ body.displaying .td-ui{display:none}
         <input id="placeSearch" type="text" autocomplete="off" aria-label="Find a place" placeholder="Search — e.g. Silverymoon, Candlekeep, Waterdeep">
         <div id="placeResults" class="place-results" hidden></div>
       </div>
+      <button type="button" class="btn" id="addPlaceBtn" aria-pressed="false" hidden>Add place</button>
       <div class="field" style="flex:0 1 auto">
         <label for="mapSelect">Map loaded in the VTT (shared)</label>
         <select id="mapSelect">
@@ -886,6 +888,23 @@ body.displaying .td-ui{display:none}
         <button type="button" class="btn" id="markerCancel">Cancel</button>
       </div>
     </form>
+    <form id="placeForm" class="marker-form" hidden>
+      <div class="form-grid">
+        <div class="field">
+          <label for="placeName">Place name</label>
+          <input id="placeName" type="text" autocomplete="off" placeholder="e.g. The Ziggaport">
+        </div>
+        <div class="field full">
+          <label for="placeNote">Note (optional)</label>
+          <textarea id="placeNote" rows="2" placeholder="What the table should know about this place"></textarea>
+        </div>
+      </div>
+      <div class="map-actions">
+        <button type="submit" class="btn primary">Save place</button>
+        <button type="button" class="btn danger" id="placeDelete" hidden>Delete place</button>
+        <button type="button" class="btn" id="placeCancel">Cancel</button>
+      </div>
+    </form>
     <form id="tokenForm" class="marker-form" hidden>
       <div class="form-grid">
         <div class="field">
@@ -1102,7 +1121,7 @@ setInterval(loadSharedEntries, 60000);
   if (!window.L) { statusEl.textContent = "The map library could not load — check the connection and refresh."; return; }
   if (!db) { statusEl.textContent = "The shared store could not be reached, so markers can't load or save right now."; return; }
   let MW = 4763, MH = 3185;
-  const MARKERS_KEY = "map_markers";
+  const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
   const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false });
@@ -1152,7 +1171,6 @@ setInterval(loadSharedEntries, 60000);
   function setStatus(msg){ statusEl.textContent = msg; }
   function draw(){
     layer.clearLayers();
-    if (currentMapId !== "faerun") return;
     /* Label collision pass: a marker whose name pill would run over the
        next marker's dot (Silverymoon over Sundabar) drops its pill BELOW
        its own dot instead. Positions are shared data — never moved. */
@@ -1202,7 +1220,7 @@ setInterval(loadSharedEntries, 60000);
     }
   }
   async function loadMarkers(quiet){
-    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", MARKERS_KEY).maybeSingle();
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", markersKey()).maybeSingle();
     if (error) { if (!quiet) setStatus("The shared markers could not be loaded — try again in a few seconds."); return; }
     markers = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers : [];
     draw();
@@ -1210,7 +1228,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveMarkers(){
     const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: MARKERS_KEY, value: { markers }, updated_at: new Date().toISOString() },
+      { key: markersKey(), value: { markers }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
     return !error;
@@ -1230,7 +1248,8 @@ setInterval(loadSharedEntries, 60000);
        the page away from the map (Shaun, 2026-11-06). The editor form
        opens in place below the controls; the page stays where it was. */
   }
-  map.on("click", e => { if (isProjecting()) return; if (document.body.classList.contains("map-expanded")) return; if (typeof armedMode !== "undefined" && armedMode) return; if (typeof rulerOn !== "undefined" && rulerOn) return; const p = toXY(e.latlng); openEditor({ mode: "new", x: p.x, y: p.y }); });
+  let placeArm = false;
+  map.on("click", e => { if (placeArm) return; if (isProjecting()) return; if (document.body.classList.contains("map-expanded")) return; if (typeof armedMode !== "undefined" && armedMode) return; if (typeof rulerOn !== "undefined" && rulerOn) return; const p = toXY(e.latlng); openEditor({ mode: "new", x: p.x, y: p.y }); });
   $("markerCancel").addEventListener("click", closeEditor);
   $("markerDelete").addEventListener("click", async () => {
     if (!editing || editing.mode !== "edit") return;
@@ -1382,19 +1401,137 @@ setInterval(loadSharedEntries, 60000);
   searchInput.addEventListener("input", () => {
     const q = searchInput.value.trim().toLowerCase();
     if (q.length < 2) { resultsBox.hidden = true; return; }
-    const placeHits = PLACES.filter(p => p.n.toLowerCase().includes(q) || (p.alias && p.alias.toLowerCase().includes(q)));
+    const placeHits = currentPlaces().filter(p => p.n.toLowerCase().includes(q) || (p.alias && p.alias.toLowerCase().includes(q)));
     const markerHits = markers.filter(mk => (mk.name || "").toLowerCase().includes(q));
     const hits = [
-      ...placeHits.map(p => ({ label: p.alias && p.n === "Bastion of Last Hope" ? `${p.n} (printed: ${p.alias})` : p.n, kind: p.t, go: () => focusPlace(p.x, p.y, p.n, p.t, p.d) })),
+      ...placeHits.map(p => ({ label: p.alias && p.n === "Bastion of Last Hope" ? `${p.n} (printed: ${p.alias})` : p.n, kind: p.t || "Place — this map", go: () => focusPlace(p.x, p.y, p.n, p.t || "Place — this map", p.d || "") })),
       ...markerHits.map(mk => ({ label: mk.name, kind: "Shared marker — " + mk.kind, go: () => focusPlace(mk.x, mk.y, mk.name, "Shared marker — " + mk.kind, mk.note || "", "Tap the marker itself on the map to edit or move it.") }))
     ].slice(0, 8);
-    if (!hits.length) { resultsBox.innerHTML = ""; resultsBox.hidden = true; return; }
+    if (!hits.length) {
+      if (currentMapId !== "faerun" && !places.length) { resultsBox.innerHTML = `<div class="pr-empty">No places on this map yet${effectiveGm() ? " — the GM can add one with Add place" : ""}.</div>`; resultsBox.hidden = false; return; }
+      resultsBox.innerHTML = ""; resultsBox.hidden = true; return;
+    }
     resultsBox.innerHTML = hits.map((h, i) => `<button type="button" data-hit="${i}">${esc(h.label)} <span class="pr-kind">${esc(h.kind)}</span></button>`).join("");
     resultsBox.hidden = false;
     resultsBox.querySelectorAll("button").forEach((b, i) => b.addEventListener("click", () => hits[i].go()));
   });
   searchInput.addEventListener("keydown", ev => { if (ev.key === "Escape") resultsBox.hidden = true; });
   document.addEventListener("click", ev => { if (!ev.target.closest(".map-tools")) resultsBox.hidden = true; });
+  /* ---- Per-map gazetteer: every map carries its own places list
+        (shared store key "vtt_places_<mapId>"), searched by "Find a
+        place" exactly like the Faerun atlas places. Faerun keeps its
+        built-in PLACES untouched and never uses this store. On other
+        maps the GM adds a place at any spot (Add place, then tap the
+        map); places render as atlas-style dots, the GM can drag them
+        to nudge, click one (GM view) to edit or delete it, and the TV
+        display copy shows them read-only like the atlas dots. ---- */
+  const placesKey = () => `vtt_places_${currentMapId}`;
+  let places = [];
+  let editingPlace = null, tempPlacePin = null;
+  const placesLayer = L.layerGroup().addTo(map);
+  const placeForm = $("placeForm");
+  function currentPlaces(){ return currentMapId === "faerun" ? PLACES : places; }
+  function drawPlaces(){
+    placesLayer.clearLayers();
+    if (currentMapId === "faerun") return;
+    for (const p of places) {
+      const dot = L.marker(toLatLng(p.x, p.y), { pane: "layerMap", draggable: !isProjecting() && effectiveGm(), icon: L.divIcon({ className: "atlas-icon", html: '<span class="atlas-dot"></span>', iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false }).addTo(placesLayer);
+      dot.on("click", () => {
+        if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
+        if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
+        showCard(p.n, "Place — this map", p.d || "", "");
+      });
+      dot.on("dragend", async () => {
+        const xy = toXY(dot.getLatLng()); p.x = xy.x; p.y = xy.y;
+        const ok = await savePlaces();
+        if (!ok) { setStatus("That move didn't save — drag it again or refresh."); loadPlaces(true); }
+        else setStatus(`${p.n} moved — saved for everybody.`);
+      });
+    }
+  }
+  async function loadPlaces(quiet){
+    if (currentMapId === "faerun") { places = []; drawPlaces(); refreshPlaceUI(); return; }
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", placesKey()).maybeSingle();
+    if (error) { if (!quiet) setStatus("This map's places could not be loaded — try again in a few seconds."); return; }
+    places = (data && data.value && Array.isArray(data.value.places)) ? data.value.places : [];
+    drawPlaces();
+    refreshPlaceUI();
+  }
+  async function savePlaces(){
+    const { error } = await db.from(SETTINGS_TABLE).upsert(
+      { key: placesKey(), value: { places }, updated_at: new Date().toISOString() },
+      { onConflict: "key" }
+    );
+    return !error;
+  }
+  let lastPlaceGm = null;
+  function refreshPlaceUI(){
+    const btn = $("addPlaceBtn");
+    const g = effectiveGm();
+    if (btn) {
+      btn.hidden = currentMapId === "faerun" || !g;
+      if (!g && placeArm) { placeArm = false; btn.setAttribute("aria-pressed", "false"); }
+    }
+    if (lastPlaceGm !== null && g !== lastPlaceGm && currentMapId !== "faerun") drawPlaces();
+    lastPlaceGm = g;
+    if (currentMapId === "faerun") searchInput.placeholder = "Search \u2014 e.g. Silverymoon, Candlekeep, Waterdeep";
+    else searchInput.placeholder = places.length ? "Find a place on this map" : "No places on this map yet";
+  }
+  setInterval(refreshPlaceUI, 1000);
+  function closePlaceEditor(){ placeForm.hidden = true; editingPlace = null; if (tempPlacePin) { placesLayer.removeLayer(tempPlacePin); tempPlacePin = null; } }
+  function openPlaceEditor(state){
+    closePlaceEditor();
+    editingPlace = state;
+    const isEdit = state.mode === "edit";
+    $("placeDelete").hidden = !isEdit;
+    $("placeName").value = isEdit ? (state.p.n || "") : "";
+    $("placeNote").value = isEdit ? (state.p.d || "") : "";
+    if (!isEdit) tempPlacePin = L.marker(toLatLng(state.x, state.y), { icon: iconFor("place", "New place", true) }).addTo(placesLayer);
+    placeForm.hidden = false;
+  }
+  $("addPlaceBtn").addEventListener("click", () => {
+    placeArm = !placeArm;
+    $("addPlaceBtn").setAttribute("aria-pressed", String(placeArm));
+    if (placeArm) setStatus("Tap the map where the place goes.");
+  });
+  map.on("click", e => {
+    if (!placeArm || isProjecting() || !effectiveGm()) return;
+    if (typeof armedMode !== "undefined" && armedMode) return;
+    if (typeof rulerOn !== "undefined" && rulerOn) return;
+    placeArm = false;
+    $("addPlaceBtn").setAttribute("aria-pressed", "false");
+    const p = toXY(e.latlng);
+    openPlaceEditor({ mode: "new", x: p.x, y: p.y });
+  });
+  $("placeCancel").addEventListener("click", closePlaceEditor);
+  $("placeDelete").addEventListener("click", async () => {
+    if (!editingPlace || editingPlace.mode !== "edit") return;
+    const p = editingPlace.p;
+    if (!confirm(`Delete the place "${p.n}" from this map? Everybody will stop seeing it.`)) return;
+    places = places.filter(x => x.id !== p.id);
+    const ok = await savePlaces();
+    if (!ok) { setStatus("That delete didn't go through — try again."); loadPlaces(true); return; }
+    closePlaceEditor(); drawPlaces(); refreshPlaceUI(); setStatus(`"${p.n}" deleted for everybody.`);
+  });
+  placeForm.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    if (!editingPlace) return;
+    const name = $("placeName").value.trim();
+    if (!name) { $("placeName").focus(); return; }
+    const note = $("placeNote").value.trim();
+    if (editingPlace.mode === "new") {
+      places.push({ id: newId(), n: name, x: editingPlace.x, y: editingPlace.y, d: note });
+      const ok = await savePlaces();
+      if (!ok) { places.pop(); setStatus("That place didn't save — check the connection and try again."); return; }
+    } else {
+      Object.assign(editingPlace.p, { n: name, d: note });
+      const ok = await savePlaces();
+      if (!ok) { setStatus("That change didn't save — try again."); loadPlaces(true); return; }
+    }
+    closePlaceEditor(); drawPlaces(); refreshPlaceUI(); setStatus(`"${name}" saved — the whole table sees it.`);
+  });
+  loadPlaces(true);
+
   /* ---- Push to TV (v1.07, Shaun): opens a SECOND copy of this page in
         ?display mode for the TV — map only, player view, editing locked.
         This laptop copy stays exactly as it is, with all the controls.
@@ -1853,7 +1990,7 @@ setInterval(loadSharedEntries, 60000);
   loadTokens();
   setInterval(() => { loadTokens(true); loadVttSettings(true); }, 60000);
   try {
-    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); }).subscribe();
+    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); loadMarkers(true); loadPlaces(true); }).subscribe();
   } catch(e) { /* realtime is a bonus; the 60-second refresh stands */ }
 
   /* ================= VTT Phase 2: GM view, fog of war, GM layer, drawing =================
@@ -2535,14 +2672,20 @@ setInterval(loadSharedEntries, 60000);
     map.fitBounds(bounds);
     drawGrid();
     if (gridOn) gridLayer.addTo(map);
+    layer.addTo(map);
+    markers = [];
+    draw();
+    places = [];
+    drawPlaces();
     if (id === "faerun") {
-      layer.addTo(map);
-      draw();
       if ($("atlasToggle").checked) atlasLayer.addTo(map);
+      if ($("apocToggle").checked) veilLayer.addTo(map);
     } else {
-      map.removeLayer(layer);
       map.removeLayer(atlasLayer);
+      map.removeLayer(veilLayer);
     }
+    loadMarkers(true);
+    loadPlaces(true);
     loadTokens(true);
     loadVttSettings(true);
     setStatus(`Map loaded in the VTT: ${def.name}. Grid, tokens, ruler and projection work on it; its tokens are its own.`);
@@ -2564,6 +2707,7 @@ setInterval(loadSharedEntries, 60000);
 
   loadMarkers();
   setInterval(() => loadMarkers(true), 60000);
+  setInterval(() => loadPlaces(true), 60000);
   try {
     db.channel("markers-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE, filter: "key=eq.map_markers" }, () => loadMarkers(true)).subscribe();
   } catch(e) { /* realtime is a bonus; the 60-second refresh stands */ }
