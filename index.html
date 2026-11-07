@@ -599,21 +599,51 @@ body.displaying .td-ui{display:none}
 @media (max-width:820px){
 .vtt-head{flex-wrap:wrap}
 }
-/* ---- v1.71: the zoom bar (Shaun: "the bar zoomer" — home in the
-   gutter between the map and the Art Library, and movable). A slim
-   floating bar straddling the gutter at the map's right edge; drag
-   its ZOOM grip to park it anywhere over the stage, per-device
-   persistence (see the zoom script at the end of the body); the
-   slider zooms wherever it is parked. Hidden on the TV copy, in
-   fullscreen and in Expand, like the resize handles. ---- */
-#zoomBar{position:absolute;z-index:960;width:28px;padding:5px 0 4px;display:flex;flex-direction:column;align-items:center;gap:3px;background:rgba(10,12,16,.78);border:1px solid hsl(222 18% 30%);border-radius:10px}
+/* ---- v1.71: the zoom bar (Shaun: "the bar zoomer" — movable; its
+   home gutter is under the map box, above the bottom Art Library
+   strip — see the amendment note below). A slim floating bar
+   straddling the map window's bottom-right corner; drag its ZOOM
+   grip to park it anywhere over the stage, per-device persistence
+   (see the zoom script at the end of the body); the slider zooms
+   wherever it is parked. Hidden on the TV copy, in fullscreen and
+   in Expand, like the resize handles. ---- */
+#zoomBar{position:absolute;z-index:960;height:30px;padding:3px 8px;display:flex;flex-direction:row;align-items:center;gap:7px;background:rgba(10,12,16,.78);border:1px solid hsl(222 18% 30%);border-radius:10px}
 #zoomBar[hidden]{display:none}
-#zoomBar .zb-grip{cursor:grab;font-size:.6rem;font-weight:700;letter-spacing:.07em;color:#cfd3da;user-select:none;-webkit-user-select:none;touch-action:none;padding:2px 3px;line-height:1.1;text-align:center}
+#zoomBar .zb-grip{cursor:grab;font-size:.62rem;font-weight:700;letter-spacing:.07em;color:#cfd3da;user-select:none;-webkit-user-select:none;touch-action:none;padding:2px 3px;line-height:1.1;text-align:center}
 #zoomBar .zb-grip:active{cursor:grabbing}
-#zoomBar input[type=range]{writing-mode:vertical-lr;direction:rtl;width:22px;height:148px;accent-color:#d8b25a;cursor:pointer;margin:0}
+#zoomBar input[type=range]{width:148px;height:22px;accent-color:#d8b25a;cursor:pointer;margin:0}
 body.displaying #zoomBar{display:none !important}
 #mapPanel:fullscreen #zoomBar{display:none !important}
 .map-stage:fullscreen #zoomBar{display:none !important}
+
+/* ---- v1.71 (amendment, Shaun, voice call 2026-11-07 ~13:22): the
+   ART LIBRARY lives ACROSS THE BOTTOM — a horizontal strip under
+   the map stage, full width of the bubble, categories side by
+   side. Its expanded body OVERLAYS upward over the map's bottom
+   edge (opening downward would extend past the page end and
+   create the very scroll this avoids) with its own internal
+   scroll, keeping the map's fit rule and the one-screen
+   closed page. The strip is the DEFAULT home: dragged by its grip
+   it floats free (perimeter script, .per-float) and stays exactly
+   where it is left; double-clicking the grip returns it here. ---- */
+#mapPanel{position:relative}
+#mapPanel > .map-repo{flex:none;width:100%;margin-top:10px}
+.map-repo .artlib{position:relative}
+.map-repo .artlib.open > .nest-body{position:absolute;bottom:calc(100% + 4px);left:0;right:0;z-index:1250;display:flex;flex-wrap:wrap;gap:10px;max-height:46vh;overflow-y:auto;background:rgba(10,12,16,.97);border:1px solid hsl(222 18% 28%);border-radius:10px;padding:10px;box-shadow:0 14px 34px rgba(0,0,0,.5)}
+.map-repo .artlib.open > .nest-body > *{flex:1 1 230px;min-width:0;margin-top:0;margin-bottom:0}
+.map-repo .mr-list{max-height:30vh}
+.map-repo.per-float{position:absolute;z-index:1100;margin:0;max-height:64vh;overflow-y:auto;overflow-x:hidden}
+.map-repo.per-float .artlib.open > .nest-body{position:static;max-height:38vh;box-shadow:none}
+
+/* ---- v1.71: right-click options menu (Shaun, voice call
+   2026-11-07 ~13:20) — one menu for everything placed on the map;
+   see the context-menu script at the end of the body. ---- */
+#ctxMenu{position:fixed;z-index:4000;min-width:190px;max-width:270px;background:rgba(10,12,16,.97);border:1px solid hsl(222 18% 32%);border-radius:10px;padding:5px;display:flex;flex-direction:column;gap:2px;box-shadow:0 14px 34px rgba(0,0,0,.55)}
+#ctxMenu[hidden]{display:none}
+#ctxMenu .ctx-title{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted-foreground);padding:3px 8px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#ctxMenu button{text-align:left;background:transparent;border:0;color:inherit;font:inherit;font-size:.92rem;padding:7px 8px;border-radius:7px;cursor:pointer;min-height:34px}
+#ctxMenu button:hover{background:rgba(216,178,90,.14);color:var(--primary)}
+#ctxMenu button.danger:hover{color:#f0b1b1;background:rgba(160,40,40,.16)}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -642,6 +672,8 @@ body.displaying #zoomBar{display:none !important}
           <input type="range" id="zoomSlider" min="-2" max="3" step="0.25" value="0" aria-label="Map zoom">
         </div>
       </div>
+
+    </div>
       <aside class="map-repo" aria-label="Art Library">
         <div id="placeCard" class="place-card" hidden></div>
         <div class="nest artlib" id="artLibrary">
@@ -704,7 +736,6 @@ body.displaying #zoomBar{display:none !important}
           </div>
         </div>
       </aside>
-    </div>
     <div class="map-tools">
       <div class="field">
         <input id="placeSearch" type="text" autocomplete="off" aria-label="Find a place" placeholder="Search — e.g. Silverymoon, Candlekeep, Waterdeep">
@@ -1504,6 +1535,14 @@ setInterval(loadSharedEntries, 60000);
     }
     closeEditor(); draw(); setStatus(`"${title}" saved — the whole table sees it.`);
   });
+  /* v1.71: hooks for the right-click options menu (see the
+     context-menu script at the end of the body). Same flows as the
+     form's own buttons: delete filters + saves + redraws. */
+  window.vttMarkers = {
+    openEditor, showPinCard, list: () => markers,
+    del: async mk => { markers = markers.filter(x => x.id !== mk.id); const ok = await saveMarkers(); draw(); return ok; },
+    toggleGm: async mk => { mk.gm = !mk.gm; const ok = await saveMarkers(); draw(); return ok; }
+  };
   /* ---- Atlas layer: the reference atlas taken over — its places and structure,
         stripped to what the table uses, screened for APOC, on our own surface.
         Canon 3E geography; blurbs are the tracker's own. Waterdeep is filed under
@@ -1763,6 +1802,14 @@ setInterval(loadSharedEntries, 60000);
     closePlaceEditor(); drawPlaces(); refreshPlaceUI(); setStatus(`"${name}" saved — the whole table sees it.`);
   });
   loadPlaces(true);
+
+  /* v1.71: hooks for the right-click options menu. Places on the
+     Faerûn atlas are canon data, not user-placed — the menu only
+     offers Edit/Delete on per-map places (isAtlas() false). */
+  window.vttPlaces = {
+    openEditor: openPlaceEditor, list: currentPlaces, isAtlas: () => currentMapId === "faerun",
+    del: async p => { places = places.filter(x => x.id !== p.id); const ok = await savePlaces(); drawPlaces(); refreshPlaceUI(); return ok; }
+  };
 
   /* ---- Push to TV (v1.07, Shaun): opens a SECOND copy of this page in
         ?display mode for the TV — map only, player view, editing locked.
@@ -2157,6 +2204,13 @@ setInterval(loadSharedEntries, 60000);
     tokenStatusEl.textContent = ok ? `"${tk.name}" deleted for everybody.` : "That delete didn't go through — refreshed.";
     if (!ok) loadTokens(true);
   });
+  /* v1.71: hooks for the right-click options menu. */
+  window.vttTokens = {
+    openEditor: openTokenEditor, list: () => tokens,
+    del: async tk => { tokens = tokens.filter(t => t.id !== tk.id); const ok = await saveTokens(); drawTokens(); return ok; },
+    toggleGm: async tk => { tk.gm = !tk.gm; const ok = await saveTokens(); drawTokens(); return ok; },
+    toggleLock: async tk => { tk.lock = !tk.lock; const ok = await saveTokens(); drawTokens(); return ok; }
+  };
   tokenForm.addEventListener("submit", async ev => {
     ev.preventDefault();
     if (!editingToken) return;
@@ -2457,6 +2511,20 @@ setInterval(loadSharedEntries, 60000);
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: drawKey(), value: { items: drawItems, layers: drawLayers }, updated_at: new Date().toISOString() }, { onConflict: "key" });
     return !error;
   }
+  /* v1.71: hooks for the right-click options menu. Draw order in the
+     items array IS the stacking order (renderDraw draws in order),
+     so front/back is a real reorder + save + redraw. */
+  window.vttDraw = {
+    items: () => drawItems,
+    del: async it => { drawItems = drawItems.filter(x => x !== it); const ok = await saveDraw(); renderDraw(); return ok; },
+    reorder: async (it, dir) => {
+      const i = drawItems.indexOf(it);
+      if (i < 0) return false;
+      drawItems.splice(i, 1);
+      if (dir > 0) drawItems.push(it); else drawItems.unshift(it);
+      const ok = await saveDraw(); renderDraw(); return ok;
+    }
+  };
   function uToLatLng(ux, uy){ return toLatLng(ux / MW * 100, uy / MH * 100); }
   function renderDraw(){
     drawLayer.clearLayers();
@@ -4820,6 +4888,13 @@ setInterval(loadSharedEntries, 60000);
     if (!ok) loadLighting(true);
     $("lightForm").hidden = true; lightEditingId = null;
   });
+  /* v1.71: hooks for the right-click options menu (lights + walls). */
+  window.vttLights = {
+    openEditor: openLightEditor, state: () => lightState,
+    del: async src => { lightState.lights = lightState.lights.filter(s => s.id !== src.id); const ok = await saveLighting(); renderLighting(); return ok; },
+    delWall: async w => { lightState.walls = lightState.walls.filter(x => x !== w); const ok = await saveLighting(); renderLighting(); return ok; },
+    toggleDoor: async w => { w.open = !w.open; const ok = await saveLighting(); renderLighting(); return ok; }
+  };
   $("lightCancel").addEventListener("click", () => { $("lightForm").hidden = true; lightEditingId = null; });
   $("lightColorBtn").addEventListener("click", () => {
     toggleWheelFor((hex) => {
@@ -6000,7 +6075,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1319";
+        var BUILD_STAMP = "2026-11-07-1326";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6987,7 +7062,7 @@ function floorConnected(L, cols, rows){
   if (!panel) return;
   var rows = panel.querySelectorAll(":scope > .map-tools");
   var cols = panel.querySelectorAll(":scope > .vtt-panel > .vtt-col");
-  var repo = panel.querySelector(":scope > .map-stage > .map-repo");
+  var repo = panel.querySelector(":scope > .map-repo"); /* v1.71: the library is the bottom strip now — a direct child of the panel, no longer inside .map-stage */
   var defs = [];
   function def(el, id, label){ if (el) defs.push({ el: el, id: id, label: label }); }
   def(rows[0], "tools-main", "Search & map");
@@ -7016,6 +7091,18 @@ function floorConnected(L, cols, rows){
     d.el.insertBefore(grip, d.el.firstChild);
     d.grip = grip;
   });
+  /* v1.71: the Art Library grip says what it now does, and a
+     double-click on it sends the library home to the bottom strip. */
+  if (byId.repo) {
+    byId.repo.grip.title = "Drag to float the Art Library — it stays where you leave it. Double-click to send it back to the bottom strip.";
+    byId.repo.grip.addEventListener("dblclick", function(){
+      var state = load();
+      delete state.repo;
+      save(state);
+      applyPark(byId.repo, null);
+      setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+    });
+  }
 
   /* Repository open by default on desktop — part of the perimeter. */
   function repoDefault(){
@@ -7033,11 +7120,53 @@ function floorConnected(L, cols, rows){
   function save(state){
     try { window.localStorage.setItem(KEY, JSON.stringify(state)); } catch(e) {}
   }
+  /* v1.71 (Shaun, voice call 2026-11-07 ~13:19-13:22): the Art Library
+     NO LONGER DOCKS. Diagnosis of "the library docked itself": the
+     v1.06 perimeter scheme below only ever knew EDGE parks — a drop
+     saved {edge, along} for the nearest panel edge, and applyAll()
+     re-applied that dock on load, on window resize and on
+     fullscreenchange — so wherever Shaun left the library, it
+     snapped to an edge and kept re-snapping there. (The blown-up-park
+     self-heal from the panel build never shipped; it is not in this
+     code.) The library now FREE-FLOATS: a drop saves its exact
+     panel-relative {float:{x,y,w}}, applyAll re-applies exactly
+     that, and nothing else moves it. Legacy {edge,along} records for
+     the repo — the old docks, including any on Shaun's device — are
+     NOT re-applied: the library falls back to its default home, the
+     horizontal strip across the bottom of the bubble (amendment,
+     ~13:22). A genuinely blown float (saved far outside the panel)
+     is healed by CLAMPING it back inside at a floating spot — never
+     by force-docking. Double-click the grip returns it to the strip. */
+  function applyRepoPark(el, park){
+    if (el.classList.contains("per-dragging")) return; /* a re-apply must never strip a live drag's inline position */
+    /* Measure the panel FIRST, with the current layout untouched:
+       clearing the float before measuring drops the library back
+       into the flow, inflating the panel by the strip's own height
+       (~110px) — the heal then clamped against that phantom taller
+       panel and left the library hanging below the real bottom. */
+    var pr = panel.getBoundingClientRect();
+    el.classList.remove("per-parked", "per-h", "per-v", "per-float");
+    el.style.left = el.style.right = el.style.top = el.style.bottom = el.style.width = "";
+    if (!park || !mq.matches || !park.float) return;
+    var w = Math.min(Math.max(220, park.float.w || 340), Math.max(220, pr.width - 12));
+    var x = Math.max(0, Math.min(Math.round(park.float.x) || 0, Math.max(0, pr.width - w - 4)));
+    var y = Math.max(0, Math.round(park.float.y) || 0);
+    el.classList.add("per-float");
+    el.style.width = w + "px";
+    /* Heal by the element's own height too: the float must land fully
+       inside the panel, not just with its top clamped. */
+    var h = el.offsetHeight || 120;
+    y = Math.min(y, Math.max(0, pr.height - h - 4));
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+  }
   function applyPark(d, park){
     var el = d.el;
     /* Enlarged-view floaters (fs-float) own their position — the retired
        perimeter passes must never strip it. */
     if (el.classList.contains("fs-float")) return;
+    if (el.classList.contains("per-dragging")) return; /* v1.71: never strip a live drag */
+    if (d.id === "repo") { applyRepoPark(el, park); return; }
     el.classList.remove("per-parked", "per-h", "per-v");
     el.style.left = el.style.right = el.style.top = el.style.bottom = "";
     if (!park || !mq.matches) return;
@@ -7087,7 +7216,10 @@ function floorConnected(L, cols, rows){
       var el = d.el, r = el.getBoundingClientRect();
       var grabDX = ev.clientX - r.left, grabDY = ev.clientY - r.top;
       el.classList.add("per-dragging");
-      el.style.width = r.width + "px";
+      /* v1.71: the library strip is full-width in flow; the thing Shaun
+         drags is the floated library, capped at a workable width so
+         what he drags is what he gets. */
+      el.style.width = (d.id === "repo" ? Math.min(r.width, 720) : r.width) + "px";
       el.style.left = r.left + "px"; el.style.top = r.top + "px";
       el.style.right = el.style.bottom = "";
       try { d.grip.setPointerCapture(ev.pointerId); } catch(e) {}
@@ -7096,11 +7228,33 @@ function floorConnected(L, cols, rows){
         el.style.top = (e2.clientY - grabDY) + "px";
       }
       function up(e2){
+        /* v1.71: capture the rect FIRST, while the element is still
+           .per-dragging (position:fixed). The old order removed the
+           class first — the element fell back to static, its inline
+           left/top stopped applying, and the measured rect was its
+           in-flow home again: a drop saved the HOME position, which
+           is precisely "the library docked itself / won't stick". */
+        var er0 = el.getBoundingClientRect();
         d.grip.removeEventListener("pointermove", move);
         d.grip.removeEventListener("pointerup", up);
         d.grip.removeEventListener("pointercancel", up);
         el.classList.remove("per-dragging");
         el.style.width = "";
+        var state = load();
+        if (d.id === "repo") {
+          /* v1.71: free float — save the EXACT spot, panel-relative.
+             No nearest-edge snap: where he leaves it is where it stays. */
+          var pr0 = panel.getBoundingClientRect();
+          state[d.id] = { float: {
+            x: Math.max(0, Math.round(er0.left - pr0.left)),
+            y: Math.max(0, Math.round(er0.top - pr0.top)),
+            w: Math.round(er0.width)
+          } };
+          save(state);
+          applyPark(d, state[d.id]);
+          setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+          return;
+        }
         var pr = panel.getBoundingClientRect();
         var dist = {
           top: Math.abs(e2.clientY - pr.top), bottom: Math.abs(e2.clientY - pr.bottom),
@@ -7109,7 +7263,6 @@ function floorConnected(L, cols, rows){
         var edge = Object.keys(dist).reduce(function(a, b){ return dist[a] <= dist[b] ? a : b; });
         var er = el.getBoundingClientRect();
         var along = (edge === "top" || edge === "bottom") ? (er.left - pr.left) : (er.top - pr.top);
-        var state = load();
         state[d.id] = { edge: edge, along: Math.max(0, Math.round(along)) };
         save(state);
         applyPark(d, state[d.id]);
@@ -7150,6 +7303,16 @@ function floorConnected(L, cols, rows){
   window.addEventListener("resize", applyAll);
   document.addEventListener("fullscreenchange", function(){ setTimeout(applyAll, 180); });
   if (mq.addEventListener) mq.addEventListener("change", function(){ repoDefault(); applyAll(); });
+  /* v1.71: re-apply whenever the panel's own size settles — the map
+     fit pass runs after this script and changes the panel's height,
+     and a healed float clamped against the early, taller panel
+     could otherwise be left hanging below the fitted panel's
+     bottom edge. applyAll is idempotent, so re-applying is free. */
+  window.addEventListener("load", function(){ setTimeout(applyAll, 60); });
+  if (window.ResizeObserver) {
+    var roT = 0;
+    new ResizeObserver(function(){ clearTimeout(roT); roT = setTimeout(applyAll, 120); }).observe(panel);
+  }
 })();
 </script>
 
@@ -7440,7 +7603,10 @@ function floorConnected(L, cols, rows){
    2026-11-07 ~13:07-13:08) =================
    "I still don't see the bar scroller, the bar zoomer. I told you
    where to put it" — its home is the gutter between the map window
-   and the Art Library (the spot from his earlier order) — "Make it
+   and the Art Library (the spot from his earlier order; since the
+   ~13:22 amendment the Library lives across the bottom, so the
+   home is the gutter band under the map box, straddling the
+   window's bottom-right corner) — "Make it
    movable too": the bar drags by its ZOOM grip and parks anywhere
    over the stage; the parked spot persists per device
    (localStorage apocVttZoomBarV1) and the slider zooms wherever it
@@ -7476,9 +7642,12 @@ function floorConnected(L, cols, rows){
       document.body.classList.contains("map-fs");
   }
   function home(){
-    /* Centred on the 14px gutter: the map window's right edge + 7px,
-       the bar straddling the gap between the window and the library. */
-    return { l: el.offsetLeft + el.offsetWidth + 7 - Math.round(bar.offsetWidth / 2), t: el.offsetTop + 6 };
+    /* Amendment (Shaun, 2026-11-07 ~13:22): the Art Library now lives
+       across the BOTTOM, so the gutter is the band under the map box,
+       above the Library strip. The bar's home straddles the map
+       window's bottom-right corner in that gutter — right-aligned
+       with the window, half above its bottom edge, half below it. */
+    return { l: el.offsetLeft + el.offsetWidth - bar.offsetWidth, t: el.offsetTop + el.offsetHeight - Math.round(bar.offsetHeight / 2) };
   }
   function stageW(){
     /* The bar may travel the whole stage width — its gutter home
@@ -7495,7 +7664,7 @@ function floorConnected(L, cols, rows){
     bar.hidden = false;
     var p = loadPos() || home();
     var maxL = Math.max(0, stageW() - bar.offsetWidth);
-    var maxT = Math.max(0, side.clientHeight - bar.offsetHeight);
+    var maxT = Math.max(0, side.clientHeight + 44 - bar.offsetHeight); /* the bar may ride into the gutter band under the window (its home straddles the bottom edge) */
     bar.style.left = Math.min(Math.max(0, p.l), maxL) + "px";
     bar.style.top = Math.min(Math.max(0, p.t), maxT) + "px";
     if (m) slider.value = m.getZoom();
@@ -7510,7 +7679,7 @@ function floorConnected(L, cols, rows){
     try { grip.setPointerCapture(e.pointerId); } catch(err) {}
     function mv(ev){
       var maxL = Math.max(0, stageW() - bar.offsetWidth);
-      var maxT = Math.max(0, side.clientHeight - bar.offsetHeight);
+      var maxT = Math.max(0, side.clientHeight + 44 - bar.offsetHeight);
       bar.style.left = Math.min(Math.max(0, sl + ev.clientX - sx), maxL) + "px";
       bar.style.top = Math.min(Math.max(0, st + ev.clientY - sy), maxT) + "px";
     }
@@ -7534,6 +7703,246 @@ function floorConnected(L, cols, rows){
       sync();
       setTimeout(sync, 350);
     } else setTimeout(waitMap, 120);
+  })();
+})();
+</script>
+
+<script>
+/* ================= v1.71: right-click options (Shaun, voice call
+   2026-11-07 ~13:19-13:21) =================
+   "Everything placed on the map gets a right-click that opens an
+   options menu for that object." The browser's own context menu is
+   suppressed on the map. Each object type's menu uses its EXISTING
+   actions: markers/places/tokens/lights open their own editors;
+   deletes run the same filter + save + redraw as the forms' Delete
+   buttons (with the same confirm); markers and tokens get their
+   GM-only flag toggled; tokens get Lock; doors get Open/Close;
+   drawings get Delete and Bring to front / Send to back (draw order
+   in the items array is the stacking order). There is no per-item
+   draw editor in the app, so drawings offer exactly those.
+   GM-only material stays GM-only: GM-flagged objects are not even
+   rendered without GM view, and the GM-only toggles, places and
+   lighting menus appear only in GM view. The TV/display copy
+   (body.displaying — the engine's isProjecting()) stays read-only:
+   the browser menu is suppressed there and no options menu opens.
+   Object identity is matched by position through window.toXY —
+   the same % coordinates every object is stored in. */
+(function(){
+  var mapEl = document.getElementById("apocMap");
+  if (!mapEl || !window.L) return;
+  var menu = document.createElement("div");
+  menu.id = "ctxMenu";
+  menu.hidden = true;
+  document.body.appendChild(menu);
+  function gm(){ return !!(window.effectiveGm && window.effectiveGm()); }
+  function close(){ menu.hidden = true; menu.innerHTML = ""; }
+  function open(x, y, title, items){
+    menu.innerHTML = "";
+    var t = document.createElement("div");
+    t.className = "ctx-title";
+    t.textContent = title;
+    menu.appendChild(t);
+    items.forEach(function(it){
+      var b = document.createElement("button");
+      b.type = "button";
+      b.textContent = it.label;
+      if (it.danger) b.className = "danger";
+      b.addEventListener("click", function(){ close(); it.fn(); });
+      menu.appendChild(b);
+    });
+    menu.hidden = false;
+    var w = menu.offsetWidth, h = menu.offsetHeight;
+    menu.style.left = Math.min(x, Math.max(4, window.innerWidth - w - 6)) + "px";
+    menu.style.top = Math.min(y, Math.max(4, window.innerHeight - h - 6)) + "px";
+  }
+  document.addEventListener("pointerdown", function(e){ if (!menu.hidden && !menu.contains(e.target)) close(); });
+  document.addEventListener("keydown", function(e){ if (e.key === "Escape") close(); });
+  window.addEventListener("resize", close);
+
+  function walk(fn){
+    function rec(l){ fn(l); if (l.eachLayer) l.eachLayer(rec); }
+    if (window.map) window.map.eachLayer(rec);
+  }
+  function nearObj(list, p){
+    return (list || []).find(function(o){ return Math.abs((o.x || 0) - p.x) < 0.4 && Math.abs((o.y || 0) - p.y) < 0.4; });
+  }
+  function classifyMarker(m){
+    var p = window.toXY(m.getLatLng());
+    var tk = window.vttTokens && nearObj(window.vttTokens.list(), p);
+    if (tk) return { type: "token", o: tk };
+    if (gm() && window.vttLights) { var src = nearObj(window.vttLights.state().lights, p); if (src) return { type: "light", o: src }; }
+    var mk = window.vttMarkers && nearObj(window.vttMarkers.list(), p);
+    if (mk) return { type: "marker", o: mk };
+    if (window.vttPlaces && !window.vttPlaces.isAtlas()) { var pl = nearObj(window.vttPlaces.list(), p); if (pl) return { type: "place", o: pl }; }
+    if (window.vttDraw) {
+      var it = window.vttDraw.items().find(function(d){ return (d.type === "stamp" || d.type === "text") && Math.abs((d.x || 0) - p.x) < 0.4 && Math.abs((d.y || 0) - p.y) < 0.4; });
+      if (it) return { type: "draw", o: it };
+    }
+    return null;
+  }
+  function segDist(px, py, ax, ay, bx, by){
+    var dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+    var t = L2 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / L2)) : 0;
+    var cx = ax + t * dx, cy = ay + t * dy;
+    return Math.hypot(px - cx, py - cy);
+  }
+  function menusFor(hit, latlng){
+    if (!hit) {
+      var items = [
+        { label: "Add marker here", fn: function(){ armFire("addMarkerBtn", latlng); } },
+        { label: "Add token", fn: function(){ var b = document.getElementById("addTokenBtn"); if (b) b.click(); } }
+      ];
+      if (gm() && window.vttPlaces && !window.vttPlaces.isAtlas())
+        items.push({ label: "Add place here", fn: function(){ armFire("addPlaceBtn", latlng); } });
+      return { title: "Map", items: items };
+    }
+    var o = hit.o;
+    if (hit.type === "marker") {
+      var mi = [
+        { label: "Edit marker", fn: function(){ if ((o.imgs || []).length && window.vttMarkers.showPinCard) window.vttMarkers.showPinCard(o); else window.vttMarkers.openEditor({ mode: "edit", mk: o }); } },
+        { label: "Delete marker", danger: true, fn: function(){ if (confirm("Delete the marker \"" + (o.name || "marker") + "\" from the shared map? Everybody will stop seeing it.")) window.vttMarkers.del(o); } }
+      ];
+      if (gm()) mi.push({ label: o.gm ? "Make visible to players" : "Make GM-only", fn: function(){ window.vttMarkers.toggleGm(o); } });
+      return { title: o.name || "Marker", items: mi };
+    }
+    if (hit.type === "place") {
+      if (!gm()) return null;
+      return { title: o.n || "Place", items: [
+        { label: "Edit place", fn: function(){ window.vttPlaces.openEditor({ mode: "edit", p: o }); } },
+        { label: "Delete place", danger: true, fn: function(){ if (confirm("Delete the place \"" + (o.n || "place") + "\" from this map? Everybody will stop seeing it.")) window.vttPlaces.del(o); } }
+      ] };
+    }
+    if (hit.type === "token") {
+      var ti = [
+        { label: "Edit token", fn: function(){ window.vttTokens.openEditor({ mode: "edit", tk: o }); } },
+        { label: o.lock ? "Unlock token" : "Lock token", fn: function(){ window.vttTokens.toggleLock(o); } },
+        { label: "Delete token", danger: true, fn: function(){ if (confirm("Delete the token \"" + (o.name || "token") + "\" from the shared table? Everybody will stop seeing it.")) window.vttTokens.del(o); } }
+      ];
+      if (gm()) ti.push({ label: o.gm ? "Make visible to players" : "Make GM-only", fn: function(){ window.vttTokens.toggleGm(o); } });
+      return { title: o.name || "Token", items: ti };
+    }
+    if (hit.type === "light") {
+      return { title: o.name || "Light", items: [
+        { label: "Edit light", fn: function(){ window.vttLights.openEditor(o); } },
+        { label: "Delete light", danger: true, fn: function(){ if (confirm("Remove the light \"" + (o.name || "light") + "\"?")) window.vttLights.del(o); } }
+      ] };
+    }
+    if (hit.type === "wall") {
+      var wi = [];
+      if (o.kind === "door") wi.push({ label: o.open ? "Close door" : "Open door", fn: function(){ window.vttLights.toggleDoor(o); } });
+      wi.push({ label: "Delete " + (o.kind || "wall"), danger: true, fn: function(){ if (confirm("Delete this " + (o.kind || "wall") + "?")) window.vttLights.delWall(o); } });
+      return { title: o.kind === "door" ? "Door" : (o.kind === "window" ? "Window" : "Wall"), items: wi };
+    }
+    if (hit.type === "draw") {
+      var nm = o.type === "text" ? "Text" : (o.type === "stamp" ? "Stamp" : "Drawing");
+      return { title: nm, items: [
+        { label: "Bring to front", fn: function(){ window.vttDraw.reorder(o, 1); } },
+        { label: "Send to back", fn: function(){ window.vttDraw.reorder(o, -1); } },
+        { label: "Delete " + nm.toLowerCase(), danger: true, fn: function(){ if (confirm("Delete this " + nm.toLowerCase() + " for everybody?")) window.vttDraw.del(o); } }
+      ] };
+    }
+    return null;
+  }
+  function armFire(btnId, latlng){
+    var b = document.getElementById(btnId);
+    if (!b || !window.map) return;
+    if ((b.getAttribute("aria-pressed") || "false") !== "true") b.click();
+    window.map.fire("click", { latlng: latlng });
+  }
+
+  mapEl.addEventListener("contextmenu", function(e){
+    e.preventDefault();
+    close();
+    if (document.body.classList.contains("displaying")) return; /* TV copy: read-only, no menus */
+    var m = window.map;
+    if (!m || !window.toXY) return;
+    var latlng = m.mouseEventToLatLng(e);
+    var cp = m.latLngToContainerPoint(latlng);
+    var hit = null, best = 26;
+    walk(function(l){
+      if (!(l instanceof window.L.Marker) || !l._icon) return;
+      var c = m.latLngToContainerPoint(l.getLatLng());
+      var d = Math.hypot(c.x - cp.x, c.y - cp.y);
+      if (d <= best) { var cl = classifyMarker(l); if (cl) { hit = cl; best = d; } }
+    });
+    if (!hit && window.vttDraw) {
+      /* Vector drawings: their render layers are interactive:false, so
+         the click lands on the map image — pick GEOMETRICALLY against
+         the rendered layers in the draw panes (topmost last), then
+         match the layer back to its draw item by first-point coords. */
+      var vlayers = [];
+      walk(function(l){
+        if (l instanceof window.L.Marker) return;
+        if (!l.options || (l.options.pane !== "layerMap" && l.options.pane !== "layerGm")) return;
+        if (l.getLatLngs || (l.getLatLng && l.getRadius)) vlayers.push(l);
+      });
+      var pip = function(pt, cps){
+        var inside = false;
+        for (var i = 0, j = cps.length - 1; i < cps.length; j = i++) {
+          var xi = cps[i].x, yi = cps[i].y, xj = cps[j].x, yj = cps[j].y;
+          if (((yi > pt.y) !== (yj > pt.y)) && (pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi)) inside = !inside;
+        }
+        return inside;
+      };
+      for (var vi = vlayers.length - 1; vi >= 0 && !hit; vi--) {
+        var ly = vlayers[vi], first = null, okPick = false;
+        if (ly.getRadius && ly.getLatLng) {
+          var cc2 = m.latLngToContainerPoint(ly.getLatLng());
+          var rp2 = Math.abs(m.latLngToContainerPoint(window.L.latLng(ly.getLatLng().lat, ly.getLatLng().lng + ly.getRadius())).x - cc2.x);
+          var dc = Math.hypot(cp.x - cc2.x, cp.y - cc2.y);
+          if (Math.abs(dc - rp2) <= 10 || dc < rp2) { first = ly.getLatLng(); okPick = true; }
+        } else if (ly.getLatLngs) {
+          var lls2 = ly.getLatLngs();
+          var flat = Array.isArray(lls2[0]) ? lls2[0] : lls2;
+          if (flat.length && flat[0] && typeof flat[0].lat === "number") {
+            var cps = flat.map(function(q){ return m.latLngToContainerPoint(q); });
+            var dmin = Infinity;
+            for (var si = 0; si + 1 < cps.length; si++) dmin = Math.min(dmin, segDist(cp.x, cp.y, cps[si].x, cps[si].y, cps[si + 1].x, cps[si + 1].y));
+            if (dmin <= 10 || (ly instanceof window.L.Polygon && pip(cp, cps))) { first = flat[0]; okPick = true; }
+          }
+        }
+        if (okPick && first) {
+          var p2 = window.toXY(first);
+          var it2 = window.vttDraw.items().find(function(d){
+            if (d.type === "circle") return Math.abs((d.x || 0) - p2.x) < 0.4 && Math.abs((d.y || 0) - p2.y) < 0.4;
+            if (Array.isArray(d.pts) && d.pts.length) return Math.abs(d.pts[0][0] - p2.x) < 0.4 && Math.abs(d.pts[0][1] - p2.y) < 0.4;
+            if (d.a && d.b) return Math.abs(d.a[0] - p2.x) < 0.4 && Math.abs(d.a[1] - p2.y) < 0.4;
+            return false;
+          });
+          if (it2) hit = { type: "draw", o: it2 };
+        }
+      }
+    }
+    if (!hit && gm() && window.vttLights) {
+      /* Walls/doors/windows: their render layers are non-interactive,
+         so pick geometrically against the wall segments (GM view). */
+      var walls = window.vttLights.state().walls || [];
+      for (var i = 0; i < walls.length; i++) {
+        var w = walls[i];
+        var layers = [];
+        walk(function(l){
+          if (!l.getLatLngs || !(l instanceof window.L.Polyline) || (l.options && l.options.pane !== "layerGm")) return;
+          var lls = l.getLatLngs();
+          if (Array.isArray(lls) && lls.length === 2 && !Array.isArray(lls[0][0])) layers.push(lls);
+        });
+        for (var j = 0; j < layers.length; j++) {
+          var pa = window.toXY(layers[j][0]), pb = window.toXY(layers[j][1]);
+          var match = (Math.abs(pa.x - w.a[0]) < 0.4 && Math.abs(pa.y - w.a[1]) < 0.4 && Math.abs(pb.x - w.b[0]) < 0.4 && Math.abs(pb.y - w.b[1]) < 0.4) ||
+                      (Math.abs(pb.x - w.a[0]) < 0.4 && Math.abs(pb.y - w.a[1]) < 0.4 && Math.abs(pa.x - w.b[0]) < 0.4 && Math.abs(pa.y - w.b[1]) < 0.4);
+          if (!match) continue;
+          var ca = m.latLngToContainerPoint(layers[j][0]), cb = m.latLngToContainerPoint(layers[j][1]);
+          if (segDist(cp.x, cp.y, ca.x, ca.y, cb.x, cb.y) <= 10) { hit = { type: "wall", o: w }; break; }
+        }
+        if (hit) break;
+      }
+    }
+    var built = menusFor(hit, latlng);
+    if (built && built.items.length) open(e.clientX, e.clientY, built.title, built.items);
+  });
+  (function waitMap(){
+    var m = window.map;
+    if (m && m.on) { m.on("movestart zoomstart dragstart", close); }
+    else setTimeout(waitMap, 150);
   })();
 })();
 </script>
