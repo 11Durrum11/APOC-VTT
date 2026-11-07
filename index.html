@@ -5918,7 +5918,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-0958";
+        var BUILD_STAMP = "2026-11-07-1005";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7120,20 +7120,30 @@ function floorConnected(L, cols, rows){
     var a = img.naturalWidth / img.naturalHeight;
     /* v1.66: window width is the column's full width (up to the Art
        Library) on every map; window height fills down to the button
-       row — measured live: the row's position with the window at
-       its aspect height gives the page's fixed chrome, and the
-       window takes everything the viewport leaves above the row
-       (10px gap kept, a few px of page spare). The v1.63 cap
-       survives as the fallback when the row can't be measured. */
+       row — measured live off the panel's own box: the panel's
+       bottom minus the window's bottom is the fixed below-window
+       chrome, and the window takes everything the viewport leaves
+       above it (10px gap to the row kept). Shaun's screen still
+       scrolled a hair at an exact fit, so the window also gives
+       up a 10px safety margin — the row rides that much higher
+       and the closed page lands ~10px inside the viewport
+       instead of exactly at its edge. The v1.63 cap survives as
+       the fallback when the row can't be measured. */
     var w = availW;
     var aspectH = Math.round(w / a);
     var row = document.getElementById("ctlRow");
+    var panel = document.getElementById("mapPanel");
     var fillH = 0;
-    if (row){
-      var pageH = Math.max(document.documentElement.scrollHeight, window.innerHeight);
-      var spare = pageH - window.innerHeight; /* 0 once the page fits */
-      var chrome = pageH - (el.getBoundingClientRect().top + (parseFloat(el.style.height) || aspectH));
-      fillH = window.innerHeight + spare - chrome - 10;
+    if (row && panel){
+      /* The panel's border-box bottom is the page's true content
+         bottom (the row rides inside it). With the window at its
+         current height, panelBottom - windowBottom is the fixed
+         below-window chrome; the window takes the rest of the
+         viewport above it, less the 10px gap to the row and a
+         10px safety margin. Idempotent: the chrome term is
+         height-independent, so repeat fits land on the same h. */
+      var below = panel.getBoundingClientRect().bottom - el.getBoundingClientRect().bottom;
+      fillH = Math.round(window.innerHeight - el.getBoundingClientRect().top - below - 10);
     }
     var h = fillH > 0 ? fillH : Math.min(aspectH, maxH);
     if (h < 320){ h = Math.min(320, maxH); }
