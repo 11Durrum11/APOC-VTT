@@ -572,6 +572,7 @@ body.displaying .td-ui{display:none}
         </select>
       </div>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
+      <button type="button" class="btn" id="rotateMapBtn" title="Rotate this map 90 degrees — the map and everything on it (tokens, drawings, fog, markers, walls, lighting, grid) turn together; saved per map and shared, so the TV shows the same rotation">Rotate map</button>
     </div>
     <div class="map-tools">
       <label class="atlas-toggle"><input type="checkbox" id="gridToggle"> Grid</label>
@@ -650,12 +651,8 @@ body.displaying .td-ui{display:none}
         </select>
       </div>
       <div class="field" style="flex:0 1 auto">
-        <label>Color</label>
-        <input type="hidden" id="drawColor" value="#e8a33d">
-        <button type="button" class="btn wheel-open-btn" id="drawColorBtn" title="Pick a colour — opens the colour wheel"><span class="color-chip" id="drawColorChip" style="background:#e8a33d"></span><span id="drawColorHex">#e8a33d</span> · Color wheel</button>
-      </div>
-      <div class="field" style="flex:0 1 auto">
         <label>Any color</label>
+        <input type="hidden" id="drawColor" value="#e8a33d">
         <button type="button" class="btn wheel-open-btn" id="drawColorAny" title="Any colour — opens the colour wheel"><span class="color-chip" id="drawColorAnyChip" style="background:#e8a33d"></span><span id="drawColorAnyHex">#e8a33d</span> · Color wheel</button>
       </div>
       <div class="field" style="flex:0 1 auto">
@@ -1144,8 +1141,39 @@ setInterval(loadSharedEntries, 60000);
      button and its own-screen "projecting" mode are removed; Push to TV's
      ?display copy is the only projecting view, via the displaying class.) */
   const isProjecting = () => document.body.classList.contains("displaying");
-  const toLatLng = (x, y) => [MH * (1 - y / 100), MW * (x / 100)];
-  const toXY = ll => ({ x: Math.round(ll.lng / MW * 10000) / 100, y: Math.round((1 - ll.lat / MH) * 10000) / 100 });
+  /* ---- Map rotation (Shaun, 2026-11-06): a Rotate map button turns the
+     CURRENT map in 90° steps. Rotation is a VIEW transform applied inside
+     the coordinate helpers below — every subsystem (tokens, fog, drawings,
+     markers, places, walls/doors, dynamic lighting, grid) already converts
+     through toLatLng / toXY / uToLatLng, so everything turns together and
+     stays aligned by construction, and all stored data keeps its natural
+     (unrotated) percent coords. The base map image and paint overlays are
+     the only bitmaps; they are drawn rotated to match (see rotatedMapUrl /
+     paintRotUrl). Rotation is per map and SHARED: it rides in the map's
+     vtt_settings value, so the ?display=1 TV copy shows the same rotation
+     and switching away and back restores it. ---- */
+  let mapRot = 0; /* quarter turns clockwise: 0, 1, 2, 3 */
+  const frameW = () => (mapRot % 2 ? MH : MW);
+  const frameH = () => (mapRot % 2 ? MW : MH);
+  const frameBounds = () => [[0, 0], [frameH(), frameW()]];
+  function rotPct(x, y){ /* natural % -> frame % */
+    if (mapRot === 1) return { x: 100 - y, y: x };
+    if (mapRot === 2) return { x: 100 - x, y: 100 - y };
+    if (mapRot === 3) return { x: y, y: 100 - x };
+    return { x, y };
+  }
+  function unrotPct(x, y){ /* frame % -> natural % */
+    if (mapRot === 1) return { x: y, y: 100 - x };
+    if (mapRot === 2) return { x: 100 - x, y: 100 - y };
+    if (mapRot === 3) return { x: 100 - y, y: x };
+    return { x, y };
+  }
+  /* Rotate a latlng-space point between the natural frame and the view
+     frame (used by the grid and the ruler snap, which work in raw latlng). */
+  function llRot(lat, lng){ const f = rotPct(lng / MW * 100, (1 - lat / MH) * 100); return [frameH() * (1 - f.y / 100), frameW() * (f.x / 100)]; }
+  function llUnrot(lat, lng){ const n = unrotPct(lng / frameW() * 100, (1 - lat / frameH()) * 100); return { lat: MH * (1 - n.y / 100), lng: MW * (n.x / 100) }; }
+  const toLatLng = (x, y) => { const f = rotPct(x, y); return [frameH() * (1 - f.y / 100), frameW() * (f.x / 100)]; };
+  const toXY = ll => { const n = unrotPct(ll.lng / frameW() * 100, (1 - ll.lat / frameH()) * 100); return { x: Math.round(n.x * 100) / 100, y: Math.round(n.y * 100) / 100 }; };
   const iconFor = (kind, name, temp, under) => L.divIcon({
     className: "mk-icon",
     html: `<div class="mk mk-${KINDS.includes(kind) ? kind : "place"}${temp ? " mk-temp" : ""}${under ? " mk-under" : ""}${under === 2 ? " mk-under2" : ""}"><span class="mk-dot"></span><span class="mk-label">${esc(name || "New marker")}</span></div>`,
@@ -1674,13 +1702,14 @@ setInterval(loadSharedEntries, 60000);
     if (gridType === "hex") {
       const b = map.getBounds().pad(0.2);
       for (const c of hexCenters()) {
-        if (c[0] < b.getWest() - CELL || c[0] > b.getEast() + CELL || c[1] < b.getSouth() - CELL || c[1] > b.getNorth() + CELL) continue;
-        gridLayer.addLayer(L.polygon(hexCorners(c[0], c[1]), { ...opts, fill: false }));
+        const fc = llRot(c[1], c[0]); /* cull in the (possibly rotated) view frame */
+        if (fc[1] < b.getWest() - CELL || fc[1] > b.getEast() + CELL || fc[0] < b.getSouth() - CELL || fc[0] > b.getNorth() + CELL) continue;
+        gridLayer.addLayer(L.polygon(hexCorners(c[0], c[1]).map(([la, ln]) => llRot(la, ln)), { ...opts, fill: false }));
       }
       return;
     }
-    for (let gx = 0; gx <= MW; gx += CELL) gridLayer.addLayer(L.polyline([[0, gx], [MH, gx]], opts));
-    for (let gy = 0; gy <= MH; gy += CELL) gridLayer.addLayer(L.polyline([[gy, 0], [gy, MW]], opts));
+    for (let gx = 0; gx <= MW; gx += CELL) gridLayer.addLayer(L.polyline([llRot(0, gx), llRot(MH, gx)], opts));
+    for (let gy = 0; gy <= MH; gy += CELL) gridLayer.addLayer(L.polyline([llRot(gy, 0), llRot(gy, MW)], opts));
   }
   $("gridToggle").addEventListener("change", ev => {
     gridOn = ev.target.checked;
@@ -1703,6 +1732,8 @@ setInterval(loadSharedEntries, 60000);
       if (Number(data.value.feetPerSquare) > 0) feetPerSquare = Number(data.value.feetPerSquare);
       if (data.value.unit === "mi" || data.value.unit === "ft") scaleUnit = data.value.unit;
       if (data.value.gridType === "hex" || data.value.gridType === "square") gridType = data.value.gridType;
+      const rotIn = Number(data.value.rotation);
+      if ([0, 1, 2, 3].includes(rotIn) && rotIn !== mapRot) { mapRot = rotIn; applyMapRotation(); }
       if (document.activeElement !== $("scaleFeet")) $("scaleFeet").value = scaleInputVal();
       $("scaleUnit").value = scaleUnit;
       $("gridType").value = gridType;
@@ -1711,7 +1742,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveVttSettings(){
     const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType }, updated_at: new Date().toISOString() },
+      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, rotation: mapRot }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
     return !error;
@@ -1960,7 +1991,12 @@ setInterval(loadSharedEntries, 60000);
   }
   function rulerSnap(ll){
     if (!gridOn || gridType !== "square") return ll;
-    return L.latLng((Math.floor(ll.lat / CELL) + 0.5) * CELL, (Math.floor(ll.lng / CELL) + 0.5) * CELL);
+    if (!mapRot) return L.latLng((Math.floor(ll.lat / CELL) + 0.5) * CELL, (Math.floor(ll.lng / CELL) + 0.5) * CELL);
+    /* Snap in the map's natural frame, then rotate back into the view frame,
+       so the ruler still lands on the rotated map's own squares. */
+    const n = llUnrot(ll.lat, ll.lng);
+    const f = llRot((Math.floor(n.lat / CELL) + 0.5) * CELL, (Math.floor(n.lng / CELL) + 0.5) * CELL);
+    return L.latLng(f[0], f[1]);
   }
   $("rulerBtn").addEventListener("click", () => {
     rulerOn = !rulerOn;
@@ -2117,7 +2153,7 @@ setInterval(loadSharedEntries, 60000);
       const a = toLatLng(r.x, r.y), b = toLatLng(r.x + r.w, r.y + r.h);
       return [[a[0], a[1]], [a[0], b[1]], [b[0], b[1]], [b[0], a[1]]];
     });
-    fogLayer.addLayer(L.polygon([[[0, 0], [0, MW], [MH, MW], [MH, 0]], ...holes],
+    fogLayer.addLayer(L.polygon([[[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]], ...holes],
       { pane: "layerGm", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: effectiveGm() ? 0.45 : 0.93, interactive: false }));
     if (effectiveGm()) for (const r of fogState.revealed)
       fogLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { pane: "layerGm", color: "#e8a33d", weight: 1, fill: false, interactive: false }));
@@ -2154,7 +2190,7 @@ setInterval(loadSharedEntries, 60000);
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: drawKey(), value: { items: drawItems, layers: drawLayers }, updated_at: new Date().toISOString() }, { onConflict: "key" });
     return !error;
   }
-  function uToLatLng(ux, uy){ return [MH - uy, ux]; }
+  function uToLatLng(ux, uy){ return toLatLng(ux / MW * 100, uy / MH * 100); }
   function renderDraw(){
     drawLayer.clearLayers();
     if (!$("drawToggle").checked) return;
@@ -2186,7 +2222,7 @@ setInterval(loadSharedEntries, 60000);
         drawLayer.addLayer(L.polygon(epts, { ...st, fillOpacity: fo }));
       }
       else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", icon: stampIcon(it, lop), interactive: false }));
-      else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(it.data, [[0, 0], [MH, MW]], { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", opacity: lop, interactive: false }));
+      else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(paintRotUrl(it.data), frameBounds(), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", opacity: lop, interactive: false }));
       else if (it.type === "template") {
         const anchorTk = it.anchor ? tokens.find(t => t.id === it.anchor) : null;
         const ox = anchorTk ? anchorTk.x : it.x, oy = anchorTk ? anchorTk.y : it.y;
@@ -2247,7 +2283,6 @@ setInterval(loadSharedEntries, 60000);
   /* Colour controls open the installed colour wheel (Shaun, 2026-11-06:
      no dropdown of colours, no OS colour box). openWheelFor is defined with
      setDrawColor below; function declarations hoist within this script. */
-  $("drawColorBtn").addEventListener("click", () => openWheelFor(null, $("drawColor").value));
   $("drawColorAny").addEventListener("click", () => openWheelFor(null, $("drawColor").value));
   $("drawTool").addEventListener("change", () => {
     const t = $("drawTool").value;
@@ -2660,6 +2695,7 @@ setInterval(loadSharedEntries, 60000);
     const def = MAPS[id];
     if (!def) return;
     currentMapId = id;
+    mapRot = 0; /* rotation is per map: the incoming map starts natural until its own stored rotation lands via loadVttSettings */
     MW = def.w; MH = def.h; CELL = def.cell;
     bounds = [[0, 0], [MH, MW]];
     map.setMaxBounds([[-MH * 0.08, -MW * 0.08], [MH * 1.08, MW * 1.08]]);
@@ -3118,6 +3154,21 @@ setInterval(loadSharedEntries, 60000);
   const cloneFx = L.layerGroup().addTo(map);
   const PAINT_MAX = 1280;
   const paintCache = new Map();
+  /* Paint items are stored as natural-frame bitmaps; when the map is
+     rotated, the overlay shows a rotated copy (cached per rotation). The
+     stored data is never rewritten — editing keeps working in natural
+     coords through toXY / paintXY. */
+  const paintRotCache = new Map();
+  function paintRotUrl(data){
+    if (!mapRot) return data;
+    const key = mapRot + "|" + data.length + "|" + data.slice(0, 48);
+    if (paintRotCache.has(key)) return paintRotCache.get(key);
+    paintRotCache.set(key, data); /* placeholder so renders never block; replaced when the rotated copy is ready */
+    loadCanvasImage(data).then(im => {
+      try { paintRotCache.set(key, rotateCanvasCopy(im, mapRot).toDataURL("image/png")); if (mapRot) renderDraw(); } catch(e) { /* keep the placeholder */ }
+    }).catch(() => {});
+    return data;
+  }
   function paintDims(){
     const s = Math.min(1, PAINT_MAX / Math.max(MW, MH));
     return { w: Math.max(2, Math.round(MW * s)), h: Math.max(2, Math.round(MH * s)) };
@@ -3156,9 +3207,9 @@ setInterval(loadSharedEntries, 60000);
     if (now - paintLiveAt < 120) return;
     paintLiveAt = now;
     let url;
-    try { url = rec.canvas.toDataURL("image/png"); } catch(e) { return; }
-    if (!paintLive) paintLive = L.imageOverlay(url, [[0, 0], [MH, MW]], { interactive: false, opacity: layerLop(layerId) }).addTo(paintFx);
-    else { paintLive.setUrl(url); paintLive.setOpacity(layerLop(layerId)); }
+    try { url = (mapRot ? rotateCanvasCopy(rec.canvas, mapRot) : rec.canvas).toDataURL("image/png"); } catch(e) { return; }
+    if (!paintLive) paintLive = L.imageOverlay(url, frameBounds(), { interactive: false, opacity: layerLop(layerId) }).addTo(paintFx);
+    else { paintLive.setUrl(url); paintLive.setBounds(frameBounds()); paintLive.setOpacity(layerLop(layerId)); }
   }
   async function endRasterStroke(layerId){
     if (paintLive) { paintFx.removeLayer(paintLive); paintLive = null; }
@@ -3269,8 +3320,6 @@ setInterval(loadSharedEntries, 60000);
   function hex2(v){ return Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0"); }
   function setDrawColor(hex){
     $("drawColor").value = hex;
-    const chip = $("drawColorChip"); if (chip) chip.style.background = hex;
-    const hx = $("drawColorHex"); if (hx) hx.textContent = hex;
     const aChip = $("drawColorAnyChip"); if (aChip) aChip.style.background = hex;
     const aHx = $("drawColorAnyHex"); if (aHx) aHx.textContent = hex;
     drawStatusEl.textContent = `Color picked: ${hex}.`;
@@ -3656,7 +3705,7 @@ setInterval(loadSharedEntries, 60000);
     renderDraw();
     patch = { mapId: currentMapId, layerId, rec, x0, y0, w, h, cx: x0, cy: y0, canvas: pc, overlay: null };
     const def = drawLayers.find(l => l.id === layerId);
-    patch.overlay = L.imageOverlay(pc.toDataURL("image/png"), [toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { interactive: false, opacity: def && def.opacity != null ? def.opacity : 1 }).addTo(paintFx);
+    patch.overlay = L.imageOverlay((mapRot ? rotateCanvasCopy(pc, mapRot) : pc).toDataURL("image/png"), [toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { interactive: false, opacity: def && def.opacity != null ? def.opacity : 1 }).addTo(paintFx);
     drawStatusEl.textContent = "Patch lifted — drag it into place; tap elsewhere to set it down.";
   }
   function patchBoundsPct(){
@@ -4286,7 +4335,7 @@ setInterval(loadSharedEntries, 60000);
       if (p.length > 2) dimPolys.push(p);
     }
     const toLL = poly => poly.map(p => uToLatLng(p.x, p.y));
-    const rect = [[0, 0], [0, MW], [MH, MW], [MH, 0]];
+    const rect = [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]];
     if (!playerView) {
       /* GM sees everything: tints only, no darkness. */
       for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10, interactive: false }));
