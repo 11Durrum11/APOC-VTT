@@ -654,11 +654,11 @@ body.displaying .td-ui{display:none}
       <div class="field" style="flex:0 1 auto">
         <label>Color</label>
         <input type="hidden" id="drawColor" value="#e8a33d">
-        <button type="button" class="btn wheel-open-btn" id="drawColorBtn" title="Pick a colour — opens the colour wheel"><span class="color-chip" id="drawColorChip" style="background:#e8a33d"></span><span id="drawColorHex">#e8a33d</span> · Wheel</button>
+        <button type="button" class="btn wheel-open-btn" id="drawColorBtn" title="Pick a colour — opens the colour wheel"><span class="color-chip" id="drawColorChip" style="background:#e8a33d"></span><span id="drawColorHex">#e8a33d</span> · Color wheel</button>
       </div>
       <div class="field" style="flex:0 1 auto">
         <label>Any color</label>
-        <button type="button" class="btn" id="drawColorAny" title="Any colour — opens the colour wheel" style="width:52px;height:34px;padding:0;background:#e8a33d;border:1px solid hsl(222 18% 30%)"></button>
+        <button type="button" class="btn wheel-open-btn" id="drawColorAny" title="Any colour — opens the colour wheel"><span class="color-chip" id="drawColorAnyChip" style="background:#e8a33d"></span><span id="drawColorAnyHex">#e8a33d</span> · Color wheel</button>
       </div>
       <div class="field" style="flex:0 1 auto">
         <label for="drawWidth">Line width</label>
@@ -922,7 +922,7 @@ body.displaying .td-ui{display:none}
         <div class="field">
           <label>Color</label>
           <input type="hidden" id="tokenColor" value="amber">
-          <button type="button" class="btn wheel-open-btn" id="tokenColorBtn" title="Pick a colour — opens the colour wheel"><span class="color-chip" id="tokenColorChip" style="background:#e8a33d"></span><span id="tokenColorName">Amber</span> · Wheel</button>
+          <button type="button" class="btn wheel-open-btn" id="tokenColorBtn" title="Pick a colour — opens the colour wheel"><span class="color-chip" id="tokenColorChip" style="background:#e8a33d"></span><span id="tokenColorName">Amber</span> · Color wheel</button>
         </div>
         <div class="field">
           <label for="tokenHp">Hit points (current)</label>
@@ -974,7 +974,7 @@ body.displaying .td-ui{display:none}
         <div class="field">
           <label>Color</label>
           <input type="hidden" id="lightColor" value="#ffb347">
-          <button type="button" class="btn wheel-open-btn" id="lightColorBtn" title="Pick a colour — opens the colour wheel"><span class="color-chip" id="lightColorChip" style="background:#ffb347"></span><span id="lightColorHex">#ffb347</span> · Wheel</button>
+          <button type="button" class="btn wheel-open-btn" id="lightColorBtn" title="Pick a colour — opens the colour wheel"><span class="color-chip" id="lightColorChip" style="background:#ffb347"></span><span id="lightColorHex">#ffb347</span> · Color wheel</button>
         </div>
         <div class="field">
           <label for="lightBright">Bright radius (ft)</label>
@@ -3353,7 +3353,8 @@ setInterval(loadSharedEntries, 60000);
     $("drawColor").value = hex;
     const chip = $("drawColorChip"); if (chip) chip.style.background = hex;
     const hx = $("drawColorHex"); if (hx) hx.textContent = hex;
-    const any = $("drawColorAny"); if (any) any.style.background = hex;
+    const aChip = $("drawColorAnyChip"); if (aChip) aChip.style.background = hex;
+    const aHx = $("drawColorAnyHex"); if (aHx) aHx.textContent = hex;
     drawStatusEl.textContent = `Color picked: ${hex}.`;
     if (window.__wheelSync) window.__wheelSync(hex);
   }
