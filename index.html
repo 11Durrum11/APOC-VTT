@@ -482,82 +482,6 @@ body.displaying .td-ui{display:none}
     <p class="muted">The Realms as Forgotten Realms canon left them when the APOC hit — Shaun's thousand years of lore layer over this.</p>
     <p class="map-note"><strong>The Bastion of Last Hope</strong> — on this map, it is the city on the Sword Coast printed as <strong>Waterdeep</strong>: Waterdeep is its original name, and the Bastion of Last Hope is the name it carries now. Everything the map shows for Waterdeep — its streets, Undermountain below it, its history — is the Bastion's own pre-APOC past, altered by what the APOC did to it.</p>
     <p class="muted">The world was decimated. Everywhere else is pretty much a ghost town or dead. Life did come back to the surface but diminished. Changed. Altered. The grey over this map is the Fog of Life — always grey, no sun, no stars — and the surviving cities are the pockets that held. What is dead, what is ruined, and what came back changed, the table marks as it learns.</p>
-    <div class="map-stage">
-      <div class="map-side">
-        <div id="apocMap" class="apoc-map" aria-label="Editable shared map of Faerûn"></div>
-        <div id="tdWrap" hidden>
-          <div id="tdCanvas"></div>
-          <div class="td-ui">
-            <button type="button" class="btn primary" id="tdBackBtn">Back to 2D</button>
-            <span class="td-hint">Drag to orbit &middot; scroll to zoom &middot; shift-drag to pan &middot; drag a token to move it</span>
-            <span class="td-hint" id="tdStatus"></span>
-          </div>
-        </div>
-        <p class="map-status muted small" id="mapStatus">Loading the shared markers…</p>
-      </div>
-      <aside class="map-repo" aria-label="Art Library">
-        <div id="placeCard" class="place-card" hidden></div>
-        <div class="nest artlib" id="artLibrary">
-          <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
-          <div class="nest-body">
-            <div class="lib-panel" id="tokenLib" hidden>
-              <div class="nest">
-                <button type="button" class="nest-head" aria-expanded="false">Symbols</button>
-                <div class="nest-body"><div class="lib-grid" id="libSymbols"></div></div>
-              </div>
-              <div class="nest">
-                <button type="button" class="nest-head" aria-expanded="false">Tokens — discs &amp; numbers</button>
-                <div class="nest-body">
-                  <div class="field" style="max-width:280px">
-                    <label for="libName">Name for the next token (optional)</label>
-                    <input id="libName" type="text" autocomplete="off" placeholder="e.g. Goblin 3">
-                  </div>
-                  <div class="lib-grid" id="libDiscs"></div>
-                </div>
-              </div>
-              <div class="nest">
-                <button type="button" class="nest-head" aria-expanded="false">Artwork — Saint James &amp; Cody's gallery</button>
-                <div class="nest-body"><div class="lib-grid" id="libArt"></div></div>
-              </div>
-            </div>
-            <div class="nest" id="monsterNest">
-              <button type="button" class="nest-head" aria-expanded="false"><span>Monsters <span class="muted small" id="monsterCount"></span></span></button>
-              <div class="nest-body">
-                <div class="field" style="max-width:280px">
-                  <label for="monsterSort">Sort monsters</label>
-                  <select id="monsterSort">
-                    <option value="alpha">Alphabetical</option>
-                    <option value="crAsc">CR low → high</option>
-                    <option value="crDesc">CR high → low</option>
-                  </select>
-                </div>
-                <div id="libMonsters"><p class="muted small" id="monsterLibNote">Loading the DM monster repository…</p></div>
-                <div class="monster-detail" id="monsterDetail" hidden></div>
-              </div>
-            </div>
-            <div class="lib-panel" id="mapRepo">
-              <div class="nest" id="mapsNest">
-                <button type="button" class="nest-head" aria-expanded="false"><span>Maps repository <span class="muted small" id="mapRepoCount"></span></span></button>
-                <div class="nest-body">
-                  <div class="field">
-                    <label for="mapRepoSearch">Search maps</label>
-                    <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
-                  </div>
-                  <div class="mr-list" id="mapRepoList"><p class="muted small">Loading the repository…</p></div>
-                  <p class="muted small" id="mapRepoStatus"></p>
-                </div>
-              </div>
-            </div>
-            <div class="lib-panel" id="stampLib" hidden>
-              <div class="nest" id="stampsNest">
-                <button type="button" class="nest-head" aria-expanded="false">Stamps</button>
-                <div class="nest-body"><div class="lib-grid" id="stampGrid"></div></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </aside>
-    </div>
     <div class="map-tools">
       <div class="field">
         <input id="placeSearch" type="text" autocomplete="off" aria-label="Find a place" placeholder="Search — e.g. Silverymoon, Candlekeep, Waterdeep">
@@ -572,16 +496,15 @@ body.displaying .td-ui{display:none}
         </select>
       </div>
       <button type="button" class="btn" id="mapExpandBtn">⛶ Expand map</button>
-    </div>
-    <div class="map-tools">
       <label class="atlas-toggle"><input type="checkbox" id="gridToggle"> Grid</label>
       <div class="field" style="flex:0 1 auto">
-        <label for="gridType">Grid type</label>
-        <select id="gridType">
+        <select id="gridType" aria-label="Squares or hexes">
           <option value="square">Squares</option>
           <option value="hex">Hexes</option>
         </select>
       </div>
+    </div>
+    <div class="map-tools">
       <div class="field" style="flex:0 1 auto">
         <label for="scaleFeet">Scale — per square/hex (shared)</label>
         <span style="display:flex;gap:6px;align-items:center"><input id="scaleFeet" class="scale-input" type="number" min="0.1" step="any" value="5"><select id="scaleUnit" aria-label="Scale unit"><option value="ft">feet</option><option value="mi">miles</option></select></span>
@@ -1052,7 +975,83 @@ body.displaying .td-ui{display:none}
         <ol class="init-list" id="initList"></ol>
       </div>
     </div>
-  </section>
+      <div class="map-stage">
+      <div class="map-side">
+        <div id="apocMap" class="apoc-map" aria-label="Editable shared map of Faerûn"></div>
+        <div id="tdWrap" hidden>
+          <div id="tdCanvas"></div>
+          <div class="td-ui">
+            <button type="button" class="btn primary" id="tdBackBtn">Back to 2D</button>
+            <span class="td-hint">Drag to orbit &middot; scroll to zoom &middot; shift-drag to pan &middot; drag a token to move it</span>
+            <span class="td-hint" id="tdStatus"></span>
+          </div>
+        </div>
+        <p class="map-status muted small" id="mapStatus">Loading the shared markers…</p>
+      </div>
+      <aside class="map-repo" aria-label="Art Library">
+        <div id="placeCard" class="place-card" hidden></div>
+        <div class="nest artlib" id="artLibrary">
+          <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
+          <div class="nest-body">
+            <div class="lib-panel" id="tokenLib" hidden>
+              <div class="nest">
+                <button type="button" class="nest-head" aria-expanded="false">Symbols</button>
+                <div class="nest-body"><div class="lib-grid" id="libSymbols"></div></div>
+              </div>
+              <div class="nest">
+                <button type="button" class="nest-head" aria-expanded="false">Tokens — discs &amp; numbers</button>
+                <div class="nest-body">
+                  <div class="field" style="max-width:280px">
+                    <label for="libName">Name for the next token (optional)</label>
+                    <input id="libName" type="text" autocomplete="off" placeholder="e.g. Goblin 3">
+                  </div>
+                  <div class="lib-grid" id="libDiscs"></div>
+                </div>
+              </div>
+              <div class="nest">
+                <button type="button" class="nest-head" aria-expanded="false">Artwork — Saint James &amp; Cody's gallery</button>
+                <div class="nest-body"><div class="lib-grid" id="libArt"></div></div>
+              </div>
+            </div>
+            <div class="nest" id="monsterNest">
+              <button type="button" class="nest-head" aria-expanded="false"><span>Monsters <span class="muted small" id="monsterCount"></span></span></button>
+              <div class="nest-body">
+                <div class="field" style="max-width:280px">
+                  <label for="monsterSort">Sort monsters</label>
+                  <select id="monsterSort">
+                    <option value="alpha">Alphabetical</option>
+                    <option value="crAsc">CR low → high</option>
+                    <option value="crDesc">CR high → low</option>
+                  </select>
+                </div>
+                <div id="libMonsters"><p class="muted small" id="monsterLibNote">Loading the DM monster repository…</p></div>
+                <div class="monster-detail" id="monsterDetail" hidden></div>
+              </div>
+            </div>
+            <div class="lib-panel" id="mapRepo">
+              <div class="nest" id="mapsNest">
+                <button type="button" class="nest-head" aria-expanded="false"><span>Maps repository <span class="muted small" id="mapRepoCount"></span></span></button>
+                <div class="nest-body">
+                  <div class="field">
+                    <label for="mapRepoSearch">Search maps</label>
+                    <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
+                  </div>
+                  <div class="mr-list" id="mapRepoList"><p class="muted small">Loading the repository…</p></div>
+                  <p class="muted small" id="mapRepoStatus"></p>
+                </div>
+              </div>
+            </div>
+            <div class="lib-panel" id="stampLib" hidden>
+              <div class="nest" id="stampsNest">
+                <button type="button" class="nest-head" aria-expanded="false">Stamps</button>
+                <div class="nest-body"><div class="lib-grid" id="stampGrid"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+</section>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
@@ -1606,7 +1605,7 @@ setInterval(loadSharedEntries, 60000);
     } catch(e) { /* fall through to the overlay fallback */ }
     if (!started) setExpanded(true);
   });
-  const expandExitCtl = L.control({ position: "bottomright" });
+  const expandExitCtl = L.control({ position: "topright" });
   expandExitCtl.onAdd = () => {
     const d = L.DomUtil.create("div", "expand-exit-wrap");
     d.innerHTML = '<button type="button" class="btn primary">Exit full screen</button>';
@@ -1735,7 +1734,7 @@ setInterval(loadSharedEntries, 60000);
     gridType = $("gridType").value;
     drawGrid();
     const ok = await saveVttSettings();
-    tokenStatusEl.textContent = ok ? `Grid type for this map: ${gridType === "hex" ? "hexes" : "squares"} — shared with the table.` : "Grid type didn't save — try again.";
+    tokenStatusEl.textContent = ok ? `Grid for this map: ${gridType === "hex" ? "hexes" : "squares"} — shared with the table.` : "Grid didn't save — try again.";
   });
 
   function scaleInputVal(){ return scaleUnit === "mi" ? Math.round(feetPerSquare / 5280 * 100) / 100 : feetPerSquare; }
@@ -6350,12 +6349,13 @@ function floorConnected(L, cols, rows){
     else if (park.edge === "right") { el.style.right = "6px"; el.style.top = Math.min(Math.max(along, textBottom), Math.max(textBottom, pr.height - h - 6)) + "px"; }
   }
   function applyAll(){
-    /* Shaun's layout call (v1.20): ALL buttons live below the map, in page
-       order. The perimeter parking floated the control groups around the
-       map from a saved arrangement, overriding the page order on his
-       screen no matter how the page itself was arranged — parking is
-       retired. Every group stays in flow: text, map, then all the button
-       rows underneath. */
+    /* Shaun's layout calls: v1.20 retired the perimeter parking (groups
+       stay in page flow); v1.49 (2026-11-06 ~21:22) moved EVERYTHING UP —
+       all the button rows, the editing forms and dice/initiative now sit
+       ABOVE the map in one top cluster with the Expand / Exit-full-screen
+       button (the grid checkbox and the squares/hexes dropdown sit in
+       that first row, right beside it), and the map hangs below them,
+       clear. Do not move the groups back below the map. */
     defs.forEach(function(d){ applyPark(d, null); });
   }
   applyAll();
