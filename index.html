@@ -130,6 +130,7 @@ body.map-expanded .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
 body.map-expanded .apoc-map{height:100%;min-height:0}
 body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
 #apocMap:fullscreen{height:100%;width:100%;border:none;border-radius:0}
+#apocMap{touch-action:none} /* v1.72: no browser pinch-zoom over the map; one-finger drag still pans via Leaflet */
 .expand-exit-wrap{display:none}
 body.map-expanded .expand-exit-wrap{display:block}
 body.map-fs .expand-exit-wrap{display:block}
@@ -1290,7 +1291,7 @@ setInterval(loadSharedEntries, 60000);
   const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
-  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false, touchZoom: false }); /* v1.71: touchZoom off — pinch-to-zoom stays OFF (Shaun); zoom is wheel + the zoom bar */
+  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false }); /* v1.72: EVERY Leaflet zoom path off at creation (touch pinch, wheel, double-click, box, keyboard) — zoom comes ONLY from the zoom bar slider (Shaun, 2026-11-07 ~13:39) */
   /* Shaun's fixed layer stack (2026-11-06), bottom to top:
      1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground. Extensible in this
      order — new table layers take the next z slot above Foreground.
@@ -6075,7 +6076,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1326";
+        var BUILD_STAMP = "2026-11-07-1340";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7704,6 +7705,50 @@ function floorConnected(L, cols, rows){
       setTimeout(sync, 350);
     } else setTimeout(waitMap, 120);
   })();
+})();
+</script>
+
+<script>
+/* ================= v1.72: zoom ONLY from the zoom bar (Shaun, voice
+   call 2026-11-07 ~13:39) =================
+   "Remove the double finger zoom in zoom out and leave it just to
+   the zoom bar." v1.71 set Leaflet touchZoom:false at creation and
+   killed the custom pinch handler, but Leaflet's OTHER built-in
+   zoom paths were still live — scroll-wheel zoom above all (the
+   old creation comment even read "zoom is wheel + the zoom bar"),
+   plus double-click zoom, shift-drag box zoom and keyboard +/-
+   zoom. All five handlers are now false in the L.map options at
+   creation AND disabled again here defensively, in case a map was
+   created before those options landed or anything re-enables one.
+   Browser-level pinch over the map is blocked too: touch-action:
+   none on #apocMap (CSS), gesturestart/gesturechange prevented,
+   and ctrl+wheel (trackpad pinch) over the map swallowed.
+   One-finger / mouse drag PAN is untouched — Leaflet dragging
+   stays enabled. The ONLY zoom left in the app is the zoom bar's
+   slider (its input handler calls map.setZoom) and the app's own
+   programmatic fits. Pure view control: nothing shared written. */
+(function(){
+  var el = document.getElementById("apocMap");
+  if (!el) return;
+  function kill(m){
+    if (!m) return;
+    ["touchZoom","scrollWheelZoom","doubleClickZoom","boxZoom","keyboard"].forEach(function(name){
+      var h = m[name];
+      if (h && h.enabled && h.enabled() && h.disable) h.disable();
+    });
+  }
+  (function waitMap(){
+    var m = window.map;
+    if (m && m.on){
+      kill(m);
+      setTimeout(function(){ kill(window.map); }, 400);
+      setTimeout(function(){ kill(window.map); }, 1500);
+    } else setTimeout(waitMap, 120);
+  })();
+  ["gesturestart","gesturechange","gestureend"].forEach(function(t){
+    el.addEventListener(t, function(e){ e.preventDefault(); }, { passive: false });
+  });
+  el.addEventListener("wheel", function(e){ if (e.ctrlKey) e.preventDefault(); }, { passive: false });
 })();
 </script>
 
