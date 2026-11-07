@@ -728,7 +728,6 @@ body.displaying .td-ui{display:none}
       <button type="button" class="btn" id="tplAnchorBtn" hidden>Anchor to token</button>
       <button type="button" class="btn danger" id="drawDelSelBtn" hidden>Delete selected</button>
       <span class="muted small" id="drawStatus"></span>
-      <button type="button" class="btn" id="paintPalHead" aria-expanded="false" title="Show or hide the colour wheel">Color wheel ▸</button>
       <button type="button" class="btn" id="fsBtn">Full screen</button>
       <button type="button" class="btn" id="view3dBtn">3D view</button>
     </div>
@@ -1935,7 +1934,7 @@ setInterval(loadSharedEntries, 60000);
 
   $("tokenCancel").addEventListener("click", closeTokenEditor);
   $("tokenColorBtn").addEventListener("click", () => {
-    openWheelFor((hex) => {
+    toggleWheelFor((hex) => {
       if ($("tokenForm").hidden) { window.__wheelApply = null; setDrawColor(hex); return; }
       $("tokenColor").value = nearestLibColor(hex); syncTokenColorChip();
     }, LIB_HEX[$("tokenColor").value] || LIB_HEX.amber);
@@ -2281,9 +2280,9 @@ setInterval(loadSharedEntries, 60000);
     if (!ok) loadDraw(true);
   });
   /* Colour controls open the installed colour wheel (Shaun, 2026-11-06:
-     no dropdown of colours, no OS colour box). openWheelFor is defined with
+     no dropdown of colours, no OS colour box). toggleWheelFor is defined with
      setDrawColor below; function declarations hoist within this script. */
-  $("drawColorAny").addEventListener("click", () => openWheelFor(null, $("drawColor").value));
+  $("drawColorAny").addEventListener("click", () => toggleWheelFor(null, $("drawColor").value));
   $("drawTool").addEventListener("change", () => {
     const t = $("drawTool").value;
     $("tplShapeField").hidden = $("tplSizeField").hidden = t !== "template";
@@ -3325,14 +3324,22 @@ setInterval(loadSharedEntries, 60000);
     drawStatusEl.textContent = `Color picked: ${hex}.`;
     if (window.__wheelSync) window.__wheelSync(hex);
   }
-  /* Open the installed colour wheel. With no apply callback the wheel drives
-     the draw colour as before; a form (light source, token) passes a callback
-     and wheel picks land there instead. */
-  function openWheelFor(apply, currentHex){
-    window.__wheelApply = apply || null;
+  /* The colour buttons toggle the installed colour wheel (Shaun, 2026-11-06):
+     first hit on a colour button opens it, picking a colour leaves it open,
+     a second hit closes it. One shared open/closed state on #paintPalette.
+     With no apply callback the wheel drives the draw colour as before; a form
+     (light source, token) passes a callback and wheel picks land there instead. */
+  function setWheelOpen(open, currentHex){
     const pal = $("paintPalette");
-    if (pal.hidden) $("paintPalHead").click();
-    if (window.__wheelSync) window.__wheelSync(currentHex || $("drawColor").value);
+    pal.hidden = !open;
+    if (open && window.__wheelSync) window.__wheelSync(currentHex || $("drawColor").value);
+    if (!open) window.__wheelApply = null;
+  }
+  function toggleWheelFor(apply, currentHex){
+    const pal = $("paintPalette");
+    if (!pal.hidden) { setWheelOpen(false); return; }
+    window.__wheelApply = apply || null;
+    setWheelOpen(true, currentHex);
   }
   function syncLightColorChip(){
     const hex = $("lightColor").value || "#ffb347";
@@ -4078,14 +4085,6 @@ setInterval(loadSharedEntries, 60000);
     }));
     setFromHex($("drawColor").value || "#e8a33d", false);
   })();
-  /* Colour wheel stays minimized under its header until clicked (Shaun). */
-  $("paintPalHead").addEventListener("click", () => {
-    const pal = $("paintPalette"), open = pal.hidden;
-    pal.hidden = !open;
-    $("paintPalHead").setAttribute("aria-expanded", String(open));
-    $("paintPalHead").textContent = open ? "Color wheel ▾" : "Color wheel ▸";
-    if (open && window.__wheelSync) window.__wheelSync($("drawColor").value);
-  });
   $("drawFrontBtn").addEventListener("click", async () => {
     if (!selItem) return;
     drawItems = drawItems.filter(it => it !== selItem); drawItems.push(selItem);
@@ -4497,7 +4496,7 @@ setInterval(loadSharedEntries, 60000);
   });
   $("lightCancel").addEventListener("click", () => { $("lightForm").hidden = true; lightEditingId = null; });
   $("lightColorBtn").addEventListener("click", () => {
-    openWheelFor((hex) => {
+    toggleWheelFor((hex) => {
       if ($("lightForm").hidden) { window.__wheelApply = null; setDrawColor(hex); return; }
       $("lightColor").value = hex; syncLightColorChip();
     }, $("lightColor").value || "#ffb347");
