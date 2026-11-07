@@ -515,8 +515,6 @@ body.displaying .td-ui{display:none}
   <header class="vtt-head">
     <h1>APOC VTT</h1>
     <span class="muted small" id="siteVersion" hidden></span>
-    <button type="button" class="btn primary" id="pushTvBtn">Push to TV</button>
-    <button class="btn" id="ambBtn" type="button" aria-pressed="false">🔇 Ambience off</button>
   </header>
   <section class="panel" id="mapPanel" aria-label="The VTT — Maps">
       <div class="map-stage">
@@ -627,6 +625,8 @@ body.displaying .td-ui{display:none}
       <button type="button" class="btn" id="rulerBtn" aria-pressed="false">Ruler</button>
       <button type="button" class="btn" id="pingBtn" aria-pressed="false">Ping</button>
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
+      <button type="button" class="btn primary" id="pushTvBtn">Push to TV</button>
+      <button class="btn" id="ambBtn" type="button" aria-pressed="false">🔇 Ambience off</button>
       <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>GM view: off</button>
       <span class="muted small" id="tokenStatus"></span>
       <span class="muted small" id="gmStatus"></span>
@@ -5816,7 +5816,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-06-2356";
+        var BUILD_STAMP = "2026-11-07-0004";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6556,6 +6556,14 @@ function floorConnected(L, cols, rows){
   });
   /* Tools — Ruler, Ping, Add token, the token editor. */
   [$("rulerBtn"), $("pingBtn"), $("addTokenBtn"), $("tokenStatus"), $("tokenForm")].forEach(function (el) {
+    if (el) sets.tools.appendChild(el);
+  });
+  /* v1.61 (Shaun, voice call 2026-11-07 ~00:03): Push to TV and Ambience
+     leave the header and nest inside the Tools set, alongside the tools
+     above. Moved, not cloned — ids and handlers are untouched, so Push
+     to TV still opens the ?display=1 copy and Ambience still toggles
+     sound + backdrop exactly as before. */
+  [$("pushTvBtn"), $("ambBtn")].forEach(function (el) {
     if (el) sets.tools.appendChild(el);
   });
   /* Fog — the whole GM fog panel. */
