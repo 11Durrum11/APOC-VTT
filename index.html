@@ -5918,7 +5918,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1005";
+        var BUILD_STAMP = "2026-11-07-1010";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6749,10 +6749,10 @@ function floorConnected(L, cols, rows){
   stage.insertAdjacentElement("afterend", row);
 
   /* GM view stays a DIRECT button in the row (hold-to-switch, v1.59); its
-     status line rides along under the bar. */
+     status line rides along with it. v1.67 (Shaun): the button sits next
+     to Dice — it is appended AFTER the tabs loop below, so it lands at
+     the end of the bar, immediately after the Dice tab. */
   var gmBtn = $("gmBtn"), gmStatus = $("gmStatus");
-  if (gmBtn) bar.appendChild(gmBtn);
-  if (gmStatus) bar.appendChild(gmStatus);
 
   var ORDER = ["map", "markers", "tools", "fog", "lighting", "draw", "layers", "generate", "dice"];
   var LABELS = { map: "Map", markers: "Markers", tools: "Tools", fog: "Fog", lighting: "Lighting", draw: "Draw", layers: "Layers", generate: "Generate", dice: "Dice" };
@@ -6767,6 +6767,10 @@ function floorConnected(L, cols, rows){
     row.appendChild(s); sets[name] = s;
     b.addEventListener("click", function () { openSet(sets[name].hidden ? name : null); });
   });
+  /* v1.67: GM view button + its status line take the end of the bar,
+     right after Dice (the last tab appended above). */
+  if (gmBtn) bar.appendChild(gmBtn);
+  if (gmStatus) bar.appendChild(gmStatus);
   function openSet(name) {
     ORDER.forEach(function (n) {
       var on = n === name;
