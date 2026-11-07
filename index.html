@@ -327,7 +327,9 @@ input,select,textarea{font-size:16px}
    Groups can be dragged by their grip to any edge of the panel; they
    re-orient (top/bottom = horizontal row, left/right = vertical
    stack) and stay transparent. Arrangement persists per device in
-   localStorage key "apocVttPerimeterV1". Phones keep the drawer. */
+   localStorage key "apocVttPerimeterV2" (epoch V2 since v1.56 — the
+   V1 parks belonged to the pre-restore layout and are discarded).
+   Phones keep the drawer. */
 .per-grip{display:none}
 @media (min-width:821px){
   .per-grip{display:none;align-items:center;gap:6px;flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border:1px dashed hsl(220 16% 34%);border-radius:8px;padding:4px 10px;min-height:36px;font-size:.8rem;color:var(--muted-foreground);background:transparent;white-space:nowrap}
@@ -5666,7 +5668,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-06-2311";
+        var BUILD_STAMP = "2026-11-06-2316";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6322,10 +6324,20 @@ function floorConnected(L, cols, rows){
    the table panel: top/bottom park it as a horizontal row, left/
    right as a vertical stack. Groups stay whole and transparent.
    The arrangement persists per device in localStorage under
-   "apocVttPerimeterV1" as {groupId:{edge,along}}; "Reset layout"
+   "apocVttPerimeterV2" as {groupId:{edge,along}}; "Reset layout"
    in the header clears it and restores the defaults. */
 (function(){
-  var KEY = "apocVttPerimeterV1";
+  /* Layout epoch V2 (v1.56): the v1.55 restore changed the base layout
+     (map on top, groups below), so parks saved under the old v1.49/v1.50
+     arrangement — groups parked around the TOP of the panel, back when
+     the controls lived above the map — must not resurrect it: on Shaun's
+     device they pulled the tool groups back up over the top of the map
+     ("buttons mixed up with the top of the map"). Parks now live under a
+     new key; the V1 key is discarded once, below, and every device starts
+     from the clean v1.55 flow. Dragging saves/restores under V2 exactly
+     as it did under V1 (the v1.51 restore logic is unchanged). */
+  var KEY = "apocVttPerimeterV2";
+  try { window.localStorage.removeItem("apocVttPerimeterV1"); } catch(e) {}
   var mq = window.matchMedia("(min-width: 821px)");
   var panel = document.getElementById("mapPanel");
   if (!panel) return;
