@@ -652,6 +652,53 @@ body.displaying #zoomBar{display:none !important}
 #ctxMenu button{text-align:left;background:transparent;border:0;color:inherit;font:inherit;font-size:.92rem;padding:7px 8px;border-radius:7px;cursor:pointer;min-height:34px}
 #ctxMenu button:hover{background:rgba(216,178,90,.14);color:var(--primary)}
 #ctxMenu button.danger:hover{color:#f0b1b1;background:rgba(160,40,40,.16)}
+
+/* ---- v1.74 (Shaun, voice call 2026-11-07 ~13:46-13:49): the Art
+   Library goes BACK on the right as a VERTICAL dock (superseding the
+   v1.71 bottom strip), it renders ON TOP of everything, the page fits
+   one screen with NO scrolling, open control sets OVERLAY the map
+   instead of pushing the page taller, and the map-name dropdown gets
+   two columns + a hover preview (see the scripts at the end). ---- */
+/* The stage row: map column + a right column JUST wide enough for the
+   library dock (300px — the width the dock has always used). The map
+   box stays flush left and gives up exactly the dock's width. */
+.stage-row{display:flex;gap:14px;align-items:stretch;width:100%;margin-top:12px}
+.stage-row > .map-stage{flex:1 1 auto;min-width:0;margin-top:0}
+.stage-row > .map-repo{flex:0 0 300px;width:300px;position:relative;z-index:3000;margin-top:0}
+.stage-row > .map-repo.per-float{position:absolute} /* the float must beat the dock rule above (equal specificity, later sheet position) or a saved park renders as a relative nudge of the dock instead of a free float */
+/* Fullscreen / Expand keep their pre-v1.74 structure: the wrapper
+   vanishes from the layout and the old rules take over. */
+body.map-expanded .stage-row{display:contents}
+#mapPanel:fullscreen .stage-row{display:contents}
+.map-repo > .place-card{max-height:320px;overflow-y:auto}
+/* Library ON TOP: docked, its expanded body overlays LEFTWARD over the
+   map — it never pushes, resizes or reflows anything outside itself.
+   (When the library is floated, the v1.71 in-float rule below still
+   governs; the float box itself is the overlay.) */
+.map-repo:not(.per-float) .artlib.open > .nest-body{position:absolute;top:0;right:calc(100% + 8px);left:auto;bottom:auto;width:min(880px,74vw);max-height:min(80vh,760px);display:block;overflow-y:auto;overflow-x:hidden;background:rgba(10,12,16,.97);border:1px solid hsl(222 18% 28%);border-radius:10px;padding:10px;box-shadow:0 18px 44px rgba(0,0,0,.6);z-index:3100}
+.map-repo:not(.per-float) .artlib.open > .nest-body > *{margin:0 0 10px}
+.map-repo:not(.per-float) .artlib.open > .nest-body > *:last-child{margin-bottom:0}
+/* Open sets OVERLAY: a set floats upward over the map from the button
+   row instead of pushing the page taller — page geometry and scroll
+   state never change when a set opens. Internal scroll only. */
+.ctl-row{position:relative}
+.ctl-set{position:absolute;bottom:calc(100% + 6px);left:0;right:0;max-height:66vh;overflow-y:auto;overflow-x:hidden;z-index:2900;background:rgba(13,16,21,.97);box-shadow:0 18px 44px rgba(0,0,0,.55);margin-top:0}
+/* The map-name dropdown (custom, mirrors #mapSelect): the OS list
+   cannot do two columns or hover previews, so the native select is
+   kept as the data/value holder and this control renders instead. */
+#mapSelect.mapselect-native-hidden{display:none}
+.mapdd-btn{font:inherit;width:100%;text-align:left;padding:8px 10px;border-radius:8px;border:1px solid hsl(222 18% 30%);background:rgba(10,12,16,.6);color:inherit;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:38px}
+.mapdd-btn .mapdd-cur{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mapDdPanel{position:fixed;z-index:4500;background:#fff;color:#111;border:1px solid #8a8a8a;border-radius:8px;box-shadow:0 18px 44px rgba(0,0,0,.5);padding:6px;overflow-y:auto;max-height:62vh}
+#mapDdPanel[hidden]{display:none}
+#mapDdPanel .mapdd-grid{display:grid;grid-auto-flow:column;gap:1px 18px}
+#mapDdPanel .mapdd-item{padding:5px 8px;border-radius:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.92rem;color:#111}
+#mapDdPanel .mapdd-item:hover{background:#e8ecf3}
+#mapDdPanel .mapdd-item.sel{font-weight:700;background:#dfe6f2}
+#mapPreview{position:fixed;z-index:4600;background:#0b0d11;border:1px solid hsl(222 18% 32%);border-radius:10px;padding:8px;box-shadow:0 18px 44px rgba(0,0,0,.6);pointer-events:none}
+#mapPreview[hidden]{display:none}
+#mapPreview img{display:block;max-width:min(600px,44vw);max-height:60vh;border-radius:6px;background:#111}
+#mapPreview .mp-name{color:#f3e2b3;font-size:.85rem;font-weight:700;padding:6px 2px 0;max-width:600px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -6084,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1345";
+        var BUILD_STAMP = "2026-11-07-1352";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7040,6 +7087,34 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
+/* ================= v1.74: the stage row (Shaun, voice call
+   2026-11-07 ~13:46) =================
+   "Add just enough room off to the right of the map to add the art
+   library dock there vertically." The Art Library's home moves from
+   the v1.71 bottom strip back to a RIGHT-SIDE VERTICAL DOCK: stage
+   and library are wrapped in a .stage-row flex row — the map column
+   (flex 1, flush left) gives up exactly the dock's 300px + the 14px
+   gutter, the bubble still spans full width. This runs before the
+   perimeter script: with no saved float, the perimeter returns the
+   library to flow, which is now the dock; a saved float still wins
+   (the library floats free and stays where Shaun left it), and the
+   grip's double-click home is the dock. Fullscreen / Expand unwrap
+   the row via display:contents (see the v1.74 CSS). */
+(function(){
+  var panel = document.getElementById("mapPanel");
+  if (!panel) return;
+  var stage = panel.querySelector(":scope > .map-stage");
+  var repo = panel.querySelector(":scope > .map-repo");
+  if (!stage || !repo) return;
+  var wrap = document.createElement("div");
+  wrap.className = "stage-row";
+  stage.parentNode.insertBefore(wrap, stage);
+  wrap.appendChild(stage);
+  wrap.appendChild(repo);
+})();
+</script>
+
+<script>
 "use strict";
 /* ================= v1.06: perimeter-always, movable groups =================
    Desktop/table only (phones keep the right-edge repository drawer).
@@ -7071,7 +7146,7 @@ function floorConnected(L, cols, rows){
   if (!panel) return;
   var rows = panel.querySelectorAll(":scope > .map-tools");
   var cols = panel.querySelectorAll(":scope > .vtt-panel > .vtt-col");
-  var repo = panel.querySelector(":scope > .map-repo"); /* v1.71: the library is the bottom strip now — a direct child of the panel, no longer inside .map-stage */
+  var repo = panel.querySelector(".map-repo"); /* v1.74: the library lives inside .stage-row now (right-side dock) — a descendant query, not :scope; with :scope the perimeter stewarded nothing and saved floats were ignored */
   var defs = [];
   function def(el, id, label){ if (el) defs.push({ el: el, id: id, label: label }); }
   def(rows[0], "tools-main", "Search & map");
@@ -7103,7 +7178,7 @@ function floorConnected(L, cols, rows){
   /* v1.71: the Art Library grip says what it now does, and a
      double-click on it sends the library home to the bottom strip. */
   if (byId.repo) {
-    byId.repo.grip.title = "Drag to float the Art Library — it stays where you leave it. Double-click to send it back to the bottom strip.";
+    byId.repo.grip.title = "Drag to float the Art Library — it stays where you leave it. Double-click to send it back to the right-side dock.";
     byId.repo.grip.addEventListener("dblclick", function(){
       var state = load();
       delete state.repo;
@@ -7385,7 +7460,7 @@ function floorConnected(L, cols, rows){
        BEFORE availW is read so a reset measures the true column. */
     var man = loadMan();
     var pageHost = panel ? (panel.closest(".page") || panel) : null;
-    if (pageHost) pageHost.classList.toggle("man-w", !!(man && man.w));
+    if (pageHost) pageHost.classList.toggle("man-w", !!(man && man.w) && !libDocked()); /* v1.74: while the library is docked the bubble stays full width — the dock ceiling below caps the window instead of the page growing */
     var side = el.parentElement;
     var availW = side ? side.clientWidth : el.clientWidth;
     if (!availW) return;
@@ -7447,7 +7522,7 @@ function floorConnected(L, cols, rows){
        width cap is a flat ceiling, not the column width: in man-w
        mode the column itself follows the window (see above). */
     if (man){
-      if (man.w) w = Math.max(320, Math.min(man.w, 2600));
+      if (man.w) w = Math.min(Math.max(320, Math.min(man.w, 2600)), dockCeilW()); /* v1.74: never into the dock column */
       if (man.h) h = Math.max(380, Math.min(man.h, 1600)); /* v1.70: floor is the CSS min-height (380) — v1.68's 240 rendered at 380 anyway */
     }
     el.style.width = w + "px";
@@ -7504,6 +7579,26 @@ function floorConnected(L, cols, rows){
       else localStorage.removeItem(MANKEY);
     } catch(e) {}
   }
+  /* v1.74: with the Art Library home in its right-side dock, the map
+     window's right edge stops at the dock — a manual width may not
+     exceed the stage row minus the dock column (300 + 14 gap), so
+     resizing rightward can never swallow the dock. Measured with
+     .man-w briefly lifted: in man-w the page grows to fit the
+     window, so a live row width would chase its own tail. When the
+     library is floated away there is no dock column and the old
+     flat ceiling applies. */
+  function libDocked(){ return !!document.querySelector("#mapPanel .stage-row > .map-repo:not(.per-float)"); }
+  function dockCeilW(){
+    var repo = document.querySelector("#mapPanel .map-repo");
+    var rowEl = el.closest(".stage-row");
+    if (!repo || !rowEl || repo.classList.contains("per-float") || !rowEl.contains(repo)) return 2600;
+    var pg = el.closest(".page");
+    var had = !!(pg && pg.classList.contains("man-w"));
+    if (had) pg.classList.remove("man-w");
+    var w = rowEl.clientWidth - 314;
+    if (had) pg.classList.add("man-w");
+    return Math.max(320, w);
+  }
   var HD = null;
   function syncHandles(){
     if (!HD) return;
@@ -7526,7 +7621,8 @@ function floorConnected(L, cols, rows){
     e.preventDefault();
     var hasR = mode.indexOf("r") >= 0, hasB = mode.indexOf("b") >= 0,
         hasL = mode.indexOf("l") >= 0, hasT = mode.indexOf("t") >= 0;
-    if (hasR || hasL){ var pg = el.closest(".page"); if (pg) pg.classList.add("man-w"); } /* reflow live during a width drag, not just on release */
+    if (hasR || hasL){ var pg = el.closest(".page"); if (pg && !libDocked()) pg.classList.add("man-w"); } /* reflow live during a width drag, not just on release; v1.74: not while docked — the ceiling governs */
+    var ceilW = hasR ? dockCeilW() : 2600; /* v1.74: measured once, before .man-w can grow the row */
     var sx = e.clientX, sy = e.clientY;
     var sw = parseFloat(el.style.width) || el.offsetWidth;
     var sh = parseFloat(el.style.height) || el.offsetHeight;
@@ -7536,7 +7632,7 @@ function floorConnected(L, cols, rows){
     var raf = 0;
     function mv(ev){
       var dx = ev.clientX - sx, dy = ev.clientY - sy;
-      if (hasR) el.style.width = Math.max(320, Math.min(sw + dx, 2600)) + "px"; /* flat ceiling, as in fit(): in man-w mode the column follows the window, so the column width is no ceiling */
+      if (hasR) el.style.width = Math.max(320, Math.min(sw + dx, ceilW)) + "px"; /* v1.74: ceiling is the dock-aware one from dockCeilW() (was a flat 2600 before the dock came back) */
       if (hasL){ var nw = Math.max(320, Math.min(sw - dx, 2600, sw + sl)); el.style.width = nw + "px"; el.style.marginLeft = (sl + (sw - nw)) + "px"; } /* right edge fixed: size trades against the left inset, which clamps at 0 */
       if (hasB) el.style.height = Math.max(380, Math.min(sh + dy, 1600)) + "px"; /* 380 = the CSS min-height floor */
       if (hasT){ var nh = Math.max(380, Math.min(sh - dy, 1600, sh + st)); el.style.height = nh + "px"; el.style.marginTop = (st + (sh - nh)) + "px"; } /* bottom edge fixed: size trades against the top inset, which clamps at 0 */
@@ -7654,7 +7750,7 @@ function floorConnected(L, cols, rows){
   function home(){
     /* Amendment (Shaun, 2026-11-07 ~13:22): the Art Library now lives
        across the BOTTOM, so the gutter is the band under the map box,
-       above the Library strip. The bar's home straddles the map
+       just left of the Art Library dock (v1.74 — the library is back on the right). The bar's home straddles the map
        window's bottom-right corner in that gutter — right-aligned
        with the window, half above its bottom edge, half below it. */
     return { l: el.offsetLeft + el.offsetWidth - bar.offsetWidth, t: el.offsetTop + el.offsetHeight - Math.round(bar.offsetHeight / 2) };
@@ -8021,6 +8117,135 @@ function floorConnected(L, cols, rows){
     if (m && m.on) { m.on("movestart zoomstart dragstart", close); }
     else setTimeout(waitMap, 150);
   })();
+})();
+</script>
+<script>
+/* ================= v1.74: the map-name dropdown — two columns +
+   hover preview (Shaun, voice call 2026-11-07 ~13:48-13:49) ======
+   "Can you cut the drop down and double it up? Columns?" + "when I
+   hover over a name in that dropdown, a preview of that map
+   appears." The dropdown is #mapSelect in the Map set. A native
+   <select>'s open list is OS-rendered — no columns, no per-name
+   hover — so the select stays in the DOM as the data + value
+   holder (every existing flow keeps working: registerDropMap adds
+   its options, the change handler loads the map, other code reads
+   and sets its value) and a custom control renders in its place.
+   - The open list is TWO COLUMNS, entries flowing in order down
+     the first column, then the second (grid-auto-flow: column),
+     cutting the list's height roughly in half; white background,
+     black text, like the OS list it replaces; it overlays on top
+     of everything and the page geometry never changes; internal
+     scroll only if the two-column list still overflows.
+   - HOVERING a name shows a floating preview of that map's FULL
+     image (MAPS[id].img — the original, not a thumbnail) beside
+     the list. Hover only: it never loads the map, never touches
+     shared state; moving to another name swaps the preview;
+     moving off hides it after a short delay (no flicker).
+   - CLICKING a name is the load action, exactly as before: the
+     select's value is set and its change event fires.
+   The panel and preview live on <body> so no stacking context in
+   the page can cover them. */
+(function(){
+  var sel = document.getElementById("mapSelect");
+  if (!sel) return;
+  var field = sel.closest(".field") || sel.parentElement;
+  if (!field) return;
+  sel.classList.add("mapselect-native-hidden");
+  var btn = document.createElement("button");
+  btn.type = "button"; btn.className = "mapdd-btn"; btn.id = "mapDdBtn";
+  btn.setAttribute("aria-haspopup", "listbox"); btn.setAttribute("aria-expanded", "false");
+  btn.innerHTML = '<span class="mapdd-cur"></span><span aria-hidden="true">\u25BE</span>';
+  field.appendChild(btn);
+  var panel = document.createElement("div");
+  panel.id = "mapDdPanel"; panel.hidden = true; panel.setAttribute("role", "listbox");
+  document.body.appendChild(panel);
+  var prev = document.createElement("div");
+  prev.id = "mapPreview"; prev.hidden = true;
+  prev.innerHTML = '<img alt=""><div class="mp-name"></div>';
+  document.body.appendChild(prev);
+  var pimg = prev.querySelector("img"), pname = prev.querySelector(".mp-name");
+  var cur = btn.querySelector(".mapdd-cur");
+  var lastVal = null, hideTimer = 0, currentImg = "";
+  function defOf(id){ try { return (window.__apocShelf && window.__apocShelf.def) ? window.__apocShelf.def(id) : null; } catch(e) { return null; } } /* MAPS is private to the engine closure; __apocShelf.def is its bridge */
+  function syncLabel(){
+    var o = sel.options[sel.selectedIndex];
+    cur.textContent = o ? o.textContent : "Choose a map";
+    lastVal = sel.value;
+  }
+  function hidePrev(instant){
+    clearTimeout(hideTimer);
+    if (instant) { prev.hidden = true; return; }
+    hideTimer = setTimeout(function(){ prev.hidden = true; }, 260);
+  }
+  function showPrev(id, name, anchorRect){
+    var def = defOf(id);
+    var src = (def && def.img) ? def.img : "";
+    if (!src) { hidePrev(true); return; }
+    clearTimeout(hideTimer);
+    if (currentImg !== src) { pimg.src = src; currentImg = src; }
+    pname.textContent = name;
+    prev.hidden = false;
+    var pw = prev.offsetWidth, ph = prev.offsetHeight;
+    var left = anchorRect.right + 10;
+    if (left + pw > window.innerWidth - 6) left = Math.max(6, anchorRect.left - pw - 10);
+    var top = Math.max(6, Math.min(anchorRect.top, window.innerHeight - ph - 6));
+    prev.style.left = left + "px";
+    prev.style.top = top + "px";
+  }
+  function build(){
+    var opts = Array.from(sel.options);
+    panel.innerHTML = "";
+    var grid = document.createElement("div");
+    grid.className = "mapdd-grid";
+    var rows = Math.max(1, Math.ceil(opts.length / 2));
+    grid.style.gridTemplateRows = "repeat(" + rows + ", auto)";
+    grid.style.gridTemplateColumns = "1fr 1fr";
+    opts.forEach(function(o){
+      var it = document.createElement("div");
+      it.className = "mapdd-item" + (o.value === sel.value ? " sel" : "");
+      it.textContent = o.textContent;
+      it.setAttribute("role", "option");
+      it.addEventListener("mouseenter", function(){ showPrev(o.value, o.textContent, panel.getBoundingClientRect()); });
+      it.addEventListener("mouseleave", function(){ hidePrev(false); });
+      it.addEventListener("click", function(){
+        sel.value = o.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        syncLabel();
+        close();
+      });
+      grid.appendChild(it);
+    });
+    panel.appendChild(grid);
+  }
+  function open(){
+    build();
+    syncLabel();
+    var r = btn.getBoundingClientRect();
+    panel.style.width = Math.min(600, window.innerWidth - 12) + "px";
+    panel.hidden = false;
+    var ph = panel.offsetHeight;
+    var top = r.bottom + 4;
+    if (top + ph > window.innerHeight - 6) top = Math.max(6, r.top - ph - 4);
+    panel.style.left = Math.max(6, Math.min(r.left, window.innerWidth - panel.offsetWidth - 6)) + "px";
+    panel.style.top = top + "px";
+    btn.setAttribute("aria-expanded", "true");
+  }
+  function close(){
+    panel.hidden = true;
+    hidePrev(true);
+    btn.setAttribute("aria-expanded", "false");
+  }
+  btn.addEventListener("click", function(){ if (panel.hidden) open(); else close(); });
+  panel.addEventListener("mouseleave", function(){ hidePrev(false); });
+  document.addEventListener("mousedown", function(e){
+    if (!panel.hidden && !panel.contains(e.target) && e.target !== btn && !btn.contains(e.target)) close();
+  });
+  document.addEventListener("keydown", function(e){ if (e.key === "Escape") close(); });
+  window.addEventListener("resize", function(){ if (!panel.hidden) close(); });
+  new MutationObserver(function(){ syncLabel(); if (!panel.hidden) build(); }).observe(sel, { childList: true });
+  sel.addEventListener("change", syncLabel);
+  setInterval(function(){ if (sel.value !== lastVal) syncLabel(); }, 800);
+  syncLabel();
 })();
 </script>
 </body>
