@@ -251,7 +251,6 @@ body.bg-animated::before{animation:none}
 .lib-item{min-height:64px}
 .lib-cap{font-size:.8rem}
 .chip-eye{min-width:36px;min-height:36px}
-.leaflet-bar a{min-width:40px !important;min-height:40px !important;line-height:40px !important;font-size:18px !important}
 /* Repository-ready stage: map + side rail. The rail keeps the token
    repository (and the DM monster repository to come) BESIDE the map on wide
    screens; on phones it stacks under the map. It collapses entirely while
@@ -466,27 +465,6 @@ body.displaying .td-ui{display:none}
 /* ---- map generator ---- */
 #genNest{flex:1 1 100%}
 .gen-row{display:flex;flex-wrap:wrap;gap:8px;align-items:end;padding:4px 2px}
-
-/* ---- v1.52: map maximized in its bubble (Shaun, 2026-11-06 ~21:25-21:28):
-   the map viewing area uses the whole panel edge to edge on all four
-   sides — flush at the top (no margin holding the stage down), flush
-   left (the black side strip gone), opened all the way up (wider
-   page, taller box) and extending all the way down to the point
-   where the under-map status text sat (no bottom band reserved for
-   it: the status line keeps no margin, and an emptied status line
-   takes no space at all). The fit script at the end of the body
-   sizes the Leaflet box to the current map's own aspect inside this
-   maximized stage, so the map image itself fills the box edge to
-   edge with no letterbox strip on any side. Fullscreen / Expand /
-   TV display keep their own full-bleed rules — the script clears
-   its inline sizing in those modes. */
-.page{width:min(1720px,100%)}
-#mapPanel{padding-top:6px}
-#mapPanel .map-stage{margin-top:0}
-.apoc-map{height:min(88vh,980px)}
-#tdWrap{margin-top:0}
-.map-status{margin-top:0}
-#mapStatus:empty{display:none}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -1127,7 +1105,7 @@ setInterval(loadSharedEntries, 60000);
   const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
-  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false });
+  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false });
   /* Shaun's fixed layer stack (2026-11-06), bottom to top:
      1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground. Extensible in this
      order — new table layers take the next z slot above Foreground.
@@ -2071,7 +2049,9 @@ setInterval(loadSharedEntries, 60000);
      Fog and drawings are per-map (same key pattern as tokens). GM view is a
      plain per-screen on/off toggle (this browser session) — no PIN, no lock
      (Shaun, 2026-11-06). Projection is always the player view. */
-  function effectiveGm(){ return gmView && !isProjecting(); }
+  function effectiveGm(){ try { return gmView && !isProjecting(); } catch(e) { return false; } }
+  /* (TDZ-guarded: the gazetteer calls this during init, before the
+     "let gmView" declaration has run — unguarded it threw on every load.) */
   window.effectiveGm = effectiveGm;
   /* Fog renders in the GM layer (layerGm, z400) per Shaun's fixed stack —
      it used to sit in its own pane at z640, above the tokens. */
@@ -5666,12 +5646,30 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
+        /* BUILD_STAMP must match version.json's "version" at push time.
+           If the served version.json names a NEWER build than the one
+           baked into this page, this tab is running stale code (a cached
+           page, or a tab left open across a push — the old code kept
+           running while the badge showed the new number). Reload ONCE
+           (per version, per tab session) to the fresh build instead. */
+        var BUILD_STAMP = "2026-11-06-2212";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
             var v = d && (d.display || d.version);
             if (el && v) { el.textContent = "v" + v; el.hidden = false; }
+            if (d && d.version && d.version !== BUILD_STAMP) {
+              try {
+                var key = "apocVttReloadedFor";
+                if (sessionStorage.getItem(key) !== d.version) {
+                  sessionStorage.setItem(key, d.version);
+                  var u = new URL(location.href);
+                  u.searchParams.set("v", String(d.version).replace(/\D/g, ""));
+                  location.replace(u.toString());
+                }
+              } catch (e) {}
+            }
           })
           .catch(function () {});
       </script>
@@ -6055,10 +6053,11 @@ function floorConnected(L, cols, rows){
 <script>
 "use strict";
 /* ================= Monster repository — Monster Manual I (DM material) =================
-   Shaun's DM monster shelf, inside Art Library > Monsters. GM-ONLY: the
-   whole nest is hidden unless effectiveGm() (GM view on, not the
-   ?display TV copy) — players never see the contents, and the registry
-   is not even fetched until GM view is first switched on.
+   Shaun's DM monster shelf, inside Art Library > Monsters. GM-ONLY
+   contents: hidden entirely on the ?display TV copy; on the control
+   page the header stays visible labelled "GM view only" while GM view
+   is off (so the shelf is always findable), the body stays hidden, and
+   the registry is not even fetched until GM view is first switched on.
    Data: shared site_settings key "vtt_monsters" (mirrors the
    vtt_dropmaps pattern) — { monsters: [{ slug, name, type, typeLine,
    cr, crNum, status: "found"|"generated"|"none", path, desc, flags }] }.
@@ -6080,6 +6079,7 @@ function floorConnected(L, cols, rows){
   var countEl = document.getElementById("monsterCount");
   var sortEl = document.getElementById("monsterSort");
   var detailEl = document.getElementById("monsterDetail");
+  var bodyEl = nest.querySelector(":scope > .nest-body");
   var FLAG_LABELS = {
     "summoning-does-not-work": "Summoning doesn\u2019t work in the APOC",
     "planar-travel-severed": "Planar travel is severed \u2014 it can\u2019t be called or reached from here",
@@ -6090,13 +6090,26 @@ function floorConnected(L, cols, rows){
   var monsters = [], bySlug = {}, started = false, sortMode = "alpha";
   var groupState = {};
   function pub(path){ return "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/" + path; }
-  function gmOn(){ try { return typeof effectiveGm === "function" && effectiveGm(); } catch(e) { return false; } }
+  function gmOn(){
+    try { if (typeof effectiveGm === "function") return !!effectiveGm(); } catch(e) {}
+    /* Fallback if the main script's exposure ever goes missing again:
+       read the GM button's own pressed state — applyGmUi keeps it true
+       exactly while GM view is on. */
+    var b = document.getElementById("gmBtn");
+    return !!(b && b.getAttribute("aria-pressed") === "true");
+  }
 
-  /* GM gate — poll like the token-light field does; the nest does not
-     exist for players or the TV copy. */
+  /* GM gate — poll like the token-light field does. On the TV copy the
+     nest does not exist at all. On the control page the HEADER stays
+     visible with GM view off (labelled "GM view only", body hidden,
+     registry not fetched) so the repository is always findable; the
+     contents appear only with GM view on. */
   function gate(){
     var gm = gmOn();
-    nest.style.display = gm ? "" : "none";
+    if (document.body.classList.contains("displaying")) { nest.style.display = "none"; return; }
+    nest.style.display = "";
+    if (bodyEl) bodyEl.style.display = gm ? "" : "none";
+    if (!gm && countEl) countEl.textContent = "\u2014 GM view only";
     if (gm && !started) { started = true; loadRegistry(); }
   }
   gate();
@@ -6462,87 +6475,6 @@ function floorConnected(L, cols, rows){
   window.addEventListener("resize", applyAll);
   document.addEventListener("fullscreenchange", function(){ setTimeout(applyAll, 180); });
   if (mq.addEventListener) mq.addEventListener("change", function(){ repoDefault(); applyAll(); });
-})();
-</script>
-
-<script>
-/* ================= v1.52: map fills its bubble (Shaun) =================
-   Sizes the Leaflet box to the current map's aspect inside the
-   maximized stage: flush left, flush top, as large as the stage
-   allows, all the way down — no black letterbox strip on any side
-   and no dead band under the map. Pure view sizing: tokens, fog,
-   drawings, lighting and markers all live in map coordinates, so a
-   box resize cannot misalign anything (Leaflet reprojects on
-   invalidateSize). On a map switch or rotation — the moments the
-   engine itself fits the full frame — the fit is redone at the new
-   size, captured from the engine's own current bounds so the frame
-   units are always the engine's. The opening Faerun slice view is
-   left exactly as authored. Fullscreen, Expand and the TV display
-   copy clear the inline sizing and keep their full-bleed CSS. */
-(function(){
-  var el = document.getElementById("apocMap");
-  if (!el || !window.L) return;
-  var mq = window.matchMedia("(min-width: 821px)");
-  var curImg = null, primed = false, timer = 0;
-  function blocked(){
-    return !mq.matches || !!document.fullscreenElement ||
-      document.body.classList.contains("displaying") ||
-      document.body.classList.contains("map-expanded") ||
-      document.body.classList.contains("map-fs");
-  }
-  function baseImg(){
-    var panes = el.querySelectorAll(".leaflet-pane");
-    for (var i = 0; i < panes.length; i++){
-      if (panes[i].style.zIndex === "205"){
-        var img = panes[i].querySelector("img.leaflet-image-layer");
-        if (img) return img;
-      }
-    }
-    return el.querySelector("img.leaflet-image-layer");
-  }
-  function fit(refit){
-    var m = window.map;
-    if (blocked()){ el.style.width = ""; el.style.height = ""; if (m && m.invalidateSize) m.invalidateSize({ pan: false }); return; }
-    var img = baseImg();
-    if (!img || !img.naturalWidth || !img.naturalHeight) return;
-    var keep = null;
-    if (refit && m && m.getBounds){ try { keep = m.getBounds(); } catch(e) { keep = null; } }
-    var side = el.parentElement;
-    var availW = side ? side.clientWidth : el.clientWidth;
-    if (!availW) return;
-    var maxH = Math.min(Math.round(window.innerHeight * 0.88), 980);
-    var a = img.naturalWidth / img.naturalHeight;
-    var w = availW, h = Math.round(w / a);
-    if (h > maxH){ h = maxH; w = Math.round(h * a); }
-    if (h < 320){ h = Math.min(320, maxH); w = Math.round(h * a); if (w > availW){ w = availW; h = Math.round(w / a); } }
-    el.style.width = w + "px";
-    el.style.height = h + "px";
-    el.style.marginLeft = "0";
-    el.style.marginRight = "auto";
-    if (m && m.invalidateSize){
-      m.invalidateSize({ pan: false });
-      if (refit && keep){ try { m.fitBounds(keep); } catch(e) {} }
-    }
-  }
-  function schedule(refit){
-    clearTimeout(timer);
-    timer = setTimeout(function(){ fit(refit); }, 60);
-  }
-  function watch(){
-    var img = baseImg();
-    if (img === curImg) return;
-    var isNew = primed;
-    curImg = img; primed = true;
-    if (!img) return;
-    if (img.complete && img.naturalWidth) schedule(isNew);
-    else img.addEventListener("load", function(){ schedule(isNew); }, { once: true });
-  }
-  new MutationObserver(watch).observe(el, { childList: true, subtree: true });
-  new MutationObserver(function(){ schedule(false); }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
-  window.addEventListener("resize", function(){ schedule(false); });
-  document.addEventListener("fullscreenchange", function(){ schedule(false); });
-  watch();
-  schedule(false);
 })();
 </script>
 </body>
