@@ -576,14 +576,55 @@ body.displaying .td-ui{display:none}
 .vtt-head{position:static;width:auto}
 .map-repo{padding-top:10px}
 }
+
+/* ---- v1.71: full-width bubble, header row, zoom bar (Shaun, voice
+   call 2026-11-07 ~13:05-13:17). The bubble (.page + #mapPanel) now
+   stretches the FULL WIDTH of the screen, all the way to both edges.
+   The header is a real row across that full width, same row: its
+   buttons (Push to TV, Ambience) all the way to the LEFT, and the
+   "APOC VTT" title + version tag together all the way at the RIGHT
+   edge — this supersedes the v1.63 header-over-the-right-column
+   placement and the v1.61 nesting of those buttons inside Tools.
+   The Art Library no longer needs the 52px top pad that cleared the
+   old absolute header. The map fit reserve grows 144 -> 196 for the
+   header row so the closed page still fits one screen. ---- */
+.page{width:100%;padding:0 4px 12px}
+.vtt-head{position:static;width:auto;margin:0 0 6px;display:flex;align-items:center;flex-wrap:nowrap;gap:10px}
+.vtt-head .head-btns{display:flex;gap:8px;align-items:center;flex:1 1 auto;justify-content:flex-start;min-width:0}
+.vtt-head .head-title{display:flex;align-items:baseline;gap:10px;flex:none;margin-left:auto}
+.vtt-head h1{font-size:2rem;white-space:nowrap}
+.vtt-head .btn{min-height:40px}
+.map-repo{padding-top:0}
+.apoc-map{height:min(calc(100vh - 196px),980px)}
+@media (max-width:820px){
+.vtt-head{flex-wrap:wrap}
+}
+/* ---- v1.71: the zoom bar (Shaun: "the bar zoomer" — home in the
+   gutter between the map and the Art Library, and movable). A slim
+   floating bar straddling the gutter at the map's right edge; drag
+   its ZOOM grip to park it anywhere over the stage, per-device
+   persistence (see the zoom script at the end of the body); the
+   slider zooms wherever it is parked. Hidden on the TV copy, in
+   fullscreen and in Expand, like the resize handles. ---- */
+#zoomBar{position:absolute;z-index:960;width:28px;padding:5px 0 4px;display:flex;flex-direction:column;align-items:center;gap:3px;background:rgba(10,12,16,.78);border:1px solid hsl(222 18% 30%);border-radius:10px}
+#zoomBar[hidden]{display:none}
+#zoomBar .zb-grip{cursor:grab;font-size:.6rem;font-weight:700;letter-spacing:.07em;color:#cfd3da;user-select:none;-webkit-user-select:none;touch-action:none;padding:2px 3px;line-height:1.1;text-align:center}
+#zoomBar .zb-grip:active{cursor:grabbing}
+#zoomBar input[type=range]{writing-mode:vertical-lr;direction:rtl;width:22px;height:148px;accent-color:#d8b25a;cursor:pointer;margin:0}
+body.displaying #zoomBar{display:none !important}
+#mapPanel:fullscreen #zoomBar{display:none !important}
+.map-stage:fullscreen #zoomBar{display:none !important}
 </style>
 </head>
 <body data-scene="bastion-streets">
 <script>/* v1.07: Push to TV — a ?display copy of this page is the map-only TV view; flag it before first paint so no controls ever flash. */ if (new URLSearchParams(location.search).has("display")) document.body.classList.add("displaying");</script>
 <div class="page">
   <header class="vtt-head">
-    <h1>APOC VTT</h1>
-    <span class="muted small" id="siteVersion" hidden></span>
+    <div class="head-btns" id="headBtns"></div>
+    <div class="head-title">
+      <h1>APOC VTT</h1>
+      <span class="muted small" id="siteVersion" hidden></span>
+    </div>
   </header>
   <section class="panel" id="mapPanel" aria-label="The VTT — Maps">
       <div class="map-stage">
@@ -595,6 +636,10 @@ body.displaying .td-ui{display:none}
             <button type="button" class="btn primary" id="tdBackBtn">Back to 2D</button>
             <span class="td-hint" id="tdStatus"></span>
           </div>
+        </div>
+        <div id="zoomBar" hidden>
+          <div class="zb-grip" id="zoomBarGrip" title="Drag to move the zoom bar">ZOOM</div>
+          <input type="range" id="zoomSlider" min="-2" max="3" step="0.25" value="0" aria-label="Map zoom">
         </div>
       </div>
       <aside class="map-repo" aria-label="Art Library">
@@ -1214,7 +1259,7 @@ setInterval(loadSharedEntries, 60000);
   const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
-  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false });
+  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false, touchZoom: false }); /* v1.71: touchZoom off — pinch-to-zoom stays OFF (Shaun); zoom is wheel + the zoom bar */
   /* Shaun's fixed layer stack (2026-11-06), bottom to top:
      1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground. Extensible in this
      order — new table layers take the next z slot above Foreground.
@@ -5955,7 +6000,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1308";
+        var BUILD_STAMP = "2026-11-07-1319";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6842,9 +6887,14 @@ function floorConnected(L, cols, rows){
      leave the header and nest inside the Tools set, alongside the tools
      above. Moved, not cloned — ids and handlers are untouched, so Push
      to TV still opens the ?display=1 copy and Ambience still toggles
-     sound + backdrop exactly as before. */
+     sound + backdrop exactly as before.
+     v1.71 (Shaun, voice call 2026-11-07 ~13:09: "put the buttons to the
+     left"): SUPERSEDED — the header is now a full-width row and its
+     buttons go back to the header, all the way LEFT, with the title +
+     version tag all the way RIGHT. Still moved, not cloned. */
+  var headBtns = document.getElementById("headBtns");
   [$("pushTvBtn"), $("ambBtn")].forEach(function (el) {
-    if (el) sets.tools.appendChild(el);
+    if (el && headBtns) headBtns.appendChild(el);
   });
   /* Fog — the whole GM fog panel. */
   var fogC = $("fogControls"); if (fogC) sets.fog.appendChild(fogC);
@@ -7167,7 +7217,7 @@ function floorConnected(L, cols, rows){
     var side = el.parentElement;
     var availW = side ? side.clientWidth : el.clientWidth;
     if (!availW) return;
-    var maxH = Math.min(Math.round(window.innerHeight - 144), 980); /* v1.63: reserve the closed-page chrome (panel + button row) so the map and the row fit one screen with every set collapsed; matches the .apoc-map CSS cap. v1.68: reserve deepened 120 -> 144 alongside the fillH fix below. */
+    var maxH = Math.min(Math.round(window.innerHeight - 196), 980); /* v1.63: reserve the closed-page chrome (panel + button row) so the map and the row fit one screen with every set collapsed; matches the .apoc-map CSS cap. v1.68: reserve deepened 120 -> 144 alongside the fillH fix below. v1.71: 144 -> 196 — the header is a full-width row again (buttons left, title right) and its height joins the reserved chrome. */
     var a = img.naturalWidth / img.naturalHeight;
     /* v1.66: window width is the column's full width (up to the Art
        Library) on every map; window height fills down to the button
@@ -7382,6 +7432,109 @@ function floorConnected(L, cols, rows){
   document.addEventListener("fullscreenchange", function(){ schedule(false); });
   watch();
   schedule(false);
+})();
+</script>
+
+<script>
+/* ================= v1.71: the zoom bar (Shaun, voice call
+   2026-11-07 ~13:07-13:08) =================
+   "I still don't see the bar scroller, the bar zoomer. I told you
+   where to put it" — its home is the gutter between the map window
+   and the Art Library (the spot from his earlier order) — "Make it
+   movable too": the bar drags by its ZOOM grip and parks anywhere
+   over the stage; the parked spot persists per device
+   (localStorage apocVttZoomBarV1) and the slider zooms wherever it
+   is parked. Pinch-to-zoom stays OFF: touchZoom:false went into the
+   Leaflet options at creation, and it is disabled again here for
+   any build that created the map before that option landed.
+   The bar hides exactly where the resize handles hide: TV display
+   copy, fullscreen, Expand, and under 821px. Pure view control —
+   zoom is per-device Leaflet state, nothing shared is written. */
+(function(){
+  var bar = document.getElementById("zoomBar");
+  var slider = document.getElementById("zoomSlider");
+  var grip = document.getElementById("zoomBarGrip");
+  var el = document.getElementById("apocMap");
+  var side = el && el.parentElement;
+  if (!bar || !slider || !grip || !el || !side) return;
+  var KEY = "apocVttZoomBarV1";
+  var mq = window.matchMedia("(min-width: 821px)");
+  function loadPos(){
+    try {
+      var p = JSON.parse(localStorage.getItem(KEY) || "null");
+      if (p && typeof p.l === "number" && typeof p.t === "number") return p;
+    } catch(e) {}
+    return null;
+  }
+  function savePos(p){
+    try { if (p) localStorage.setItem(KEY, JSON.stringify(p)); } catch(e) {}
+  }
+  function blocked(){
+    return !mq.matches || !!document.fullscreenElement ||
+      document.body.classList.contains("displaying") ||
+      document.body.classList.contains("map-expanded") ||
+      document.body.classList.contains("map-fs");
+  }
+  function home(){
+    /* Centred on the 14px gutter: the map window's right edge + 7px,
+       the bar straddling the gap between the window and the library. */
+    return { l: el.offsetLeft + el.offsetWidth + 7 - Math.round(bar.offsetWidth / 2), t: el.offsetTop + 6 };
+  }
+  function stageW(){
+    /* The bar may travel the whole stage width — its gutter home
+       STRADDLES the map column's right edge, and a parked bar may
+       sit over the library's left edge; clamping to the map column
+       alone would pin it inside the window, off the gutter. */
+    var st = side.parentElement;
+    return st ? st.clientWidth : side.clientWidth;
+  }
+  function sync(){
+    var m = window.map;
+    if (m && m.touchZoom && m.touchZoom.enabled()) m.touchZoom.disable();
+    if (blocked() || !el.offsetWidth){ bar.hidden = true; return; }
+    bar.hidden = false;
+    var p = loadPos() || home();
+    var maxL = Math.max(0, stageW() - bar.offsetWidth);
+    var maxT = Math.max(0, side.clientHeight - bar.offsetHeight);
+    bar.style.left = Math.min(Math.max(0, p.l), maxL) + "px";
+    bar.style.top = Math.min(Math.max(0, p.t), maxT) + "px";
+    if (m) slider.value = m.getZoom();
+  }
+  slider.addEventListener("input", function(){
+    var m = window.map;
+    if (m) m.setZoom(parseFloat(slider.value));
+  });
+  grip.addEventListener("pointerdown", function(e){
+    e.preventDefault();
+    var sx = e.clientX, sy = e.clientY, sl = bar.offsetLeft, st = bar.offsetTop;
+    try { grip.setPointerCapture(e.pointerId); } catch(err) {}
+    function mv(ev){
+      var maxL = Math.max(0, stageW() - bar.offsetWidth);
+      var maxT = Math.max(0, side.clientHeight - bar.offsetHeight);
+      bar.style.left = Math.min(Math.max(0, sl + ev.clientX - sx), maxL) + "px";
+      bar.style.top = Math.min(Math.max(0, st + ev.clientY - sy), maxT) + "px";
+    }
+    function up(){
+      grip.removeEventListener("pointermove", mv);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+      savePos({ l: bar.offsetLeft, t: bar.offsetTop });
+    }
+    grip.addEventListener("pointermove", mv);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+  });
+  new MutationObserver(function(){ sync(); }).observe(el, { attributes: true, attributeFilter: ["style"] });
+  window.addEventListener("resize", sync);
+  document.addEventListener("fullscreenchange", function(){ setTimeout(sync, 80); });
+  (function waitMap(){
+    var m = window.map;
+    if (m && m.on){
+      m.on("zoomend", function(){ slider.value = m.getZoom(); });
+      sync();
+      setTimeout(sync, 350);
+    } else setTimeout(waitMap, 120);
+  })();
 })();
 </script>
 </body>
