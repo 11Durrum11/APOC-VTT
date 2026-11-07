@@ -112,6 +112,12 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .place-card.floating{position:fixed;z-index:1200;margin:0;box-shadow:0 18px 42px rgba(0,0,0,.5)}
 .place-card p{margin:5px 0 0}
 .place-card .pc-close{float:right}
+.pin-imgs{margin-top:8px;display:flex;flex-direction:column;gap:8px}
+.pin-imgs img{width:100%;border-radius:6px;display:block}
+.place-card .pin-imgs img{cursor:zoom-in}
+.pin-lightbox{position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,.88);display:flex;align-items:center;justify-content:center;cursor:zoom-out}
+.pin-lightbox img{max-width:96vw;max-height:96vh;border-radius:8px}
+.leaflet-popup-content .pin-imgs img{margin-top:6px}
 .mk-ruin .mk-dot{background:#c47b4a}
 .mk-ghost .mk-dot{background:#c9cdd6}
 .mk-dead .mk-dot{background:#43464d;border-color:#c9cdd6}
@@ -903,6 +909,13 @@ body.displaying .td-ui{display:none}
           <label for="markerNote">Note (optional)</label>
           <textarea id="markerNote" rows="2" placeholder="What the table should know about this spot"></textarea>
         </div>
+        <div class="field full">
+          <label for="markerImgs">Pictures (optional, one address per line)</label>
+          <textarea id="markerImgs" rows="2" placeholder="A picture's full address — it shows in this marker's pop-up"></textarea>
+        </div>
+        <div class="field full">
+          <label><input type="checkbox" id="markerGm"> GM only — hidden from players and the TV</label>
+        </div>
       </div>
       <div class="map-actions">
         <button type="submit" class="btn primary">Save marker</button>
@@ -1260,10 +1273,16 @@ setInterval(loadSharedEntries, 60000);
       if (clash) mk._under = 2;
     });
     for (const mk of markers) {
+      /* GM-only markers (mk.gm — Roll20's hidden pins) are not rendered at
+         all without GM view; projecting forces player view, so the TV copy
+         never sees them either. */
+      if (mk.gm && !effectiveGm()) continue;
       const kind = KINDS.includes(mk.kind) ? mk.kind : "place";
       const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: true, icon: iconFor(kind, mk.name, false, mk._under) }).addTo(layer);
       m.on("click", () => {
-        if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}`).openOn(map); return; }
+        const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
+        if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
+        if (imgs.length) { showPinCard(mk); return; }
         openEditor({ mode: "edit", mk });
       });
       m.on("dragend", async () => {
@@ -1301,11 +1320,37 @@ setInterval(loadSharedEntries, 60000);
     $("markerName").value = isEdit ? (state.mk.name || "") : "";
     $("markerKind").value = isEdit && KINDS.includes(state.mk.kind) ? state.mk.kind : "place";
     $("markerNote").value = isEdit ? (state.mk.note || "") : "";
+    $("markerImgs").value = isEdit && Array.isArray(state.mk.imgs) ? state.mk.imgs.join("\n") : "";
+    $("markerGm").checked = !!(isEdit && state.mk.gm);
     if (!isEdit) tempPin = L.marker(toLatLng(state.x, state.y), { icon: iconFor("place", "New marker", true) }).addTo(layer);
     form.hidden = false;
     /* No scrollIntoView here: a single click on the map must not shunt
        the page away from the map (Shaun, 2026-11-06). The editor form
        opens in place below the controls; the page stays where it was. */
+  }
+  /* Picture pins (Roll20 migration, 2026-11-07): a marker with pictures
+     opens a card carrying them — title, note, picture(s) at card width,
+     tap a picture for the full-size view — instead of jumping straight
+     into the editor. The GM gets an Edit button on the card. */
+  let pinLightbox = null;
+  function hidePinLightbox(){ if (pinLightbox) { pinLightbox.remove(); pinLightbox = null; } }
+  function showPinLightbox(url){
+    hidePinLightbox();
+    pinLightbox = document.createElement("div");
+    pinLightbox.className = "pin-lightbox";
+    pinLightbox.innerHTML = `<img src="${esc(url)}" alt="">`;
+    pinLightbox.addEventListener("click", hidePinLightbox);
+    document.body.appendChild(pinLightbox);
+  }
+  function showPinCard(mk){
+    const imgs = (Array.isArray(mk.imgs) ? mk.imgs : []).filter(Boolean);
+    card.innerHTML = `<button type="button" class="btn pc-close" id="placeCardClose">Close</button><h4 title="Drag to move this card">${esc(mk.name)}</h4><span class="pr-kind">${esc(mk.kind || "note")}</span>${mk.note ? `<p>${esc(mk.note)}</p>` : ""}<div class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="" data-pin-img="${esc(u)}">`).join("")}</div>${effectiveGm() ? `<div class="map-actions"><button type="button" class="btn" id="pinEditBtn">Edit pin</button></div>` : ""}`;
+    card.hidden = false;
+    pcRestore();
+    $("placeCardClose").addEventListener("click", () => { card.hidden = true; });
+    card.querySelectorAll("[data-pin-img]").forEach(im => im.addEventListener("click", () => showPinLightbox(im.getAttribute("data-pin-img"))));
+    const eb = $("pinEditBtn");
+    if (eb) eb.addEventListener("click", () => { card.hidden = true; openEditor({ mode: "edit", mk }); });
   }
   let placeArm = false;
   /* Marker creation is deliberate only (Shaun, 2026-11-06 — reported twice:
@@ -1339,12 +1384,14 @@ setInterval(loadSharedEntries, 60000);
     if (!title) { $("markerName").focus(); return; }
     const kind = $("markerKind").value;
     const note = $("markerNote").value.trim();
+    const imgs = $("markerImgs").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const gmOnly = $("markerGm").checked;
     if (editing.mode === "new") {
-      markers.push({ id: newId(), name: title, kind, x: editing.x, y: editing.y, note });
+      markers.push({ id: newId(), name: title, kind, x: editing.x, y: editing.y, note, imgs, gm: gmOnly });
       const ok = await saveMarkers();
       if (!ok) { markers.pop(); setStatus("That marker didn't save — check the connection and try again."); return; }
     } else {
-      Object.assign(editing.mk, { name: title, kind, note });
+      Object.assign(editing.mk, { name: title, kind, note, imgs, gm: gmOnly });
       const ok = await saveMarkers();
       if (!ok) { setStatus("That change didn't save — check the connection and try again."); loadMarkers(true); return; }
     }
@@ -2142,7 +2189,7 @@ setInterval(loadSharedEntries, 60000);
     $("lightControls").hidden = !gmView;
     const fT = $("fogTab"); if (fT) fT.hidden = !gmView; /* v1.60: the row's Fog/Lighting buttons exist only while GM is on */
     const lT = $("lightTab"); if (lT) lT.hidden = !gmView;
-    renderFog(); drawTokens(); renderDraw();
+    renderFog(); drawTokens(); renderDraw(); draw();
   }
   /* Hold-to-toggle (Shaun, 2026-11-06): he doesn't want to hit GM view by
      accident, so a plain click does nothing — the button must be HELD for
@@ -5816,7 +5863,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-0004";
+        var BUILD_STAMP = "2026-11-07-0052";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
