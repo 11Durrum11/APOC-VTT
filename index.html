@@ -2242,24 +2242,19 @@ setInterval(loadSharedEntries, 60000);
     btn.addEventListener("keyup", (e) => { if (e.key === "Enter" || e.key === " ") cancel(); });
     btn.addEventListener("click", (e) => e.preventDefault());
   })();
-  /* The GM view button appears only on screens marked as the GM's — in
-     practice Shaun's laptop (his offer, 2026-11-06). Mark a screen once by
-     opening the site with ?gmhere=1; the mark lives in that browser only.
-     Everywhere else the button stays hidden and GM view stays off. This is
-     convenience, not real security — the page and its store are public. */
-  let gmScreen = false;
+  /* The GM view button is always shown on the normal control page, on any
+     browser or device — no mark needed. (It used to require a one-time
+     ?gmhere=1 browser mark, Shaun's offer 2026-11-06; the mark kept landing
+     in the wrong browser and locked HIM out of the monster repository, so
+     he ordered the gate removed, 2026-11-06.) GM view still starts off,
+     still switches by hold only, and effectiveGm() still hides all GM
+     content while projecting; on the ?display=1 TV copy the whole tools
+     bar (this button included) is display:none via body.displaying CSS.
+     Convenience, not real security — the page and its store are public. */
+  $("gmBtn").hidden = false;
   try {
-    if (new URLSearchParams(location.search).get("gmhere") === "1") {
-      localStorage.setItem("apocGmScreen", "1");
-      const u = new URL(location.href); u.searchParams.delete("gmhere");
-      history.replaceState(null, "", u.pathname + u.search + u.hash);
-    }
-    gmScreen = localStorage.getItem("apocGmScreen") === "1";
-  } catch(e) { /* storage unavailable — button stays hidden */ }
-  if (gmScreen) {
-    $("gmBtn").hidden = false;
     if (sessionStorage.getItem("apocGm") === "1") gmView = true;
-  }
+  } catch(e) { /* storage unavailable — GM view just starts off */ }
 
   /* ---- Fog of war ---- */
   async function loadFog(quiet){
