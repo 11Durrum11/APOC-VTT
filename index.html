@@ -164,6 +164,11 @@ body.map-fs .expand-exit-wrap{display:block}
   .ctl-tab[aria-expanded="true"] { background: #6b5a33; color: #fff7e0; }
   .ctl-tab .ctl-caret { opacity: 0.75; font-size: 0.8em; margin-left: 5px; }
   .ctl-set { margin-top: 8px; border: 1px solid #3a3f47; border-radius: 12px; padding: 10px 12px; background: rgba(16, 19, 24, 0.65); }
+  /* v1.73 (Shaun, 2026-11-07 ~13:43): the Map button's subcategories sit THREE ABREAST — three per row, wrapping into rows of three, inside the Map set ONLY (not the button row, not the other sets). The [hidden] rule must outrank the grid display or the closed set would show. */
+  #set-map { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; align-items: start; }
+  #set-map[hidden] { display: none; }
+  #set-map > * { min-width: 0; }
+  #set-map .field input, #set-map .field select { max-width: 100%; }
   .ctl-set[hidden] { display: none; }
   .ctl-set > .map-tools, .ctl-set > .vtt-panel { margin: 0 0 8px; }
   .ctl-set > .map-tools:last-child, .ctl-set > .vtt-panel:last-child { margin-bottom: 0; }
@@ -613,6 +618,8 @@ body.displaying .td-ui{display:none}
 #zoomBar .zb-grip{cursor:grab;font-size:.62rem;font-weight:700;letter-spacing:.07em;color:#cfd3da;user-select:none;-webkit-user-select:none;touch-action:none;padding:2px 3px;line-height:1.1;text-align:center}
 #zoomBar .zb-grip:active{cursor:grabbing}
 #zoomBar input[type=range]{width:148px;height:22px;accent-color:#d8b25a;cursor:pointer;margin:0}
+#zoomBar .zb-pinch{display:flex;align-items:center;gap:4px;font-size:.68rem;font-weight:700;letter-spacing:.05em;color:#cfd3da;cursor:pointer;user-select:none;-webkit-user-select:none;white-space:nowrap}
+#zoomBar .zb-pinch input{width:15px;height:15px;margin:0;accent-color:#d8b25a;cursor:pointer;flex:none}
 body.displaying #zoomBar{display:none !important}
 #mapPanel:fullscreen #zoomBar{display:none !important}
 .map-stage:fullscreen #zoomBar{display:none !important}
@@ -671,6 +678,7 @@ body.displaying #zoomBar{display:none !important}
         <div id="zoomBar" hidden>
           <div class="zb-grip" id="zoomBarGrip" title="Drag to move the zoom bar">ZOOM</div>
           <input type="range" id="zoomSlider" min="-2" max="3" step="0.25" value="0" aria-label="Map zoom">
+          <label class="zb-pinch" title="Pinch zoom on/off — two-finger pinch, double-tap and mouse-wheel zoom. The slider always zooms."><input type="checkbox" id="zoomPinchChk"> Pinch</label>
         </div>
       </div>
 
@@ -1291,7 +1299,7 @@ setInterval(loadSharedEntries, 60000);
   const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
-  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false }); /* v1.72: EVERY Leaflet zoom path off at creation (touch pinch, wheel, double-click, box, keyboard) — zoom comes ONLY from the zoom bar slider (Shaun, 2026-11-07 ~13:39) */
+  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false }); /* v1.72/v1.73: every Leaflet zoom path off at creation (touch pinch, wheel, double-click, box, keyboard). Zoom comes from the zoom bar slider; the bar's Pinch checkbox (default OFF, per-device) can switch touch pinch / wheel / double-tap back on, live (Shaun's correction, 2026-11-07 ~13:39) */
   /* Shaun's fixed layer stack (2026-11-06), bottom to top:
      1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground. Extensible in this
      order — new table layers take the next z slot above Foreground.
@@ -6076,7 +6084,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1340";
+        var BUILD_STAMP = "2026-11-07-1345";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7611,9 +7619,10 @@ function floorConnected(L, cols, rows){
    movable too": the bar drags by its ZOOM grip and parks anywhere
    over the stage; the parked spot persists per device
    (localStorage apocVttZoomBarV1) and the slider zooms wherever it
-   is parked. Pinch-to-zoom stays OFF: touchZoom:false went into the
-   Leaflet options at creation, and it is disabled again here for
-   any build that created the map before that option landed.
+   is parked. The bar also carries the Pinch checkbox (v1.73):
+   gesture zoom is OFF unless Shaun ticks it — the v1.73 block
+   below owns the Leaflet handler state and this bar's sync()
+   re-applies it.
    The bar hides exactly where the resize handles hide: TV display
    copy, fullscreen, Expand, and under 821px. Pure view control —
    zoom is per-device Leaflet state, nothing shared is written. */
@@ -7660,7 +7669,7 @@ function floorConnected(L, cols, rows){
   }
   function sync(){
     var m = window.map;
-    if (m && m.touchZoom && m.touchZoom.enabled()) m.touchZoom.disable();
+    if (window.__apocPinchApply) window.__apocPinchApply(); /* v1.73: gesture-zoom handler state belongs to the Pinch checkbox (block below) */
     if (blocked() || !el.offsetWidth){ bar.hidden = true; return; }
     bar.hidden = false;
     var p = loadPos() || home();
@@ -7709,46 +7718,69 @@ function floorConnected(L, cols, rows){
 </script>
 
 <script>
-/* ================= v1.72: zoom ONLY from the zoom bar (Shaun, voice
-   call 2026-11-07 ~13:39) =================
-   "Remove the double finger zoom in zoom out and leave it just to
-   the zoom bar." v1.71 set Leaflet touchZoom:false at creation and
-   killed the custom pinch handler, but Leaflet's OTHER built-in
-   zoom paths were still live — scroll-wheel zoom above all (the
-   old creation comment even read "zoom is wheel + the zoom bar"),
-   plus double-click zoom, shift-drag box zoom and keyboard +/-
-   zoom. All five handlers are now false in the L.map options at
-   creation AND disabled again here defensively, in case a map was
-   created before those options landed or anything re-enables one.
-   Browser-level pinch over the map is blocked too: touch-action:
-   none on #apocMap (CSS), gesturestart/gesturechange prevented,
-   and ctrl+wheel (trackpad pinch) over the map swallowed.
-   One-finger / mouse drag PAN is untouched — Leaflet dragging
-   stays enabled. The ONLY zoom left in the app is the zoom bar's
-   slider (its input handler calls map.setZoom) and the app's own
-   programmatic fits. Pure view control: nothing shared written. */
+/* ================= v1.73: the Pinch checkbox (Shaun, voice call
+   2026-11-07 ~13:39, correcting v1.72's hard removal seconds
+   later) =================
+   "Remove the double finger zoom" became: do NOT remove it —
+   give it an option to turn it off, with the checkbox attached
+   right next to the zoom bar. The zoom bar now carries a "Pinch"
+   checkbox INSIDE the bar itself, so it travels with the bar
+   when Shaun drags it to a new park. One switch for the gesture
+   zooms: Leaflet touchZoom (two-finger pinch and double-tap),
+   doubleClickZoom and scrollWheelZoom — and the browser-level
+   pinch blocks below follow the same switch (active only while
+   OFF). DEFAULT OFF (unchecked): zoom through the slider only,
+   Shaun's standing line; the checkbox is his option to turn
+   gesture zoom back on when he wants it. The choice persists
+   per device in localStorage apocVttPinchZoomV1 ("1" = on) and
+   toggling applies LIVE via handler enable()/disable(), no
+   reload. Box zoom and keyboard zoom are NOT on the switch —
+   they stay off, as v1.72 left them. One-finger drag pan always
+   works, and the slider always zooms, checkbox or not. The map
+   creation options still start every handler off; this block
+   applies the saved choice as soon as the map exists, and the
+   zoom bar's sync() re-applies it through window.__apocPinchApply
+   so nothing else can fight the switch. Pure view control:
+   nothing shared is written. */
 (function(){
   var el = document.getElementById("apocMap");
+  var chk = document.getElementById("zoomPinchChk");
   if (!el) return;
-  function kill(m){
+  var KEY = "apocVttPinchZoomV1";
+  function isOn(){
+    if (chk) return !!chk.checked;
+    try { return localStorage.getItem(KEY) === "1"; } catch(e) { return false; }
+  }
+  function apply(){
+    var m = window.map;
     if (!m) return;
-    ["touchZoom","scrollWheelZoom","doubleClickZoom","boxZoom","keyboard"].forEach(function(name){
-      var h = m[name];
-      if (h && h.enabled && h.enabled() && h.disable) h.disable();
+    var on = isOn();
+    [["touchZoom", on], ["scrollWheelZoom", on], ["doubleClickZoom", on], ["boxZoom", false], ["keyboard", false]].forEach(function(pair){
+      var h = m[pair[0]];
+      if (!h || !h.enable || !h.disable || !h.enabled) return;
+      if (pair[1] && !h.enabled()) h.enable();
+      if (!pair[1] && h.enabled()) h.disable();
+    });
+  }
+  window.__apocPinchApply = apply;
+  if (chk) {
+    try { chk.checked = localStorage.getItem(KEY) === "1"; } catch(e) { chk.checked = false; }
+    chk.addEventListener("change", function(){
+      try { localStorage.setItem(KEY, chk.checked ? "1" : "0"); } catch(e) {}
+      apply();
     });
   }
   (function waitMap(){
-    var m = window.map;
-    if (m && m.on){
-      kill(m);
-      setTimeout(function(){ kill(window.map); }, 400);
-      setTimeout(function(){ kill(window.map); }, 1500);
+    if (window.map && window.map.on){
+      apply();
+      setTimeout(apply, 400);
+      setTimeout(apply, 1500);
     } else setTimeout(waitMap, 120);
   })();
   ["gesturestart","gesturechange","gestureend"].forEach(function(t){
-    el.addEventListener(t, function(e){ e.preventDefault(); }, { passive: false });
+    el.addEventListener(t, function(e){ if (!isOn()) e.preventDefault(); }, { passive: false });
   });
-  el.addEventListener("wheel", function(e){ if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+  el.addEventListener("wheel", function(e){ if (e.ctrlKey && !isOn()) e.preventDefault(); }, { passive: false });
 })();
 </script>
 
