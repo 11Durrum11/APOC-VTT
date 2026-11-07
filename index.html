@@ -130,20 +130,18 @@ body.map-fs .expand-exit-wrap{display:block}
 .map-stage:fullscreen{position:relative;width:100%;height:100%;background:#05070a;align-items:stretch}
 .map-stage:fullscreen .map-side{display:flex;flex-direction:column}
 .map-stage:fullscreen .apoc-map{flex:1 1 auto;height:100%;min-height:0}
-/* Shaun (2026-11-06): in the enlarged view every utensil group floats
-   FREE — no shadow box, no docking. Drag a group by its ⠿ grip and
-   drop it wherever he wants; a group sitting on a side of the screen
-   runs up-and-down, one on the top or bottom runs left-and-right.
-   Positions are remembered per device (apocVttFsFloatV1). */
-.map-stage:fullscreen .fs-float{position:absolute;z-index:1200;margin-top:0;max-width:94vw}
-.map-stage:fullscreen .map-tools.fs-float{background:transparent;border:none;padding:0}
-.map-stage:fullscreen .map-tools.fs-float.ff-v{flex-direction:column;flex-wrap:nowrap;align-items:stretch;width:max-content;max-width:min(340px,60vw);max-height:92vh;overflow-y:auto}
-.map-stage:fullscreen .map-tools.fs-float.ff-h{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;max-width:96vw}
-.map-stage:fullscreen .vtt-col.fs-float{max-width:min(360px,70vw);max-height:92vh;overflow-y:auto}
-.map-stage:fullscreen .fs-piece{position:absolute;z-index:1250;margin:0}
+/* Shaun (2026-11-06 ~20:01, superseding the v1.31–v1.33 floating
+   utensils): in the enlarged view the floating groups are UNDONE —
+   the map sits off to the left and ALL the utensil groups stack in
+   one rail on the right of the stage, in page order, fully visible,
+   nothing overlapping and nothing floating over the play area. The
+   rail is one scrolling column; groups keep their own layout inside
+   it. On exit every group returns to its place below the map. */
+.map-stage:fullscreen .fs-rail{display:flex;flex-direction:column;gap:10px;flex:0 0 min(380px,34vw);min-width:0;height:100%;overflow-y:auto;overflow-x:hidden;padding:2px 2px 10px}
+.map-stage:fullscreen .fs-rail .map-tools{flex:none;margin-top:0;width:100%}
+.map-stage:fullscreen .fs-rail .vtt-col{flex:none;width:100%;max-width:none}
+.map-stage:fullscreen .fs-rail .ff-grip{display:none}
 .ff-grip{display:none}
-.map-stage:fullscreen .fs-float>.ff-grip{display:inline-flex;align-items:center;gap:6px;flex:none;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;border:1px dashed hsl(220 16% 40%);border-radius:8px;padding:4px 10px;min-height:36px;font-size:.8rem;color:var(--muted-foreground);background:hsla(222,20%,10%,.45);white-space:nowrap}
-.map-stage:fullscreen .fs-float>.ff-grip:active{cursor:grabbing}
 #gmBtn{opacity:.48;filter:saturate(.3);transition:opacity .18s ease,filter .18s ease}
 #gmBtn.holding{opacity:.85;filter:saturate(.7)}
 #gmBtn[aria-pressed="true"]{opacity:1;filter:none}
@@ -1551,10 +1549,11 @@ setInterval(loadSharedEntries, 60000);
   $("mapExpandBtn").addEventListener("click", () => {
     /* Shaun (2026-11-06, final shape): Expand map enlarges the MAP AREA —
        the stage (map + its docked library) fills the screen — and while
-       it's enlarged, ALL the utensils float around the map's edges
-       (fsToolsIn below). The old whole-panel overlay (setExpanded)
-       remains only as the fallback when element fullscreen is
-       unavailable or refused. */
+       it's enlarged, ALL the utensils stack in one rail on the right of
+       the stage, the map off to the left (fsToolsIn below; his ~20:01
+       ruling undoing the floating groups). The old whole-panel overlay
+       (setExpanded) remains only as the fallback when element
+       fullscreen is unavailable or refused. */
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
     if (document.body.classList.contains("map-expanded")) { setExpanded(false); return; }
     const el = document.querySelector(".map-stage");
@@ -1576,196 +1575,44 @@ setInterval(loadSharedEntries, 60000);
     return d;
   };
   expandExitCtl.addTo(map);
-  /* When the map is enlarged (the stage is the fullscreen element), ALL
-     the utensils float around the map's edges (Shaun's spec, stated
-     three times 2026-11-06): every tool row leaves its place below the
-     map and hovers, translucent, along the edges of the enlarged map —
-     the first row at the top edge, the rest stacked along the bottom
-     edge — nothing over the middle of the play area. On exit every row
-     goes back to its exact home below the map. */
+  /* When the map is enlarged (the stage is the fullscreen element),
+     the utensil groups leave their places below the map and stack in
+     ONE rail on the right of the stage \u2014 map off to the left, all
+     buttons on the right, in page order, fully visible, nothing
+     floating over the play area (Shaun, 2026-11-06 ~20:01: "undo this
+     mess\u2026 so they're visible\u2026 not all cluttered"). This supersedes
+     the v1.31\u2013v1.33 free-floating groups and tear-out pieces; the old
+     per-device float positions (apocVttFsFloatV1) are dropped. On
+     exit every group goes back to its exact home below the map. */
   let fsFloatHomes = null;
-  const FS_FLOAT_KEY = "apocVttFsFloatV1";
-  const FS_ROW_LABELS = ["Search & map", "Grid, tokens & GM", "Fog", "Lighting & walls", "Draw & paint", "Layers", "Generate map"];
-  function fsFloatLoad(){ try { return JSON.parse(window.localStorage.getItem(FS_FLOAT_KEY) || "{}") || {}; } catch(e) { return {}; } }
-  function fsFloatSave(state){ try { window.localStorage.setItem(FS_FLOAT_KEY, JSON.stringify(state)); } catch(e) {} }
-  /* Orientation follows where the group sits (Shaun): nearer a side of
-     the screen than the top/bottom → it runs up-and-down (ff-v);
-     nearer the top/bottom → it runs left-and-right (ff-h). No docking:
-     the spot itself stays exactly where he dropped it. */
-  function fsOrient(el, stage){
-    const sr = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
-    if (!sr.width || !r.width) return;
-    const cx = r.left + r.width / 2 - sr.left, cy = r.top + r.height / 2 - sr.top;
-    const dx = Math.min(cx, sr.width - cx), dy = Math.min(cy, sr.height - cy);
-    el.classList.toggle("ff-v", dx < dy);
-    el.classList.toggle("ff-h", dx >= dy);
-  }
-  function fsDragStart(ev, el, grip){
-    if (ev.button > 0) return;
-    const stage = document.querySelector(".map-stage");
-    if (!stage || !el.classList.contains("fs-float")) return;
-    ev.preventDefault();
-    const sr = stage.getBoundingClientRect(), r = el.getBoundingClientRect();
-    const grabDX = ev.clientX - r.left, grabDY = ev.clientY - r.top;
-    el.style.width = r.width + "px";
-    try { grip.setPointerCapture(ev.pointerId); } catch(e) {}
-    function move(e2){
-      let x = e2.clientX - sr.left - grabDX, y = e2.clientY - sr.top - grabDY;
-      x = Math.max(0, Math.min(x, Math.max(0, sr.width - el.offsetWidth)));
-      y = Math.max(0, Math.min(y, Math.max(0, sr.height - el.offsetHeight)));
-      el.style.left = x + "px"; el.style.top = y + "px";
-    }
-    function up(){
-      grip.removeEventListener("pointermove", move);
-      grip.removeEventListener("pointerup", up);
-      grip.removeEventListener("pointercancel", up);
-      el.style.width = "";
-      fsOrient(el, stage);
-      const key = el.dataset.fsKey;
-      if (key) {
-        const s2 = stage.getBoundingClientRect(), state = fsFloatLoad();
-        state[key] = { x: Math.round((parseFloat(el.style.left) || 0) / s2.width * 1000) / 10, y: Math.round((parseFloat(el.style.top) || 0) / s2.height * 1000) / 10 };
-        fsFloatSave(state);
-      }
-    }
-    grip.addEventListener("pointermove", move);
-    grip.addEventListener("pointerup", up);
-    grip.addEventListener("pointercancel", up);
-  }
-  function fsGripFor(el, label){
-    let g = el.querySelector(":scope > .ff-grip");
-    if (!g) {
-      g = document.createElement("span");
-      g.className = "ff-grip";
-      g.textContent = "⠿ " + label;
-      g.title = "Drag to move this group";
-      el.insertBefore(g, el.firstChild);
-      g.addEventListener("pointerdown", (ev) => fsDragStart(ev, el, g));
-    }
-    return g;
-  }
-  function fsPlaceAll(stage, items){
-    const state = fsFloatLoad(), sr = stage.getBoundingClientRect();
-    if (!sr.width) return;
-    items.forEach((it, i) => {
-      const saved = state[it.key];
-      const x = saved ? saved.x : 1, y = saved ? saved.y : Math.min(2 + i * 11, 78);
-      it.el.style.left = (x / 100 * sr.width) + "px";
-      it.el.style.top = (y / 100 * sr.height) + "px";
-      fsOrient(it.el, stage);
-    });
-  }
-  /* Any single piece (button, field, select) can also be torn out of
-     its group and floated on its own: press and drag it — a plain
-     press still clicks it; moving it past a small threshold starts
-     the drag instead. Torn-out pieces keep their own saved spots. */
-  let fsPieceHomes = [];
-  function fsPieceSetup(row, rowKey, stage){
-    Array.from(row.children).forEach((child, ci) => {
-      if (child.classList.contains("ff-grip") || child.id === "paintPalette" || child.dataset.fsPieceBound) return;
-      child.dataset.fsPieceBound = "1";
-      child.dataset.fsPieceKey = rowKey + "p" + ci;
-      child.addEventListener("pointerdown", (ev) => {
-        if (ev.button > 0 || !row.classList.contains("fs-float")) return;
-        const sx = ev.clientX, sy = ev.clientY;
-        let torn = false, home = null;
-        const sr0 = stage.getBoundingClientRect();
-        function move(e2){
-          if (!torn) {
-            if (Math.hypot(e2.clientX - sx, e2.clientY - sy) < 10) return;
-            torn = true;
-            home = { parent: child.parentNode, next: child.nextSibling };
-            fsPieceHomes.push({ el: child, parent: home.parent, next: home.next });
-            const r = child.getBoundingClientRect(), sr = stage.getBoundingClientRect();
-            child.classList.add("fs-piece");
-            child.style.width = r.width + "px";
-            stage.appendChild(child);
-            child.style.left = (r.left - sr.left) + "px";
-            child.style.top = (r.top - sr.top) + "px";
-            const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); };
-            child.addEventListener("click", swallow, { capture: true, once: true });
-          }
-          const sr = stage.getBoundingClientRect();
-          let x = e2.clientX - sr.left - child._fsGrabDX;
-          let y = e2.clientY - sr.top - child._fsGrabDY;
-          x = Math.max(0, Math.min(x, Math.max(0, sr.width - child.offsetWidth)));
-          y = Math.max(0, Math.min(y, Math.max(0, sr.height - child.offsetHeight)));
-          child.style.left = x + "px"; child.style.top = y + "px";
-        }
-        function up(){
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", up);
-          window.removeEventListener("pointercancel", up);
-          if (torn) {
-            child.style.width = "";
-            const sr = stage.getBoundingClientRect(), state = fsFloatLoad();
-            state[child.dataset.fsPieceKey] = { x: Math.round((parseFloat(child.style.left) || 0) / sr.width * 1000) / 10, y: Math.round((parseFloat(child.style.top) || 0) / sr.height * 1000) / 10 };
-            fsFloatSave(state);
-          }
-        }
-        const r0 = child.getBoundingClientRect();
-        child._fsGrabDX = sx - r0.left; child._fsGrabDY = sy - r0.top;
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", up);
-        window.addEventListener("pointercancel", up);
-      });
-    });
-  }
+  let fsRailEl = null;
+  try { window.localStorage.removeItem("apocVttFsFloatV1"); } catch(e) {}
   function fsToolsIn(){
     const stage = document.querySelector(".map-stage");
     const panel = document.getElementById("mapPanel");
     if (!stage || !panel || fsFloatHomes) return;
     const items = [];
-    panel.querySelectorAll(":scope > .map-tools").forEach((r, i) => { if (!stage.contains(r)) items.push({ el: r, key: "r" + i, label: FS_ROW_LABELS[i] || "Tools" }); });
-    panel.querySelectorAll(":scope > .vtt-panel > .vtt-col").forEach((c, i) => { const h = c.querySelector("h3"); items.push({ el: c, key: "c" + i, label: h ? h.textContent.trim() : "Panel" }); });
+    panel.querySelectorAll(":scope > .map-tools").forEach((r) => { if (!stage.contains(r)) items.push({ el: r }); });
+    panel.querySelectorAll(":scope > .vtt-panel > .vtt-col").forEach((c) => { items.push({ el: c }); });
     if (!items.length) return;
     fsFloatHomes = items.map(it => ({ el: it.el, parent: it.el.parentNode, next: it.el.nextSibling }));
-    items.forEach(it => {
-      it.el.dataset.fsKey = it.key;
-      it.el.classList.add("fs-float");
-      fsGripFor(it.el, it.label);
-      stage.appendChild(it.el);
-    });
-    fsPlaceAll(stage, items);
-    /* Pieces torn out in an earlier fullscreen session go straight
-       back to their own saved spots. */
-    const state = fsFloatLoad(), sr = stage.getBoundingClientRect();
-    items.forEach(it => {
-      if (it.key[0] !== "r") return;
-      fsPieceSetup(it.el, it.key, stage);
-      Array.from(it.el.children).forEach(child => {
-        const pk = child.dataset.fsPieceKey, saved = pk ? state[pk] : null;
-        if (!saved || child.classList.contains("ff-grip")) return;
-        fsPieceHomes.push({ el: child, parent: child.parentNode, next: child.nextSibling });
-        child.classList.add("fs-piece");
-        stage.appendChild(child);
-        child.style.left = (saved.x / 100 * sr.width) + "px";
-        child.style.top = (saved.y / 100 * sr.height) + "px";
-      });
-    });
-    /* The stage is still settling into fullscreen — re-place once it
-       reaches its real size so saved spots land true. */
-    setTimeout(() => { if (fsFloatHomes) fsPlaceAll(stage, items); }, 280);
+    fsRailEl = document.createElement("div");
+    fsRailEl.className = "fs-rail";
+    fsRailEl.setAttribute("aria-label", "Map controls");
+    stage.appendChild(fsRailEl);
+    items.forEach(it => { fsRailEl.appendChild(it.el); });
   }
   function fsToolsOut(){
-    for (let i = fsPieceHomes.length - 1; i >= 0; i--) {
-      const h = fsPieceHomes[i];
-      h.el.classList.remove("fs-piece");
-      h.el.style.left = ""; h.el.style.top = ""; h.el.style.width = "";
-      if (h.next && h.next.parentNode === h.parent) h.parent.insertBefore(h.el, h.next);
-      else h.parent.appendChild(h.el);
-    }
-    fsPieceHomes = [];
     if (!fsFloatHomes) return;
     for (let i = fsFloatHomes.length - 1; i >= 0; i--) {
       const h = fsFloatHomes[i];
-      h.el.classList.remove("fs-float", "ff-v", "ff-h");
-      h.el.style.left = ""; h.el.style.top = ""; h.el.style.width = "";
       if (h.next && h.next.parentNode === h.parent) h.parent.insertBefore(h.el, h.next);
       else h.parent.appendChild(h.el);
     }
     fsFloatHomes = null;
+    if (fsRailEl) { fsRailEl.remove(); fsRailEl = null; }
   }
+
   document.addEventListener("fullscreenchange", () => {
     if (!document.fullscreenElement && document.body.classList.contains("map-expanded")) setExpanded(false);
     const stageFs = !!document.fullscreenElement && document.fullscreenElement.classList.contains("map-stage");
@@ -2848,6 +2695,77 @@ setInterval(loadSharedEntries, 60000);
       { onConflict: "key" }
     );
   }
+
+  /* ---- Rotate map: bitmap rotation helpers + the one apply path ----
+     The base map image is the only full-frame bitmap; it is fetched and
+     drawn rotated onto a canvas at FULL original resolution (the storage
+     bucket serves Access-Control-Allow-Origin: *, and the built-in maps
+     are same-origin, so the fetch is CORS-clean). Results are cached per
+     map + rotation as object URLs. */
+  const rotImgCache = new Map();
+  function rotateCanvasCopy(src, rot){
+    const odd = rot % 2 === 1;
+    const cv = document.createElement("canvas");
+    cv.width = odd ? src.height : src.width;
+    cv.height = odd ? src.width : src.height;
+    const cx = cv.getContext("2d");
+    cx.translate(cv.width / 2, cv.height / 2);
+    cx.rotate(rot * Math.PI / 2);
+    cx.drawImage(src, -src.width / 2, -src.height / 2);
+    return cv;
+  }
+  async function rotatedMapUrl(def){
+    if (!mapRot) return def.img;
+    const key = currentMapId + "|" + mapRot;
+    if (rotImgCache.has(key)) return rotImgCache.get(key);
+    const resp = await fetch(def.img);
+    const blob = await resp.blob();
+    const bmp = await createImageBitmap(blob);
+    const cv = rotateCanvasCopy(bmp, mapRot);
+    if (bmp.close) bmp.close();
+    const out = await new Promise(res => cv.toBlob(res, blob.type || "image/png"));
+    const url = URL.createObjectURL(out || blob);
+    rotImgCache.set(key, url);
+    return url;
+  }
+  /* Re-render the whole table in the current rotation: swap the base
+     overlay for the rotated bitmap, re-fit the view to the rotated frame,
+     and redraw every layer through the (now rotation-aware) helpers. */
+  async function applyMapRotation(){
+    const idAtStart = currentMapId, rotAtStart = mapRot;
+    const def = MAPS[currentMapId];
+    bounds = frameBounds();
+    map.setMaxBounds([[-frameH() * 0.08, -frameW() * 0.08], [frameH() * 1.08, frameW() * 1.08]]);
+    if (def) {
+      let url = def.img;
+      try { url = await rotatedMapUrl(def); } catch(e) { url = def.img; }
+      if (idAtStart !== currentMapId || rotAtStart !== mapRot) return; /* a newer switch/rotation superseded this one */
+      if (baseOverlay._url !== url) {
+        map.removeLayer(baseOverlay);
+        baseOverlay = L.imageOverlay(url, bounds, { pane: "layerMap" }).addTo(map);
+        baseOverlay.bringToBack();
+      } else baseOverlay.setBounds(bounds);
+    }
+    drawVeil();
+    draw();
+    drawPlaces();
+    drawTokens();
+    drawGrid();
+    if (gridOn) gridLayer.addTo(map);
+    renderFog();
+    renderDraw();
+    renderLighting();
+    map.fitBounds(bounds);
+  }
+  $("rotateMapBtn").addEventListener("click", async () => {
+    mapRot = (mapRot + 1) % 4;
+    const ok = await saveVttSettings();
+    await applyMapRotation();
+    tokenStatusEl.textContent = ok
+      ? `Map rotated to ${mapRot * 90}° — everything on it turned together, saved for everybody; the TV follows.`
+      : "That rotation didn't save — refreshed.";
+    if (!ok) loadVttSettings(true);
+  });
   async function loadActiveMap(){
     const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", ACTIVE_KEY).maybeSingle();
     const id = data && data.value && MAPS[data.value.mapId] ? data.value.mapId : "faerun";
