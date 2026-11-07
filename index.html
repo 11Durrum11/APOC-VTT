@@ -1176,6 +1176,13 @@ setInterval(loadSharedEntries, 60000);
   const iconFor = (kind, name, temp, under) => L.divIcon({
     className: "mk-icon",
     html: `<div class="mk mk-${KINDS.includes(kind) ? kind : "place"}${temp ? " mk-temp" : ""}${under ? " mk-under" : ""}${under === 2 ? " mk-under2" : ""}"><span class="mk-dot"></span><span class="mk-label">${esc(name || "New marker")}</span></div>`,
+    /* Explicit iconSize (marker-zoom fix, 2026-11-06): with no iconSize,
+       Leaflet falls back to a 12px box for the icon element while the dot
+       alone is 20px — every marker painted entirely as element overflow,
+       which real browsers can drop at fractional zoom scales (markers
+       vanished at full zoom-out). The box now contains the dot; the
+       anchor is unchanged, so dots/labels sit exactly where they did. */
+    iconSize: [20, 20],
     iconAnchor: [8, 8]
   });
   let markers = [];
@@ -1233,6 +1240,9 @@ setInterval(loadSharedEntries, 60000);
         else { setStatus("That move didn't save — drag it again or refresh."); loadMarkers(true); }
       });
     }
+    /* The new-marker temp pin lives on this same layer: a redraw (e.g. on
+       zoom) clears it, so put it back — the editor state survives redraws. */
+    if (tempPin) layer.addLayer(tempPin);
   }
   async function loadMarkers(quiet){
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", markersKey()).maybeSingle();
@@ -1409,7 +1419,12 @@ setInterval(loadSharedEntries, 60000);
       showCard(p.n, p.t, p.d, "Atlas lore is the world as canon left it — what stands here now, the table marks.");
     });
   }
-  map.on("zoomend", () => { if (!editing) draw(); });
+  /* Marker-zoom fix (2026-11-06): redraw at EVERY zoom end and pan end,
+     even while the marker editor is open. The old "skip while editing"
+     guard could leave markers unrefreshed after a zoom; draw() now
+     preserves the temp pin and the edited marker's data object, so a
+     redraw mid-edit is safe. */
+  map.on("zoomend moveend", () => { draw(); });
   $("atlasToggle").addEventListener("change", ev => {
     if (ev.target.checked) atlasLayer.addTo(map); else map.removeLayer(atlasLayer);
   });
