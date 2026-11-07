@@ -544,7 +544,11 @@ body.displaying .td-ui{display:none}
 .apoc-map{height:min(calc(100vh - 144px),980px)} /* v1.68: reserve deepened 120 -> 144 (see the fit script) */
 /* v1.68: manual drag-resize handles for the map window — they live
    outside the Leaflet surface, in the gap under the window, the
-   gutter right of it, and their corner (see the fit script). */
+   gutter right of it, and their corner (see the fit script).
+   v1.70: top and left handles added, plus the remaining corners —
+   the top handle sits in the stage's top margin, the left handle
+   in the panel's left padding, and the top-left corner straddles
+   the two, so every edge and corner of the window drags. */
 .map-side{position:relative}
 /* v1.68 reflow: while a manual width is active the page grows to
    fit its contents and the map column hugs the window, so growing
@@ -559,6 +563,11 @@ body.displaying .td-ui{display:none}
 .map-rsz-r{cursor:ew-resize;width:9px}
 .map-rsz-b{cursor:ns-resize;height:9px}
 .map-rsz-br{cursor:nwse-resize;width:15px;height:15px}
+.map-rsz-l{cursor:ew-resize;width:9px}
+.map-rsz-t{cursor:ns-resize;height:9px}
+.map-rsz-tl{cursor:nwse-resize;width:15px;height:15px}
+.map-rsz-tr{cursor:nesw-resize;width:15px;height:15px}
+.map-rsz-bl{cursor:nesw-resize;width:15px;height:15px}
 .map-rsz:hover{background:rgba(216,178,90,.38);border-radius:4px}
 @media (max-width:820px){
 .map-rsz{display:none}
@@ -5946,7 +5955,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1128";
+        var BUILD_STAMP = "2026-11-07-1308";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7140,7 +7149,7 @@ function floorConnected(L, cols, rows){
   }
   function fit(refit){
     var m = window.map;
-    if (blocked()){ el.style.width = ""; el.style.height = ""; if (m && m.invalidateSize) m.invalidateSize({ pan: false }); syncHandles(); return; }
+    if (blocked()){ el.style.width = ""; el.style.height = ""; el.style.marginLeft = ""; el.style.marginTop = ""; if (m && m.invalidateSize) m.invalidateSize({ pan: false }); syncHandles(); return; }
     var img = baseImg();
     if (!img || !img.naturalWidth || !img.naturalHeight) return;
     var keep = null;
@@ -7171,7 +7180,8 @@ function floorConnected(L, cols, rows){
        and the closed page lands ~10px inside the viewport
        instead of exactly at its edge. The v1.63 cap survives as
        the fallback when the row can't be measured. */
-    var w = availW;
+    var w = availW - ((man && typeof man.l === "number") ? man.l : 0); /* v1.70: a manual left inset is part of the column's content width in man-w mode; don't let it inflate the default width on refits */
+    if (w < 320) w = availW;
     var aspectH = Math.round(w / a);
     var fillH = 0;
     if (row && panel){
@@ -7197,7 +7207,15 @@ function floorConnected(L, cols, rows){
          sits unscrolled — after any scroll (an open set, a manual
          resize) a refit would have grown the window by exactly the
          scroll offset. */
-      fillH = Math.round(window.innerHeight - (el.getBoundingClientRect().top + window.scrollY) - below - 18);
+      /* v1.70: the top is likewise taken net of any manual top
+         inset currently on the window — the inset is the user's
+         own offset, not page chrome, so the fill is measured from
+         the column's true top. (Without this, a refit after a
+         top-edge drag — above all the double-click reset, which
+         clears the record while the inset is still inline —
+         would measure the fill from the inset position and
+         shrink the window by exactly the inset.) */
+      fillH = Math.round(window.innerHeight - (el.getBoundingClientRect().top + window.scrollY - (parseFloat(el.style.marginTop) || 0)) - below - 18);
     }
     var h = fillH > 0 ? fillH : Math.min(aspectH, maxH);
     if (h < 320){ h = Math.min(320, maxH); }
@@ -7208,11 +7226,16 @@ function floorConnected(L, cols, rows){
        mode the column itself follows the window (see above). */
     if (man){
       if (man.w) w = Math.max(320, Math.min(man.w, 2600));
-      if (man.h) h = Math.max(240, Math.min(man.h, 1600));
+      if (man.h) h = Math.max(380, Math.min(man.h, 1600)); /* v1.70: floor is the CSS min-height (380) — v1.68's 240 rendered at 380 anyway */
     }
     el.style.width = w + "px";
     el.style.height = h + "px";
-    el.style.marginLeft = "0";
+    /* v1.70: manual left/top insets (set by the left/top edge and
+       corner drags) ride along with the size override — the window
+       keeps the position its left/top edges were dragged to, and
+       the right/bottom edges stay where they were. */
+    el.style.marginLeft = (man && typeof man.l === "number") ? Math.max(0, Math.min(man.l, 1200)) + "px" : "0";
+    el.style.marginTop = (man && typeof man.t === "number") ? Math.max(0, Math.min(man.t, 1200)) + "px" : "0px";
     el.style.marginRight = "auto";
     if (m && m.invalidateSize){
       m.invalidateSize({ pan: false });
@@ -7230,12 +7253,26 @@ function floorConnected(L, cols, rows){
      device in localStorage and the fit pass honours it above.
      Double-click any handle to clear the override and return to
      the auto fit. Normal view only: fullscreen / Expand / Push to
-     TV keep their full-bleed sizing and the handles hide there. */
+     TV keep their full-bleed sizing and the handles hide there.
+     v1.70 (Shaun, 2026-11-07 ~13:07: "Make the VTT map window
+     movable on all four sides"): the top and left edges and the
+     three remaining corners drag too. A left/top drag moves THAT
+     edge only — the right/bottom edges stay fixed — by trading
+     size against a left/top inset (margin) on the window; the
+     insets persist in the same per-device record as {w,h,l,t}
+     and the fit pass reapplies them, so the content around the
+     window (button row below, Art Library right) does not move
+     at all on a left/top drag: the row's position follows the
+     window's bottom edge, the library's the window's right edge
+     (in man-w mode the column width is inset + width, unchanged
+     when the two trade evenly). The window already fills to the
+     column's top-left corner, so the top/left edges can only
+     travel inward (and back) — the insets clamp at 0. ---- */
   var MANKEY = "apocVttMapSizeV1";
   function loadMan(){
     try {
       var man = JSON.parse(localStorage.getItem(MANKEY) || "null");
-      if (!man || (typeof man.w !== "number" && typeof man.h !== "number")) return null;
+      if (!man || (typeof man.w !== "number" && typeof man.h !== "number" && typeof man.l !== "number" && typeof man.t !== "number")) return null;
       return man;
     } catch(e) { return null; }
   }
@@ -7250,25 +7287,37 @@ function floorConnected(L, cols, rows){
     if (!HD) return;
     var hide = blocked() || !el.offsetWidth || !el.offsetHeight;
     var disp = hide ? "none" : "";
-    HD.r.style.display = disp; HD.b.style.display = disp; HD.br.style.display = disp;
+    for (var k in HD) HD[k].style.display = disp;
     if (hide) return;
     var L = el.offsetLeft, T = el.offsetTop, W = el.offsetWidth, H = el.offsetHeight;
     HD.r.style.left = (L + W) + "px"; HD.r.style.top = T + "px"; HD.r.style.height = H + "px";
+    HD.l.style.left = (L - 9) + "px"; HD.l.style.top = T + "px"; HD.l.style.height = H + "px";
     HD.b.style.left = L + "px"; HD.b.style.top = (T + H) + "px"; HD.b.style.width = W + "px";
+    HD.t.style.left = L + "px"; HD.t.style.top = (T - 9) + "px"; HD.t.style.width = W + "px";
     HD.br.style.left = (L + W) + "px"; HD.br.style.top = (T + H) + "px";
+    HD.bl.style.left = (L - 15) + "px"; HD.bl.style.top = (T + H) + "px";
+    HD.tr.style.left = (L + W) + "px"; HD.tr.style.top = (T - 15) + "px";
+    HD.tl.style.left = (L - 15) + "px"; HD.tl.style.top = (T - 15) + "px";
   }
   function startDrag(e, mode, handle){
     if (blocked()) return;
     e.preventDefault();
-    if (mode !== "b"){ var pg = el.closest(".page"); if (pg) pg.classList.add("man-w"); } /* reflow live during a width drag, not just on release */
+    var hasR = mode.indexOf("r") >= 0, hasB = mode.indexOf("b") >= 0,
+        hasL = mode.indexOf("l") >= 0, hasT = mode.indexOf("t") >= 0;
+    if (hasR || hasL){ var pg = el.closest(".page"); if (pg) pg.classList.add("man-w"); } /* reflow live during a width drag, not just on release */
     var sx = e.clientX, sy = e.clientY;
     var sw = parseFloat(el.style.width) || el.offsetWidth;
     var sh = parseFloat(el.style.height) || el.offsetHeight;
+    var sl = parseFloat(el.style.marginLeft) || 0;
+    var st = parseFloat(el.style.marginTop) || 0;
     try { handle.setPointerCapture(e.pointerId); } catch(err) {}
     var raf = 0;
     function mv(ev){
-      if (mode !== "b") el.style.width = Math.max(320, Math.min(sw + (ev.clientX - sx), 2600)) + "px"; /* flat ceiling, as in fit(): in man-w mode the column follows the window, so the column width is no ceiling */
-      if (mode !== "r") el.style.height = Math.max(240, Math.min(sh + (ev.clientY - sy), 1600)) + "px";
+      var dx = ev.clientX - sx, dy = ev.clientY - sy;
+      if (hasR) el.style.width = Math.max(320, Math.min(sw + dx, 2600)) + "px"; /* flat ceiling, as in fit(): in man-w mode the column follows the window, so the column width is no ceiling */
+      if (hasL){ var nw = Math.max(320, Math.min(sw - dx, 2600, sw + sl)); el.style.width = nw + "px"; el.style.marginLeft = (sl + (sw - nw)) + "px"; } /* right edge fixed: size trades against the left inset, which clamps at 0 */
+      if (hasB) el.style.height = Math.max(380, Math.min(sh + dy, 1600)) + "px"; /* 380 = the CSS min-height floor */
+      if (hasT){ var nh = Math.max(380, Math.min(sh - dy, 1600, sh + st)); el.style.height = nh + "px"; el.style.marginTop = (st + (sh - nh)) + "px"; } /* bottom edge fixed: size trades against the top inset, which clamps at 0 */
       if (!raf){ raf = requestAnimationFrame(function(){ raf = 0; if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false }); syncHandles(); }); }
     }
     function up(){
@@ -7276,8 +7325,10 @@ function floorConnected(L, cols, rows){
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
       var man = loadMan() || {};
-      if (mode !== "b") man.w = Math.round(parseFloat(el.style.width) || el.offsetWidth);
-      if (mode !== "r") man.h = Math.round(parseFloat(el.style.height) || el.offsetHeight);
+      if (hasR || hasL) man.w = Math.round(parseFloat(el.style.width) || el.offsetWidth);
+      if (hasB || hasT) man.h = Math.round(parseFloat(el.style.height) || el.offsetHeight);
+      if (hasL) man.l = Math.round(parseFloat(el.style.marginLeft) || 0);
+      if (hasT) man.t = Math.round(parseFloat(el.style.marginTop) || 0);
       saveMan(man);
       if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false });
       syncHandles();
@@ -7298,10 +7349,16 @@ function floorConnected(L, cols, rows){
       side.appendChild(d);
       return d;
     }
+    var HT = "Drag to resize the map window — double-click resets to auto-fit";
     HD = {
-      r: mk("map-rsz-r", "r", "Drag to resize the map window — double-click resets to auto-fit"),
-      b: mk("map-rsz-b", "b", "Drag to resize the map window — double-click resets to auto-fit"),
-      br: mk("map-rsz-br", "br", "Drag to resize the map window — double-click resets to auto-fit")
+      r: mk("map-rsz-r", "r", HT),
+      b: mk("map-rsz-b", "b", HT),
+      br: mk("map-rsz-br", "br", HT),
+      l: mk("map-rsz-l", "l", HT),
+      t: mk("map-rsz-t", "t", HT),
+      tl: mk("map-rsz-tl", "tl", HT),
+      tr: mk("map-rsz-tr", "tr", HT),
+      bl: mk("map-rsz-bl", "bl", HT)
     };
     new MutationObserver(function(){ syncHandles(); }).observe(el, { attributes: true, attributeFilter: ["style"] });
     syncHandles();
