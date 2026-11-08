@@ -751,7 +751,26 @@ body.map-expanded .stage-row{display:contents}
         <div class="nest artlib" id="artLibrary">
           <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
           <div class="nest-body">
-                        <div class="nest" id="mapsNest">
+                        <div class="nest" id="npcNest">
+              <button type="button" class="nest-head" aria-expanded="false"><span>NPCs <span class="muted small" id="npcCount"></span></span></button>
+              <div class="nest-body">
+                <div class="field" style="max-width:280px">
+                  <label for="npcSearch">Search NPCs</label>
+                  <input id="npcSearch" type="text" autocomplete="off" placeholder="Search the roster…">
+                </div>
+                <div class="field" style="max-width:280px">
+                  <label for="npcSort">Sort NPCs</label>
+                  <select id="npcSort">
+                    <option value="alpha">Alphabetical</option>
+                    <option value="lvlAsc">Level low → high</option>
+                    <option value="lvlDesc">Level high → low</option>
+                  </select>
+                </div>
+                <div id="libNpcs"><p class="muted small" id="npcLibNote"></p></div>
+                <div class="monster-detail" id="npcDetail" hidden></div>
+              </div>
+            </div>
+            <div class="nest" id="mapsNest">
                 <button type="button" class="nest-head" aria-expanded="false"><span>Maps <span class="muted small" id="mapRepoCount"></span></span></button>
                 <div class="nest-body">
                   <div class="field">
@@ -7123,7 +7142,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0224";
+        var BUILD_STAMP = "2026-11-08-0229";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7956,6 +7975,252 @@ function floorConnected(L, cols, rows){
     libDrag(box, function(b, p){
       var m = bySlug[b.dataset.slug];
       if (m) placeMonster(m, p);
+    });
+  }
+})();
+</script>
+
+<script>
+/* NPC roster (Shaun, voice call 2026-11-08 ~02:09): "Give me a button
+   with NPCs populated with all the NPCs you could find and give
+   pictures." — an NPCs nest in the Art Library beside Monsters, GM-side.
+   Harvest: the statted Hundred (~/workspace/npcs-100 batch files), the
+   Campaign Tracker's 49 people (tracker seed — tracker canon wins any
+   conflict), and Saint James from his NPC file. 150 unique NPCs.
+   Pictures: no pre-existing portrait art exists for any of them (Saint
+   James's files are tavern scenes, not portraits), so every portrait is
+   GENERATED — from Shaun's written description where one exists
+   (basis "description"), or outright where none does (basis
+   "altogether": the appearance is generated filler, NOT canon, and the
+   detail panel says so). Every record carries status "generated".
+   Data: shared site_settings key "vtt_npcs" (mirrors vtt_monsters) —
+   { npcs: [{ slug, name, group, desc, blurb, lvl, path, status, basis,
+   source }] }. Art in the cody-artwork bucket under npc/ at 512x512.
+   Layout per Shaun's spec for the monster shelf: grouped under
+   sub-headers, names A-Z within a group; sort toggle re-orders —
+   Alphabetical / Level low-high / Level high-low (no-level last in
+   both directions). Groups build lazily on first expansion;
+   thumbnails loading="lazy". A search box flattens to matches.
+   Tap an NPC = place its token at the map centre; drag it onto the
+   map = place at the drop point — the standard token path, exactly
+   like Monsters. GM gate identical to Monsters: the HEADER stays
+   visible with GM view off ("GM view only"), the body stays hidden,
+   and the registry is not fetched until GM view is first switched on. */
+(function(){
+  var nest = document.getElementById("npcNest");
+  var box = document.getElementById("libNpcs");
+  if (!nest || !box) return;
+  var countEl = document.getElementById("npcCount");
+  var sortEl = document.getElementById("npcSort");
+  var searchEl = document.getElementById("npcSearch");
+  var detailEl = document.getElementById("npcDetail");
+  var bodyEl = nest.querySelector(":scope > .nest-body");
+  var GROUP_ORDER = ["Saint James", "Statted NPCs \u2014 the Hundred", "Bastion Tracker People"];
+  var npcs = [], bySlug = {}, started = false, sortMode = "alpha", query = "";
+  var groupState = {};
+  function pub(path){ return "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/" + path; }
+  function gmOn(){
+    try { if (typeof effectiveGm === "function") return !!effectiveGm(); } catch(e) {}
+    var b = document.getElementById("gmBtn");
+    return !!(b && b.getAttribute("aria-pressed") === "true");
+  }
+  function gate(){
+    var gm = gmOn();
+    if (document.body.classList.contains("displaying")) { nest.style.display = "none"; return; }
+    nest.style.display = "";
+    if (bodyEl) bodyEl.style.display = gm ? "" : "none";
+    if (!gm && countEl) countEl.textContent = "\u2014 GM view only";
+    if (gm && !started) { started = true; loadRegistry(); }
+  }
+  gate();
+  setInterval(gate, 700);
+
+  async function loadRegistry(){
+    var note = document.getElementById("npcLibNote");
+    try {
+      if (!db) throw new Error("no db");
+      var res = await db.from(SETTINGS_TABLE).select("value").eq("key", "vtt_npcs").maybeSingle();
+      if (res.error) throw res.error;
+      npcs = (res.data && res.data.value && Array.isArray(res.data.value.npcs)) ? res.data.value.npcs : [];
+    } catch(e) { npcs = []; }
+    bySlug = {};
+    npcs.forEach(function(n){ bySlug[n.slug] = n; });
+    if (countEl) countEl.textContent = npcs.length ? "\u2014 " + npcs.length + " NPCs" : "";
+    if (note) note.textContent = npcs.length ? "" : "The NPC roster is empty \u2014 the registry read came back with nothing.";
+    render();
+  }
+
+  function sortedWithin(list){
+    var arr = list.slice();
+    if (sortMode === "alpha") arr.sort(function(a, b){ return a.name.localeCompare(b.name); });
+    else {
+      var dir = sortMode === "lvlAsc" ? 1 : -1;
+      arr.sort(function(a, b){
+        var an = (typeof a.lvl === "number") ? a.lvl : null;
+        var bn = (typeof b.lvl === "number") ? b.lvl : null;
+        if (an === null && bn === null) return a.name.localeCompare(b.name);
+        if (an === null) return 1;
+        if (bn === null) return -1;
+        if (an !== bn) return (an - bn) * dir;
+        return a.name.localeCompare(b.name);
+      });
+    }
+    return arr;
+  }
+
+  function groupNest(title){
+    var wrap = document.createElement("div");
+    wrap.className = "nest mr-nest";
+    var h = document.createElement("button");
+    h.type = "button"; h.className = "nest-head mr-folder-head";
+    h.setAttribute("aria-expanded", "false");
+    h.textContent = title;
+    var body = document.createElement("div");
+    body.className = "nest-body mr-body";
+    wrap.appendChild(h); wrap.appendChild(body);
+    return { wrap: wrap, body: body };
+  }
+
+  function itemEl(n){
+    var d = document.createElement("div");
+    d.className = "lib-item";
+    d.dataset.slug = n.slug;
+    d.dataset.name = n.name;
+    if (n.path) d.dataset.img = pub(n.path);
+    d.title = n.name + (n.desc ? " \u2014 " + n.desc : "") + ". Tap to place on the map, drag to drop it in place, (i) for details.";
+    if (n.path) {
+      var img = document.createElement("img");
+      img.loading = "lazy"; img.decoding = "async"; img.alt = n.name;
+      img.src = pub(n.path);
+      d.appendChild(img);
+    } else {
+      var disc = document.createElement("span");
+      disc.className = "mon-none";
+      disc.textContent = (n.name || "?").charAt(0);
+      disc.title = "No art yet";
+      d.appendChild(disc);
+    }
+    var cap = document.createElement("span"); cap.className = "lib-cap";
+    cap.textContent = n.name;
+    if (typeof n.lvl === "number") {
+      var lv = document.createElement("span"); lv.className = "mon-cr";
+      lv.textContent = "Lv " + n.lvl;
+      cap.appendChild(lv);
+    }
+    d.appendChild(cap);
+    if (n.status === "generated") {
+      var badge = document.createElement("span");
+      badge.className = "mon-badge"; badge.textContent = "generated";
+      badge.title = n.basis === "description"
+        ? "Portrait generated from Shaun's written description \u2014 flagged as generated"
+        : "Portrait generated outright \u2014 no description on file; appearance is generated filler, not canon";
+      d.appendChild(badge);
+    }
+    var info = document.createElement("span");
+    info.className = "mon-info"; info.textContent = "\u24d8";
+    info.title = "Details \u2014 " + n.name;
+    info.setAttribute("role", "button");
+    info.addEventListener("click", function(ev){ ev.stopPropagation(); showDetail(n); });
+    info.addEventListener("pointerdown", function(ev){ ev.stopPropagation(); });
+    d.appendChild(info);
+    d.addEventListener("click", function(){ placeNpc(n, null); });
+    return d;
+  }
+
+  function buildRows(items){
+    var grid = document.createElement("div");
+    grid.className = "lib-grid";
+    items.forEach(function(n){ grid.appendChild(itemEl(n)); });
+    return grid;
+  }
+
+  box.addEventListener("click", function(e){
+    var h = e.target && e.target.closest ? e.target.closest(".mr-folder-head") : null;
+    if (!h) return;
+    var wrap = h.parentElement;
+    if (!wrap || wrap.classList.contains("open")) return;
+    var body = wrap.querySelector(":scope > .mr-body");
+    if (!body || !body._lazy) return;
+    var st = groupState[body._lazy];
+    body._lazy = null;
+    if (!st || st.built) return;
+    st.content = buildRows(st.items);
+    st.built = true;
+    body.appendChild(st.content);
+  }, true);
+
+  function render(){
+    groupState = {};
+    box.innerHTML = "";
+    if (!npcs.length) { box.innerHTML = "<p class=\"muted small\">The NPC roster is empty \u2014 the registry read came back with nothing.</p>"; return; }
+    if (query) {
+      var q = query.toLowerCase();
+      var hits = sortedWithin(npcs.filter(function(n){
+        return (n.name + " " + (n.desc || "") + " " + (n.group || "")).toLowerCase().indexOf(q) >= 0;
+      }));
+      if (!hits.length) { box.innerHTML = "<p class=\"muted small\">No NPCs match \u201c" + esc(query) + "\u201d.</p>"; return; }
+      box.appendChild(buildRows(hits));
+      return;
+    }
+    var groups = {};
+    npcs.forEach(function(n){ (groups[n.group] = groups[n.group] || []).push(n); });
+    var keys = Object.keys(groups).sort(function(a, b){
+      var ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
+      if (ia < 0) ia = 99; if (ib < 0) ib = 99;
+      return ia !== ib ? ia - ib : a.localeCompare(b);
+    });
+    keys.forEach(function(t){
+      var items = sortedWithin(groups[t]);
+      var gn = groupNest(t + " (" + items.length + ")");
+      groupState[t] = { built: false, items: items, content: null };
+      gn.body._lazy = t;
+      box.appendChild(gn.wrap);
+    });
+  }
+
+  if (sortEl) sortEl.addEventListener("change", function(){ sortMode = sortEl.value; render(); });
+  if (searchEl) searchEl.addEventListener("input", function(){ query = searchEl.value.trim(); render(); });
+
+  function showDetail(n){
+    if (!detailEl) return;
+    var art = n.status === "generated"
+      ? (n.basis === "description"
+          ? "Art: portrait generated from Shaun's written description \u2014 flagged as generated."
+          : "Art: portrait generated outright \u2014 no description on file; the appearance is generated filler, NOT Shaun's canon.")
+      : "Art: existing art.";
+    detailEl.innerHTML = "<h4>" + esc(n.name) + "</h4>"
+      + (n.path ? "<p><img src=\"" + pub(n.path) + "\" alt=\"" + esc(n.name) + "\" loading=\"lazy\" style=\"width:128px;height:128px;object-fit:cover;border-radius:10px\"></p>" : "")
+      + "<p class=\"muted small\">" + esc(n.group || "") + (n.desc ? " \u00b7 " + esc(n.desc) : "") + (typeof n.lvl === "number" ? " \u00b7 Level " + n.lvl : "") + "</p>"
+      + (n.blurb ? "<p>" + esc(n.blurb) + "</p>" : "")
+      + "<p class=\"muted small\">" + art + "</p>"
+      + "<p class=\"muted small\">Source: " + esc(n.source || "") + "</p>";
+    detailEl.hidden = false;
+    detailEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function placeNpc(n, at){
+    if (!gmOn()) return;
+    var tk;
+    if (at) {
+      tk = { id: newId(), name: n.name, x: at.x, y: at.y, size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" };
+    } else {
+      var c = toXY(map.getCenter());
+      var off = (tokens.length % 5) * 1.5;
+      tk = { id: newId(), name: n.name, x: Math.min(98, c.x + off), y: Math.min(98, c.y + off), size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" };
+    }
+    if (n.path) tk.img = pub(n.path);
+    tokens.push(tk);
+    saveTokens().then(function(ok){
+      drawTokens();
+      tokenStatusEl.textContent = ok ? "\u201c" + tk.name + "\u201d placed \u2014 drag it into place." : "That token didn\u2019t save \u2014 try again.";
+      if (!ok) loadTokens(true);
+    });
+  }
+
+  if (typeof libDrag === "function") {
+    libDrag(box, function(b, p){
+      var n = bySlug[b.dataset.slug];
+      if (n) placeNpc(n, p);
     });
   }
 })();
@@ -9497,6 +9762,12 @@ function floorConnected(L, cols, rows){
 .map-repo .artlib.open > .nest-body > .nest.open{grid-column:1/-1}
 #artLibrary .lib-panel .nest-head{min-height:22px;padding:4px 6px;font-size:.85rem;line-height:1.15;white-space:normal}
 #monsterNest > .nest-head{min-height:22px;padding:4px 6px;font-size:.85rem;line-height:1.15;white-space:normal}
+#npcNest > .nest-head{min-height:22px;padding:4px 6px;font-size:.85rem;line-height:1.15;white-space:normal}
+#libNpcs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;align-items:start}
+#libNpcs{align-content:start;align-items:start;row-gap:5px}
+#libNpcs > .mr-nest{margin:0}
+#npcLibNote{grid-column:1/-1}
+#mapPanel #libNpcs{grid-template-columns:1fr !important}
 /* 2) Monsters types + Maps folders: 3-column grid, halved heads;
    an opened folder/type still spans the full row and expands fully. */
 .mr-list, #libMonsters{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;align-items:start}
