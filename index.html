@@ -7087,7 +7087,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0144";
+        var BUILD_STAMP = "2026-11-08-0152";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7328,6 +7328,49 @@ function floorConnected(L, cols, rows){
   var rowEls = {};
   var groupState = {};
   function pub(path){ return "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/" + path; }
+  /* Visuals vs Maps split (Shaun, Maps-chat call 2026-11-08 ~00:46):
+     "Visuals" = the pictures — first-person views, artwork,
+     non-playable images; "Maps" = playable map surfaces. Read off
+     the entry itself (source path / parent collection / view name),
+     never a stored flag, so renames and re-files re-classify
+     themselves. A rec carrying a Roll20 filing is a page Shaun filed
+     as a map, so it stays a Map; everything else defaults to Map. */
+  function isVisualRec(r){
+    if (!r || typeof r !== "object") return false;
+    if (r.r20 && typeof r.r20 === "object") return false;
+    var s = (r.src || ""), p = (r._parent || ""), n = (r.name || "").trim().toLowerCase();
+    if (/(^|\/)first person views(\/|$)/i.test(s)) return true;
+    if (p === "descripter pics" || /(^|\/)descripter pics(\/|$)/i.test(s)) return true;
+    if (/\bside view\b/.test(n) || /\bfront view\b/.test(n)) return true;
+    if (n === "front") return true;
+    return false;
+  }
+  window.__apocMapKind = {
+    isVisualRec: isVisualRec,
+    isVisualId: function(id){
+      var recs = (window.__apocShelf && window.__apocShelf.recs()) || [];
+      for (var i = 0; i < recs.length; i++) if (recs[i].id === id) return isVisualRec(recs[i]);
+      return false;
+    }
+  };
+  /* Visuals entries are viewable pictures: opening one shows the
+     picture full-size (the pin-lightbox pattern); it does NOT load
+     as the playable map. */
+  var picBox = null;
+  function hidePicture(){ if (picBox) { picBox.remove(); picBox = null; } }
+  function viewPicture(o){
+    var def = (window.__apocShelf && window.__apocShelf.def) ? window.__apocShelf.def(o.id) : null;
+    var url = (def && def.img) || o.thumbUrl || "";
+    if (!url) return;
+    hidePicture();
+    picBox = document.createElement("div");
+    picBox.className = "pin-lightbox";
+    var im = document.createElement("img");
+    im.src = url; im.alt = o.name || "";
+    picBox.appendChild(im);
+    picBox.addEventListener("click", hidePicture);
+    document.body.appendChild(picBox);
+  }
   function loadMap(id){
     var sel = document.getElementById("mapSelect");
     if (!sel) return;
@@ -7409,8 +7452,8 @@ function floorConnected(L, cols, rows){
     row.appendChild(img); row.appendChild(meta);
     row.dataset.mapId = o.id;
     rowEls[o.id] = row;
-    row.title = "Load \"" + o.name + "\" in the VTT";
-    row.addEventListener("click", function(){ loadMap(o.id); });
+    row.title = o.visual ? "View \"" + o.name + "\" — a picture, not a playable map" : "Load \"" + o.name + "\" in the VTT";
+    row.addEventListener("click", function(){ if (o.visual) viewPicture(o); else loadMap(o.id); });
     if (o.rec) {
       var mv = document.createElement("button");
       mv.type = "button"; mv.className = "mr-move"; mv.textContent = "→";
@@ -7446,7 +7489,8 @@ function floorConnected(L, cols, rows){
       id: r.id, name: r.name || r.id,
       thumbUrl: r.thumb ? pub(r.thumb) : pub(r.path),
       w: r.w, h: r.h,
-      note: r.thumb_only ? "thumbnail copy — full size not in the collection" : "",
+      note: isVisualRec(r) ? "picture — click to view" : (r.thumb_only ? "thumbnail copy — full size not in the collection" : ""),
+      visual: isVisualRec(r),
       rec: r
     });
   }
@@ -7474,19 +7518,22 @@ function floorConnected(L, cols, rows){
   }, true);
   function render(force){
     var recs = (window.__apocShelf && window.__apocShelf.recs()) || [];
-    var sig = recs.length + "|" + recs.map(function(r){ return r.id + (r.r20 ? "@" + (r.r20.f || "-") + "/" + (r.r20.s || "-") + "/" + (r.r20.i || 0) : ""); }).join(",") + "|" + (window.__apocShelf ? window.__apocShelf.current() : "") + "|" + filter;
+    var sig = recs.length + "|" + recs.map(function(r){ return r.id + (isVisualRec(r) ? "V" : "M") + (r.r20 ? "@" + (r.r20.f || "-") + "/" + (r.r20.s || "-") + "/" + (r.r20.i || 0) : ""); }).join(",") + "|" + (window.__apocShelf ? window.__apocShelf.current() : "") + "|" + filter;
     if (!force && sig === lastSig) return;
     lastSig = sig;
     var f = filter.trim().toLowerCase();
     var match = function(n){ return !f || n.toLowerCase().indexOf(f) >= 0; };
     listEl.innerHTML = "";
     var shown = 0;
+    var visShown = 0;
+    var mapsBox = document.createElement("div");
+    var visBox = document.createElement("div");
     var bNest = groupNest("Built-in maps", !!f); var bCount = 0;
     BUILTINS.forEach(function(b){
       if (!match(b.name)) return;
       bNest.body.appendChild(itemRow({ id: b.id, name: b.name, thumbUrl: b.thumb, w: b.w, h: b.h, note: "built-in" })); bCount++;
     });
-    if (bCount) { listEl.appendChild(bNest.wrap); shown += bCount; }
+    if (bCount) { mapsBox.appendChild(bNest.wrap); shown += bCount; }
     /* v1.65: partition — recs with an r20 assignment file into the
        Roll20 tree (folders in Roll20 order, subfolders nested, page
        order kept; Roll20's unfiled pages as a Top level group); the
@@ -7512,7 +7559,16 @@ function floorConnected(L, cols, rows){
     var liveGroups = {};
     function emitLazy(key, title, rows){
       /* rows: the rows to show (already filtered + sorted). Lazy in
-         normal browsing; built eagerly while a search is active. */
+         normal browsing; built eagerly while a search is active.
+         Split: Maps entries file under the Maps top category,
+         Visuals under Visuals — the same folder title can appear
+         once in each, holding its own kind. */
+      var mRows = [], vRows = [];
+      rows.forEach(function(r){ (isVisualRec(r) ? vRows : mRows).push(r); });
+      if (mRows.length) emitGroup(mapsBox, key + "|m", title, mRows, false);
+      if (vRows.length) emitGroup(visBox, key + "|v", title, vRows, true);
+    }
+    function emitGroup(box, key, title, rows, isVis){
       liveGroups[key] = true;
       var gn = groupNest(title + " (" + rows.length + ")", !!f);
       if (f) {
@@ -7527,8 +7583,8 @@ function floorConnected(L, cols, rows){
           gn.body._lazy = key;
         }
       }
-      listEl.appendChild(gn.wrap);
-      shown += rows.length;
+      box.appendChild(gn.wrap);
+      if (isVis) visShown += rows.length; else shown += rows.length;
       return gn;
     }
     function emitR20Folder(F){
@@ -7550,7 +7606,7 @@ function floorConnected(L, cols, rows){
           shown += sd.items.length;
         });
         if (direct.length) { gn.body.appendChild(buildGroupRows(direct)); shown += direct.length; }
-        listEl.appendChild(gn.wrap);
+        mapsBox.appendChild(gn.wrap);
         return;
       }
       var totAll = directAll.length + subsAll.reduce(function(n, sd){ return n + sd.all.length; }, 0);
@@ -7574,7 +7630,7 @@ function floorConnected(L, cols, rows){
         } };
         gn2.body._lazy = key;
       }
-      listEl.appendChild(gn2.wrap);
+      mapsBox.appendChild(gn2.wrap);
     }
     R20_TREE.forEach(emitR20Folder);
     var topItems = r20TopAll.slice().sort(byR20).filter(function(r){ return match(r.name || r.id); });
@@ -7596,7 +7652,9 @@ function floorConnected(L, cols, rows){
     Object.keys(rowEls).forEach(function(id){
       rowEls[id].classList.toggle("mr-current", window.__apocShelf && id === window.__apocShelf.current());
     });
-    if (!shown) listEl.innerHTML = "<p class=\"muted small\">No maps match.</p>";
+    if (mapsBox.childNodes.length) { var cm = groupNest("Maps (" + shown + ")", !!f); cm.body.appendChild(mapsBox); listEl.appendChild(cm.wrap); }
+    if (visBox.childNodes.length) { var cv = groupNest("Visuals (" + visShown + ")", !!f); cv.body.appendChild(visBox); listEl.appendChild(cv.wrap); }
+    if (!shown && !visShown) listEl.innerHTML = "<p class=\"muted small\">No maps match.</p>";
     if (countEl) countEl.textContent = "— " + (BUILTINS.length + recs.length) + " maps";
   }
   var deb = null;
@@ -9153,12 +9211,7 @@ function floorConnected(L, cols, rows){
   function build(){
     var opts = Array.from(sel.options);
     panel.innerHTML = "";
-    var grid = document.createElement("div");
-    grid.className = "mapdd-grid";
-    var rows = Math.max(1, Math.ceil(opts.length / 2));
-    grid.style.gridTemplateRows = "repeat(" + rows + ", auto)";
-    grid.style.gridTemplateColumns = "1fr 1fr";
-    opts.forEach(function(o){
+    function makeItem(o){
       var it = document.createElement("div");
       it.className = "mapdd-item" + (o.value === sel.value ? " sel" : "");
       it.textContent = o.textContent;
@@ -9171,9 +9224,34 @@ function floorConnected(L, cols, rows){
         syncLabel();
         close();
       });
-      grid.appendChild(it);
+      return it;
+    }
+    function makeGrid(list){
+      var grid = document.createElement("div");
+      grid.className = "mapdd-grid";
+      var rows = Math.max(1, Math.ceil(list.length / 2));
+      grid.style.gridTemplateRows = "repeat(" + rows + ", auto)";
+      grid.style.gridTemplateColumns = "1fr 1fr";
+      list.forEach(function(o){ grid.appendChild(makeItem(o)); });
+      return grid;
+    }
+    /* The Visuals / Maps split, same as the repository: playable
+       maps first, the pictures under their own header. Hovering any
+       name only previews it; picking a name in this dropdown is the
+       deliberate use-as-map choice, exactly as before. */
+    var kind = window.__apocMapKind;
+    var mOpts = [], vOpts = [];
+    opts.forEach(function(o){
+      if (kind && kind.isVisualId(o.value)) vOpts.push(o); else mOpts.push(o);
     });
-    panel.appendChild(grid);
+    if (vOpts.length && mOpts.length) {
+      var h1 = document.createElement("div"); h1.className = "mapdd-grouphead"; h1.textContent = "Maps — playable";
+      var h2 = document.createElement("div"); h2.className = "mapdd-grouphead"; h2.textContent = "Visuals — pictures";
+      panel.appendChild(h1); panel.appendChild(makeGrid(mOpts));
+      panel.appendChild(h2); panel.appendChild(makeGrid(vOpts));
+    } else {
+      panel.appendChild(makeGrid(opts));
+    }
   }
   function open(){
     build();
@@ -12771,6 +12849,47 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   placeTv();
   var t0 = Date.now();
   var tm = setInterval(function(){ placeTv(); if (Date.now() - t0 > 12000) clearInterval(tm); }, 400);
+})();
+</script>
+
+
+<style id="APOC-V202">
+/* Map-dropdown hover previews SMALLER (Shaun, Maps-chat call
+   2026-11-08 ~00:46) — this sizing GOVERNS over the v1.74/v1.75
+   600px caps for #mapPreview: the image caps at 300px wide while
+   the dropdown panel is 600px, so the preview no longer covers the
+   list it previews for. Still readable; hover still never loads
+   or selects, click still loads. (Art Library previews keep their
+   v1.99 260px /.pv-lib treatment — untouched.) */
+#mapPreview img{max-width:min(300px,80vw);max-height:min(300px,60vh)}
+#mapPreview .mp-name{max-width:300px}
+/* Group headers for the dropdown's Maps / Visuals sections */
+#mapDdPanel .mapdd-grouphead{font-weight:700;font-size:.8rem;letter-spacing:.05em;text-transform:uppercase;color:#3f4756;padding:8px 8px 2px}
+</style>
+<script>
+/* APOC-V202: the map preview is measured before its image arrives,
+   so a flipped preview could grow over the dropdown's left side.
+   Now that the image is capped at 300px, re-park the box beside the
+   panel once the image lands if the two overlap: right side when it
+   fits, otherwise left — never covering the list. */
+(function(){
+  var prev = document.getElementById("mapPreview");
+  var panel = document.getElementById("mapDdPanel");
+  if (!prev || !panel) return;
+  var img = prev.querySelector("img");
+  if (!img) return;
+  function fix(){
+    if (prev.hidden || panel.hidden) return;
+    var pr = prev.getBoundingClientRect(), pa = panel.getBoundingClientRect();
+    var overlap = pr.left < pa.right - 4 && pr.right > pa.left + 4 && pr.top < pa.bottom && pr.bottom > pa.top;
+    if (!overlap) return;
+    var w = prev.offsetWidth, h = prev.offsetHeight;
+    var left = pa.right + 10;
+    if (left + w > window.innerWidth - 6) left = Math.max(6, pa.left - w - 10);
+    prev.style.left = left + "px";
+    prev.style.top = Math.max(6, Math.min(pr.top, window.innerHeight - h - 6)) + "px";
+  }
+  img.addEventListener("load", fix);
 })();
 </script>
 
