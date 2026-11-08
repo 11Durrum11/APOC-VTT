@@ -6988,7 +6988,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2312";
+        var BUILD_STAMP = "2026-11-07-2331";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9762,6 +9762,8 @@ function floorConnected(L, cols, rows){
     var lib = document.getElementById("artLibrary");
     var am = document.getElementById("apocMap");
     if (!lib || !am || !lib.classList.contains("open")) return;
+    var rp196 = document.querySelector(".map-repo");
+    if (rp196 && rp196.classList.contains("per-float")) return; /* APOC-V196: floated — the screen-bottom fill owns the wrapper height; this map-bottom anchor fighting it was the S5 flicker */
     var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
     var h = Math.round(mr.bottom - lr.top);
     if (h > 120 && Math.abs((lr.height) - h) > 1) lib.style.height = h + "px";
@@ -10275,6 +10277,8 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var lib = document.getElementById("artLibrary");
     var am = document.getElementById("apocMap");
     if (!lib || !am) return;
+    var rp196b = repo();
+    if (rp196b && rp196b.classList.contains("per-float")) { if (lib.style.marginBottom) lib.style.marginBottom = ""; return; } /* APOC-V196: floated repo is out of flow — the row-chase margin mechanism and the map-bottom anchor do not apply; the screen-bottom fill owns the wrapper height */
     if (!lib.classList.contains("open")) { if (lib.style.marginBottom) lib.style.marginBottom = ""; return; }
     var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
     var target = mr.bottom; /* v1.87: the anchor is the MAP bottom edge (Shaun: "the bottom of the map edge"); the v1.83 row-bottom extension painted the opened Library over the button row */
@@ -12305,6 +12309,70 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       repo.scrollTop = 0;
     }
   });
+})();
+</script>
+<style id="APOC-V196">
+/* APOC-V196 (Shaun, 2026-11-07 ~23:21 — the Art Library STILL does
+   not extend all the way down, third report): probe196 on v1.95
+   found the opened library's BOX reaching the screen bottom in
+   every floated state while its CONTENT panel (.nest-body) stayed
+   capped at max-height:38vh by the base sheet rule
+   .map-repo.per-float .artlib.open > .nest-body — bottom 547 of
+   1080, 429 of 768. Lift the cap; the APOC-V196 script stretches
+   the panel to the box bottom and its contents scroll inside. */
+.map-repo.per-float .artlib.open > .nest-body{max-height:none!important}
+</style>
+<script>
+/* APOC-V196 — see the style block above for the diagnosis. While
+   the Art Library is open in a floated repo, pin the wrapper's
+   height to the box (bottom - 2) on a 200ms beat — faster than
+   the v1.80 fitLib interval (1800ms, anchors the wrapper to the
+   MAP bottom) and the v1.88 libTick (450ms), so the pin wins
+   deterministically instead of oscillating. The repo box itself
+   is NOT touched here: v1.87's anchor owns it, including the
+   pre-open snapshot it restores on close. On close, clear the
+   pins so the closed library returns to its natural height.
+   Docked: v1.88's overlay sizing measured exact in probe196;
+   this tick only corrects a >2px miss. TV/display copies skip. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var wasOpen = false;
+  function tick(){
+    var repo = document.querySelector(".map-repo");
+    var lib = document.getElementById("artLibrary");
+    if (!repo || !lib) return;
+    var body = lib.querySelector(":scope > .nest-body");
+    var open = lib.classList.contains("open");
+    if (!open) {
+      if (wasOpen) {
+        lib.style.height = "";
+        if (body) body.style.maxHeight = "";
+        wasOpen = false;
+      }
+      return;
+    }
+    wasOpen = true;
+    if (!body) return;
+    var ih = window.innerHeight;
+    if (repo.classList.contains("per-float")) {
+      if (repo.classList.contains("per-dragging")) return;
+      var rr = repo.getBoundingClientRect(), lr = lib.getBoundingClientRect();
+      if (rr.height < 50 || lr.height < 10) return;
+      var want = Math.round(rr.bottom - 2 - lr.top);
+      if (want > 80 && Math.abs(lr.height - want) > 1) lib.style.height = want + "px";
+      if (body.style.maxHeight !== "none") body.style.maxHeight = "none";
+    } else {
+      var br = body.getBoundingClientRect();
+      if (br.height > 0 && Math.abs(br.bottom - ih) > 2) {
+        body.style.height = Math.round(br.height + (ih - br.bottom)) + "px";
+        body.style.maxHeight = "none";
+      }
+    }
+  }
+  document.addEventListener("click", function(){ setTimeout(tick, 60); setTimeout(tick, 300); setTimeout(tick, 900); }, true);
+  window.addEventListener("resize", function(){ setTimeout(tick, 300); });
+  setInterval(tick, 200);
 })();
 </script>
 </body>
