@@ -879,7 +879,7 @@ body.map-expanded .stage-row{display:contents}
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
       <button type="button" class="btn primary" id="pushTvBtn">Push to TV</button>
       <button class="btn" id="ambBtn" type="button" aria-pressed="false">🔇 Ambience off</button>
-      <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>GM view</button>
+      <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>DM view: ON</button>
       <span class="muted small" id="tokenStatus"></span>
       <span class="muted small" id="gmStatus"></span>
     </div>
@@ -2474,7 +2474,7 @@ setInterval(loadSharedEntries, 60000);
      no lock (Shaun, 2026-11-06: "That GM view just on or off. I don't
      need no security pin.") ---- */
   function applyGmUi(){
-    $("gmBtn").textContent = "GM view"; /* v1.66 (Shaun): label is just "GM view" — the on/off state reads from aria-pressed styling; hold-to-switch unchanged */
+    $("gmBtn").textContent = gmView ? "DM view: ON" : "DM view: OFF"; /* APOC-VDM1 (Shaun, 2026-11-08 ~03:34): the DM view BUTTON is back — its label carries the state at a glance, and a plain click toggles (handler below) */
     $("gmBtn").setAttribute("aria-pressed", String(gmView));
     $("fogControls").hidden = !gmView;
     $("lightControls").hidden = !gmView;
@@ -2482,90 +2482,36 @@ setInterval(loadSharedEntries, 60000);
     const lT = $("lightTab"); if (lT) lT.hidden = !gmView;
     renderFog(); drawTokens(); renderDraw(); draw();
   }
-  /* Hold-to-toggle (Shaun, 2026-11-06): he doesn't want to hit GM view by
-     accident, so a plain click does nothing — the button must be HELD for
-     ~0.8 seconds to switch. The grayed look is the warning label.
-     v1.59 fix (Shaun, 2026-11-06 23:24: "now I can't turn the GM view on"
-     / Monsters "is there but not clickable"): the hold mechanism itself
-     was proven working headlessly on the served build — handlers fire,
-     effectiveGm flips, Monsters unlock. What failed in the room: a click
-     is a SILENT no-op (the only explanation was a hover tooltip, and the
-     button is styled to look disabled), and the on-state was remembered
-     per TAB (sessionStorage), so after an evening in one tab where GM
-     stayed on by itself, every fresh versioned link opened a new tab
-     with GM off and a button that ignores clicks. Fixes, hold kept:
-     the button used to carry the instruction in its label (v1.66:
-     Shaun had it cut to just "GM view"), a progress fill sweeps
-     the button while it is held, a too-short press answers in the status
-     line next to the button ("Keep holding — GM view switches after a
-     second"), and the on-state persists per DEVICE (localStorage) like
-     every other layout preference on this page. Still no lock by design;
-     the TV copy stays protected because effectiveGm() is false while
-     projecting, whatever this flag says. */
+  /* APOC-VDM1 (Shaun, 2026-11-08 ~03:34: "Put my DM view button back so
+     I can have the option of making things DM view or not, but the
+     default is DM view."): the hold-to-switch gesture is REPLACED by a
+     plain click. The button stays visible on DM-armed devices only
+     (APOC-V200 gate below), its label reads "DM view: ON" / "DM view:
+     OFF" (applyGmUi), the armed default at load stays ON (the V200
+     block sets gmView = true before init, exactly as under the hold
+     build), and toggling persists per device via apocGm exactly as the
+     old hold handler did. Reload on an armed device returns to ON via
+     the V200 gate. */
   (() => {
     const btn = $("gmBtn");
     const status = $("gmStatus");
-    const HOLD_MS = 800;
-    btn.title = "Hold for a second to switch GM view on or off — a plain click does nothing, so it can't be hit by accident";
-    let timer = null, tick = null, t0 = 0, hintTimer = null;
-    let startX = 0, startY = 0;
+    let hintTimer = null;
     const hint = (msg) => {
       if (!status) return;
       status.textContent = msg;
       if (hintTimer) clearTimeout(hintTimer);
       hintTimer = setTimeout(() => { status.textContent = ""; }, 3000);
     };
-    const paint = () => {
-      const p = Math.min(1, (Date.now() - t0) / HOLD_MS);
-      btn.style.background = "linear-gradient(90deg, rgba(240,180,60,.45) " + (p * 100) + "%, transparent " + (p * 100) + "%)";
-    };
-    const clearPaint = () => { btn.style.background = ""; };
-    const start = (e) => {
-      /* v1.60 hardening: capture the pointer so a small drift off the
-         button mid-hold no longer cancels the switch through
-         pointerleave (the v1.59 failure mode); only a deliberate
-         drag-away (>56px) cancels, via the pointermove check below. */
-      if (e && e.pointerId !== undefined) {
-        startX = e.clientX; startY = e.clientY;
-        try { btn.setPointerCapture(e.pointerId); } catch (err) {}
-      }
-      btn.classList.add("holding");
-      t0 = Date.now();
-      paint();
-      tick = setInterval(paint, 40);
-      timer = setTimeout(() => {
-        timer = null;
-        if (tick) { clearInterval(tick); tick = null; }
-        clearPaint();
-        btn.classList.remove("holding");
-        gmView = !gmView;
-        try {
-          if (gmView) { localStorage.setItem("apocGm", "1"); sessionStorage.setItem("apocGm", "1"); }
-          else { localStorage.removeItem("apocGm"); sessionStorage.removeItem("apocGm"); }
-        } catch(e) { /* storage unavailable — the toggle still works for this page */ }
-        hint(gmView ? "GM view on." : "GM view off.");
-        applyGmUi();
-      }, HOLD_MS);
-    };
-    const cancel = (fromUp) => {
-      const shortPress = !!timer && !!fromUp;
-      if (timer) { clearTimeout(timer); timer = null; }
-      if (tick) { clearInterval(tick); tick = null; }
-      clearPaint();
-      btn.classList.remove("holding");
-      if (shortPress) hint("Keep holding — GM view switches after a second.");
-    };
-    btn.addEventListener("pointerdown", start);
-    btn.addEventListener("pointermove", (e) => {
-      if (!timer) return;
-      if (Math.abs(e.clientX - startX) > 56 || Math.abs(e.clientY - startY) > 56) cancel(false);
+    btn.title = "DM view \u2014 click to switch on or off. On by default on this device.";
+    btn.addEventListener("click", () => {
+      gmView = !gmView;
+      try {
+        if (gmView) { localStorage.setItem("apocGm", "1"); sessionStorage.setItem("apocGm", "1"); }
+        else { localStorage.removeItem("apocGm"); sessionStorage.removeItem("apocGm"); }
+      } catch(e) { /* storage unavailable \u2014 the toggle still works for this page */ }
+      hint(gmView ? "DM view on." : "DM view off.");
+      applyGmUi();
     });
-    btn.addEventListener("pointerup", () => cancel(true));
-    btn.addEventListener("pointerleave", () => cancel(false));
-    btn.addEventListener("pointercancel", () => cancel(false));
-    btn.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && !e.repeat) { e.preventDefault(); start(); } });
-    btn.addEventListener("keyup", (e) => { if (e.key === "Enter" || e.key === " ") cancel(true); });
-    btn.addEventListener("click", (e) => e.preventDefault());
   })();
   /* The GM view button is always shown on the normal control page, on any
      browser or device — no mark needed. (It used to require a one-time
@@ -7152,7 +7098,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0331";
+        var BUILD_STAMP = "2026-11-08-0438";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8342,7 +8288,7 @@ function floorConnected(L, cols, rows){
   var bar = mk("div", "ctl-bar"); row.appendChild(bar);
   stage.insertAdjacentElement("afterend", row);
 
-  /* GM view stays a DIRECT button in the row (hold-to-switch, v1.59); its
+  /* GM view stays a DIRECT button in the row (plain click, APOC-VDM1); its
      status line rides along with it. v1.67 (Shaun): the button sits next
      to Dice — it is appended AFTER the tabs loop below, so it lands at
      the end of the bar, immediately after the Dice tab. */
@@ -13995,6 +13941,14 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   }, true);
 })();
 </script>
+
+<style id="APOC-VDM1">
+/* APOC-VDM1 \u2014 DM view button state clarity (Shaun, 2026-11-08 ~03:34):
+   OFF stays readable as a live button (the label carries the state);
+   only a gentle dim when off, full strength when on. */
+#gmBtn{opacity:.85;filter:saturate(.55)}
+#gmBtn[aria-pressed="true"]{opacity:1;filter:none}
+</style>
 
 </body>
 </html>
