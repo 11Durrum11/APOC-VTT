@@ -1228,6 +1228,14 @@ body.map-expanded .stage-row{display:contents}
           <input id="tokenSym" type="text" autocomplete="off" placeholder="Optional">
         </div>
         <div class="field full">
+          <label>Status markers</label>
+          <div class="status-row" id="tokenStatusRow">
+            <div class="status-chips" id="tokenStatuses"></div>
+            <button type="submit" class="btn primary">Save token</button>
+            <button type="button" class="btn" id="tokenCancel">Cancel</button>
+          </div>
+        </div>
+        <div class="field full">
           <label class="atlas-toggle"><input type="checkbox" id="tokenGm"> GM only</label>
         </div>
         <div class="field full" id="tokenLightField">
@@ -1240,15 +1248,9 @@ body.map-expanded .stage-row{display:contents}
         <div class="field full">
           <label class="atlas-toggle"><input type="checkbox" id="tokenLock"> Locked in place</label>
         </div>
-        <div class="field full">
-          <label>Status markers</label>
-          <div class="status-chips" id="tokenStatuses"></div>
-        </div>
       </div>
       <div class="map-actions">
-        <button type="submit" class="btn primary">Save token</button>
         <button type="button" class="btn danger" id="tokenDelete" hidden>Delete token</button>
-        <button type="button" class="btn" id="tokenCancel">Cancel</button>
       </div>
     </form>
     <form id="lightForm" class="marker-form" hidden>
@@ -7289,7 +7291,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1233";
+        var BUILD_STAMP = "2026-11-08-1316";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -14649,7 +14651,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     if (btn.id === "layoutResetBtn" || btn.classList.contains("fp-lock")) return false;
     if (btn.closest("#artLibrary") || btn.closest("#apocMap") || btn.closest("#dmBarV181") || btn.closest("#titleBubble")) return false;
     if (btn.closest(".leaflet") || btn.closest(".ctx-menu") || btn.closest("[role=dialog]")) return false;
-    return !!(btn.closest(".ctl-bar") || btn.closest(".map-tools") || btn.closest(".td-ui") || btn.id === "mapExpandBtn" || btn.id === "fsBtn" || btn.id === "view3dBtn" || btn.id === "mapDdBtn");
+    return !!(btn.closest(".ctl-bar") || btn.closest(".map-tools") || btn.closest(".td-ui") || btn.closest(".ctl-set") || btn.id === "mapExpandBtn" || btn.id === "fsBtn" || btn.id === "view3dBtn" || btn.id === "mapDdBtn");
   }
   function findByKey(key){
     if (key.charAt(0) === "#") return document.getElementById(key.slice(1));
@@ -14756,5 +14758,44 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
 })();
 </script>
 
+
+<style id="APOC-V226">
+/* v2.26 — token status row / expansion contract / contrast / side-stack spacing */
+#tokenForm .status-row{display:flex;flex-wrap:nowrap;gap:7px;align-items:stretch;overflow-x:auto;overflow-y:hidden;padding-bottom:2px}
+#tokenForm .status-row .status-chips{flex-wrap:nowrap;flex:0 0 auto}
+#tokenForm .status-row>button{flex:0 0 auto;white-space:nowrap}
+#tokenForm .map-actions:has(#tokenDelete[hidden]){display:none}
+.ctl-set{max-height:calc(100dvh - 8px)}
+.mr-list{max-height:none}
+.nest-body{max-height:calc(100dvh - 24px)}
+body select option,body select optgroup{background:#101216;color:#f5f5f5}
+@media (min-width:821px){
+  #artLibrary .nest{margin-bottom:5px}
+  #artLibrary .nest-head{padding:6px 9px}
+  #artLibrary .nest-body{row-gap:8px;column-gap:6px}
+  #artLibrary .lib-grid{gap:8px}
+}
+</style>
+<script>
+/* APOC-V226 — Library nest bodies sized to the space actually above their
+   head: full content expansion, capped only by the screen edge, internal
+   scroll beyond that. Bottom-row sets are sized the same way by placeSet. */
+(function(){
+  "use strict";
+  function sizeOpen(){
+    document.querySelectorAll(".nest").forEach(function(n){
+      var body = n.querySelector(".nest-body"), head = n.querySelector(".nest-head");
+      if (body && head && body.offsetParent !== null) {
+        var r = head.getBoundingClientRect();
+        body.style.maxHeight = Math.max(140, Math.round(r.top) - 14) + "px";
+      }
+    });
+  }
+  document.addEventListener("click", function(e){
+    if (e.target && e.target.closest && e.target.closest(".nest-head")) requestAnimationFrame(sizeOpen);
+  }, true);
+  window.addEventListener("resize", sizeOpen);
+})();
+</script>
 </body>
 </html>
