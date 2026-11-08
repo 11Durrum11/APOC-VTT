@@ -743,6 +743,17 @@ body.map-expanded .stage-row{display:contents}
         <div class="nest artlib" id="artLibrary">
           <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
           <div class="nest-body">
+                        <div class="nest" id="mapsNest">
+                <button type="button" class="nest-head" aria-expanded="false"><span>Maps <span class="muted small" id="mapRepoCount"></span></span></button>
+                <div class="nest-body">
+                  <div class="field">
+                    <label for="mapRepoSearch">Search maps</label>
+                    <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
+                  </div>
+                  <div class="mr-list" id="mapRepoList"></div>
+                  <p class="muted small" id="mapRepoStatus"></p>
+                </div>
+            </div>
             <div class="nest" id="assetsNest">
               <button type="button" class="nest-head" aria-expanded="false"><span>Assets <span class="muted small" id="assetCount"></span></span></button>
               <div class="nest-body">
@@ -785,17 +796,6 @@ body.map-expanded .stage-row{display:contents}
                 <div id="libMonsters"><p class="muted small" id="monsterLibNote"></p></div>
                 <div class="monster-detail" id="monsterDetail" hidden></div>
               </div>
-            </div>
-            <div class="nest" id="mapsNest">
-                <button type="button" class="nest-head" aria-expanded="false"><span>Maps <span class="muted small" id="mapRepoCount"></span></span></button>
-                <div class="nest-body">
-                  <div class="field">
-                    <label for="mapRepoSearch">Search maps</label>
-                    <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
-                  </div>
-                  <div class="mr-list" id="mapRepoList"></div>
-                  <p class="muted small" id="mapRepoStatus"></p>
-                </div>
             </div>
             <div class="lib-panel" id="stampLib" hidden>
               <div class="nest" id="stampsNest">
@@ -7087,7 +7087,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0152";
+        var BUILD_STAMP = "2026-11-08-0206";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -12893,5 +12893,35 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 })();
 </script>
 
+
+<style id="APOC-V204">
+/* APOC-V204 (Shaun, voice call in the VTT chat 2026-11-08 ~02:02-02:03) —
+   (1) MAPS FIRST: #mapsNest moved in the HTML to directly under the Art
+   Library header — the FIRST section of the opened Library, above Assets
+   and Monsters (v2.00 hoisted it out of its wrapper but left it fourth,
+   after Monsters). Header, folders, lazy rendering, load path unchanged.
+   (2) SUB-BUTTONS HALVED + KEPT LEFT: every button BELOW section level
+   (asset category + subcategory heads, monster type heads, map folder
+   heads, lib-panel heads) leaves the v2.00 right stack — margin-left:0,
+   anchored to the LEFT of the panel body — and its footprint spec halves
+   from its current values: min-height 22px -> 11px and padding 4px -> 2px
+   for the already-halved heads (folder/type/panel heads); the full-size
+   category heads (44px min-height, 8px top/bottom padding) halve by the
+   same rule through the 11px floor + 2px padding, their height being
+   spec-bound today. The three section heads (Assets / Monsters / Maps)
+   and the Art Library head keep the v2.00 right-side stack and metrics.
+   Desktop-scoped like APOC-V200: the verified phone drawer is untouched. */
+@media (min-width:821px){
+  #artLibrary .nest-head{margin-left:0 !important}
+  #artLibrary > .nest-body > #assetsNest > .nest-head,
+  #artLibrary > .nest-body > #monsterNest > .nest-head,
+  #artLibrary > .nest-body > #mapsNest > .nest-head,
+  #artLibrary > .artlib-head{margin-left:auto !important}
+  #artLibrary .nest-body .nest-body .nest-head,
+  #artLibrary .lib-panel > .nest > .nest-head,
+  #artLibrary .nest-body .nest-body .mr-folder-head{
+    min-height:11px;padding:2px 5px;font-size:.8rem;line-height:1.15}
+}
+</style>
 </body>
 </html>
