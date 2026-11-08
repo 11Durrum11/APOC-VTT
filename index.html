@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1657";
+        var BUILD_STAMP = "2026-11-07-1710";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8505,6 +8505,145 @@ function floorConnected(L, cols, rows){
 #artLibrary #tokenLib > .nest{min-width:0;margin:0}
 #artLibrary #tokenLib > .nest.open{grid-column:1/-1}
 </style>
+
+<style id="APOC-V177">
+/* v1.77 — Screen 2 controls sit in the GM/Push/Ambience cluster row. */
+#screen2SendBtn, #screen2MirrorBtn{white-space:nowrap}
+</style>
+<script>
+/* APOC-V177: Screen 2 — a second player display at ?display=2.
+   Screen 1 (?display=1, the Push to TV copy) is unchanged and follows
+   the shared vtt_active key. Screen 2 follows its OWN key
+   vtt_active_2 in the same site_settings store; until a map is sent
+   to it, it MIRRORS Screen 1.
+   How: the engine's own loadActiveMap() polls vtt_active and switches
+   the map. On a ?display=2 page this block (a) remembers the last
+   known vtt_active_2 assignment (sessionStorage, read synchronously
+   at parse time — before the engine initialises), (b) rewrites the
+   engine's vtt_active settings READ to vtt_active_2 at the fetch
+   layer while an assignment exists, so the engine itself drives
+   Screen 2, and (c) polls vtt_active_2 every 4s (read-only) and
+   reloads the display once whenever the assignment changes, so a
+   Send / Mirror lands within seconds instead of at the next
+   60-second engine poll. The display never writes shared state:
+   its only requests are reads.
+   On the CONTROL page it adds the two Screen 2 buttons beside
+   Push to TV (they sit right after the GM/Push/Ambience cluster). */
+(function(){
+  "use strict";
+  var KEY2 = "vtt_active_2";
+  var disp = new URLSearchParams(location.search).get("display");
+
+  /* ================= ?display=2 : Screen 2 display ================= */
+  if (disp === "2") {
+    var SS = "apocS2Target";
+    var stored = null, haveStored = false;
+    try { stored = sessionStorage.getItem(SS); haveStored = stored !== null; } catch (e) {}
+    var assigned = (haveStored && stored && stored !== "__mirror__") ? stored : null;
+
+    if (window.fetch) {
+      var origFetch = window.fetch.bind(window);
+      window.fetch = function(input, init){
+        try {
+          if (assigned) {
+            var url = typeof input === "string" ? input : (input && input.url) || "";
+            if (url.indexOf("/rest/v1/site_settings") >= 0 && /[?&]key=eq\.vtt_active(?:&|$)/.test(url)) {
+              var nu = url.replace("key=eq.vtt_active", "key=eq.vtt_active_2");
+              input = typeof input === "string" ? nu : new Request(nu, input);
+            }
+          }
+        } catch (e) {}
+        return origFetch(input, init);
+      };
+    }
+
+    async function poll(){
+      try {
+        if (typeof db === "undefined" || typeof SETTINGS_TABLE === "undefined") return;
+        var res = await db.from(SETTINGS_TABLE).select("value").eq("key", KEY2).maybeSingle();
+        var id = res && res.data && res.data.value && res.data.value.mapId ? String(res.data.value.mapId) : null;
+        var target = id || "__mirror__";
+        if (!haveStored) {
+          haveStored = true; stored = target;
+          try { sessionStorage.setItem(SS, target); } catch (e) {}
+          if (id) location.reload(); /* boot again with the read-rewrite active from parse time */
+          return;
+        }
+        if (target !== stored) {
+          stored = target;
+          try { sessionStorage.setItem(SS, target); } catch (e) {}
+          location.reload(); /* assignment changed: reboot onto the new target */
+        }
+      } catch (e) { /* read-only poll; a miss just retries next tick */ }
+    }
+    var iv = setInterval(poll, 4000);
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ poll(); });
+    else poll();
+    return;
+  }
+
+  /* ================= control page: Screen 2 buttons ================= */
+  if (disp) return; /* other display copies get no controls */
+  function currentMapId(){
+    try { if (window.__apocShelf && window.__apocShelf.current) return window.__apocShelf.current(); } catch (e) {}
+    var sel = document.getElementById("mapSelect");
+    return sel ? sel.value : null;
+  }
+  function place(){
+    var push = document.getElementById("pushTvBtn");
+    var send = document.getElementById("screen2SendBtn");
+    var mir = document.getElementById("screen2MirrorBtn");
+    if (!push || !send || !mir || !push.parentNode) return;
+    var amb = document.getElementById("ambBtn");
+    var anchor = (amb && amb.parentNode === push.parentNode) ? amb : push;
+    if (anchor.nextSibling !== send) anchor.parentNode.insertBefore(send, anchor.nextSibling);
+    if (send.nextSibling !== mir) send.parentNode.insertBefore(mir, send.nextSibling);
+  }
+  function addControls(){
+    var push = document.getElementById("pushTvBtn");
+    if (!push || !push.parentNode || document.getElementById("screen2SendBtn")) return;
+    var send = document.createElement("button");
+    send.type = "button"; send.className = "btn"; send.id = "screen2SendBtn";
+    send.textContent = "Screen 2: Send current map";
+    var mir = document.createElement("button");
+    mir.type = "button"; mir.className = "btn"; mir.id = "screen2MirrorBtn";
+    mir.textContent = "Screen 2: Mirror";
+    push.parentNode.insertBefore(send, push.nextSibling);
+    push.parentNode.insertBefore(mir, send.nextSibling);
+    send.addEventListener("click", async function(){
+      var id = currentMapId();
+      if (!id) return;
+      send.disabled = true;
+      try {
+        await db.from(SETTINGS_TABLE).upsert(
+          { key: KEY2, value: { mapId: id }, updated_at: new Date().toISOString() },
+          { onConflict: "key" });
+        send.textContent = "Screen 2: Sent ✓";
+      } catch (e) { send.textContent = "Screen 2: Send failed"; }
+      setTimeout(function(){ send.textContent = "Screen 2: Send current map"; send.disabled = false; }, 2200);
+    });
+    mir.addEventListener("click", async function(){
+      mir.disabled = true;
+      try {
+        await db.from(SETTINGS_TABLE).delete().eq("key", KEY2);
+        mir.textContent = "Screen 2: Mirroring ✓";
+      } catch (e) { mir.textContent = "Screen 2: Mirror failed"; }
+      setTimeout(function(){ mir.textContent = "Screen 2: Mirror"; mir.disabled = false; }, 2200);
+    });
+    place();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", addControls);
+  else addControls();
+  addControls();
+  /* keep the pair parked beside the cluster while the v1.76 cluster
+     script settles Push/Ambience next to GM view */
+  var started = Date.now();
+  var timer = setInterval(function(){
+    addControls(); place();
+    if (Date.now() - started > 12000) clearInterval(timer);
+  }, 400);
+})();
+</script>
 
 </body>
 </html>
