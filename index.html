@@ -2943,8 +2943,20 @@ setInterval(loadSharedEntries, 60000);
   });
 
   /* Entering/leaving projection re-renders the player-facing pieces. */
-  new MutationObserver(() => { renderFog(); drawTokens(); renderDraw(); })
-    .observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  new MutationObserver(muts => {
+    /* v2.14: ignore transient Leaflet drag-class flips. Starting a marker
+       drag sets body class "leaflet-dragging"; re-rendering here destroyed
+       the dragged token's element ~23ms into the drag (no dragend, no
+       save — probe213tok timeline). Only genuine class changes (projection,
+       GM/edit state) re-render. */
+    const relevant = muts.some(m => {
+      const oldS = new Set((m.oldValue || "").split(/\s+/).filter(Boolean));
+      const newS = new Set((document.body.className || "").split(/\s+/).filter(Boolean));
+      const diff = [...oldS].filter(c => !newS.has(c)).concat([...newS].filter(c => !oldS.has(c)));
+      return diff.some(c => c !== "leaflet-dragging");
+    });
+    if (relevant) { renderFog(); drawTokens(); renderDraw(); }
+  }).observe(document.body, { attributes: true, attributeFilter: ["class"], attributeOldValue: true });
 
   /* Follow map switches; keep fog and drawings fresh. */
   let lastMapId = currentMapId;
@@ -4827,6 +4839,7 @@ setInterval(loadSharedEntries, 60000);
   }
   function renderLighting(){
     wallFx.clearLayers(); lightFx.clearLayers(); lightEditFx.clearLayers();
+    flickerTints = []; /* v2.14: rebuilt below; the flicker tick styles only these */
     window.__apocLightOn = lightState.enabled;
     const playerView = !effectiveGm() || lightPreview;
     /* GM material: wall + door lines and light-source handles (layer 3). */
@@ -4880,11 +4893,11 @@ setInterval(loadSharedEntries, 60000);
     const rect = [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]];
     if (!playerView) {
       /* GM sees everything: tints only, no darkness. */
-      for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10 * (1 + ((t.f || 1) - 1) * 3), interactive: false })); /* v2.01: the flame shimmer lives in this tint alpha only — geometry never moves */
+      for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10 * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.10, src: t.src }); } /* v2.01: the flame shimmer lives in this tint alpha only — geometry never moves. v2.14: the layer is collected so the flicker tick can re-style it WITHOUT re-rendering the scene (see flickerTick). */
       manageFlicker(lightState.lights.some(s => s.flame && s.on !== false));
       return;
     }
-    for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16 * (1 + ((t.f || 1) - 1) * 3), interactive: false })); /* v2.01: tint-alpha shimmer only */
+    for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16 * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.16, src: t.src }); } /* v2.01: tint-alpha shimmer only. v2.14: collected for the non-destructive flicker tick. */
     if (brightPolys.length) maskedShade(lightFx, rect, brightPolys.map(toLL), 0.38, "apocBrightMask"); /* v2.01: mask-union shades — overlapping lights can no longer darken each other */
     maskedShade(lightFx, rect, dimPolys.map(toLL), 0.93, "apocDimMask");
     const visibleAt = (x, y) => { const [ux, uy] = toUnits({ x, y }); return dimPolys.some(p => pointInPolyU(ux, uy, p)); };
@@ -4899,9 +4912,23 @@ setInterval(loadSharedEntries, 60000);
     }
     manageFlicker(lightState.lights.some(s => s.flame && s.on !== false));
   }
+  /* v2.14: the flicker tick must NOT re-render the scene. renderLighting()
+     clears and rebuilds every light handle marker; at the 200ms flicker
+     cadence the handle under the cursor was destroyed between mousedown
+     and mouseup, so clicks on a light (open the editor) never fired and
+     handle drags broke (probe213 fix build, 2026-11-08). The tick now
+     only re-styles the tint polygons the last full render collected. */
+  let flickerTints = [];
+  function flickerTick(){
+    if (!lightState.enabled) return;
+    for (const ft of flickerTints) {
+      if (!lightFx.hasLayer(ft.layer)) continue;
+      ft.layer.setStyle({ fillOpacity: ft.base * (1 + ((flickerFactor(ft.src) - 1) * 3)) });
+    }
+  }
   function manageFlicker(want){
     const ok = want && lightState.enabled && lightBlockers().length <= 120 && lightState.lights.length <= 25 && !document.hidden;
-    if (ok && !lightFlickerTimer) lightFlickerTimer = setInterval(() => { if (document.hidden) return; renderLighting(); }, 200);
+    if (ok && !lightFlickerTimer) lightFlickerTimer = setInterval(() => { if (document.hidden) return; flickerTick(); }, 200); /* v2.14: was renderLighting() — a full scene rebuild 5x/second destroyed the light handle nodes mid-click */
     if (!ok && lightFlickerTimer) { clearInterval(lightFlickerTimer); lightFlickerTimer = null; }
   }
   document.addEventListener("visibilitychange", () => renderLighting());
@@ -10867,8 +10894,15 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     var b = document.getElementById("dmLockBtn");
     if (b) b.textContent = unlocked() ? "🔓 Editing" : "🔒 Locked";
     if (document.body) {
-      document.body.classList.add("vtt-dm-armed");
-      document.body.classList.toggle("vtt-dm-edit", editOn());
+      /* v2.14: only touch the class attribute when the state differs.
+         Re-asserting it every 2s tick queued mutation records that fired
+         the fog module's body-class observer -> drawTokens -> the lighting
+         wrapper's renderLighting(), destroying/rebuilding every light
+         handle and token node every 2 seconds (clicks/drags straddling a
+         tick died). */
+      if (!document.body.classList.contains("vtt-dm-armed")) document.body.classList.add("vtt-dm-armed");
+      var wantEdit = editOn();
+      if (document.body.classList.contains("vtt-dm-edit") !== wantEdit) document.body.classList.toggle("vtt-dm-edit", wantEdit);
     }
   }
   function tick(){ ensureBar(); paint(); applyAll(); }
