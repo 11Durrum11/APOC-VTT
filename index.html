@@ -7142,7 +7142,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0248";
+        var BUILD_STAMP = "2026-11-08-0315";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10297,7 +10297,7 @@ function floorConnected(L, cols, rows){
     rb.textContent = "Reset layout";
     rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
     rb.addEventListener("click", function(){
-      [KEY, "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      [KEY, "apocVttLibSubOrderV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     titleBubble.appendChild(rb);
@@ -10725,7 +10725,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     rl.addEventListener("click", function(){
       var b = document.getElementById("layoutResetBtn");
       if (b) { b.click(); return; }
-      ["apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      ["apocVttLibSubOrderV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
@@ -13546,5 +13546,194 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 }
 #mapDdPanel .mapdd-subhead{font-size:.72rem;padding:5px 8px 1px 18px;color:#59637a;text-transform:none;letter-spacing:.02em}
 </style>
+<style id="APOC-V208">
+/* APOC-V208 (Shaun, live voice call in the VTT chat 2026-11-08 ~03:02) —
+   every Art Library SUBCATEGORY button (asset category/subcategory
+   heads, monster-type heads, map folder heads, lib-panel heads — every
+   .nest-head below section level) is MANUALLY MOVABLE: grab one and it
+   reorders live inside its own group, the rest of the group reflows
+   around it. The order is THIS DEVICE'S only (localStorage
+   apocVttLibSubOrderV1, never shared state) and "Reset layout" clears
+   it back to the shipped order. A plain click still opens/closes the
+   subcategory — a 7px movement threshold keeps click and drag apart.
+   Not DM-gated: a Library layout control, like the Library float drag
+   (the v1.83 principle). Desktop scope matches APOC-V204/APOC-V200 —
+   the phone drawer is untouched (touch scrolls win there). */
+@media (min-width:821px){
+  #artLibrary .nest-head.libsub-head{cursor:grab;touch-action:none}
+  #artLibrary .nest-head.libsub-head:active{cursor:grabbing}
+  #artLibrary .nest.libsub-dragging{outline:2px solid #2f62d6;outline-offset:-2px;opacity:.88;position:relative;z-index:6}
+}
+</style>
+<script>
+/* APOC-V208 — draggable Art Library subcategory buttons (see the style
+   block above for the order). Movement model: REORDER within the
+   button's own group (its parent container) — the dragged nest moves
+   in the DOM as the pointer crosses its siblings, so the stack reflows
+   live; on release the group's new order is saved per device. */
+(function(){
+  "use strict";
+  var lib = document.getElementById("artLibrary");
+  if (!lib) return;
+  var KEY = "apocVttLibSubOrderV1", THRESH = 7;
+  function topBody(){ return lib.querySelector(":scope > .nest-body"); }
+  function headOf(nest){ return nest ? nest.querySelector(":scope > .nest-head") : null; }
+  function isSubUnit(el){
+    if (!el || !el.classList || !el.classList.contains("nest") || el === lib) return false;
+    var tb = topBody();
+    if (tb && el.parentElement === tb) return false; /* section nests keep their stack */
+    return !!headOf(el);
+  }
+  function unitsOf(container){
+    var out = [];
+    for (var i = 0; i < container.children.length; i++)
+      if (isSubUnit(container.children[i])) out.push(container.children[i]);
+    return out;
+  }
+  function labelOf(head){
+    var t = head ? (head.textContent || "") : "";
+    t = t.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "");
+    t = t.replace(/\s*\(\d+(\s*\/\s*\d+)?\)\s*$/, "");
+    return t || "(untitled)";
+  }
+  function slug(s){
+    return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "x";
+  }
+  function uidOf(unit, siblings){
+    var base = slug(labelOf(headOf(unit))), n = 0;
+    for (var i = 0; i < siblings.length; i++){
+      if (siblings[i] === unit) break;
+      if (slug(labelOf(headOf(siblings[i]))) === base) n++;
+    }
+    return n ? base + "~" + (n + 1) : base;
+  }
+  function segOf(el){
+    if (el.id) return "#" + el.id;
+    if (el.classList.contains("nest")) return slug(labelOf(headOf(el)));
+    var c = (el.className || "").split(/\s+/)[0];
+    return c || el.tagName.toLowerCase();
+  }
+  function containerKey(container){
+    var segs = [], el = container, guard = 0;
+    while (el && el !== lib && guard++ < 12){
+      if (!el.classList.contains("nest-body")) segs.unshift(segOf(el));
+      el = el.parentElement;
+    }
+    return segs.join("/");
+  }
+  function load(){
+    try { var v = JSON.parse(localStorage.getItem(KEY) || "null"); if (v && v.containers) return v; } catch(e){}
+    return { containers: {} };
+  }
+  function save(store){ try { localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} }
+  function persist(container){
+    var store = load(), units = unitsOf(container), ids = [];
+    for (var i = 0; i < units.length; i++) ids.push(uidOf(units[i], units));
+    store.containers[containerKey(container)] = ids;
+    save(store);
+  }
+
+  var applying = false;
+  function applyContainer(container, store){
+    var units = unitsOf(container);
+    if (units.length < 2) return;
+    var want = store.containers[containerKey(container)];
+    if (!want || !want.length) return;
+    var byId = {}, i, id;
+    for (i = 0; i < units.length; i++) byId[uidOf(units[i], units)] = units[i];
+    var seq = [], used = {};
+    for (i = 0; i < want.length; i++){ id = want[i]; if (byId[id] && !used[id]){ seq.push(byId[id]); used[id] = 1; } }
+    for (i = 0; i < units.length; i++){ id = uidOf(units[i], units); if (!used[id]){ seq.push(units[i]); used[id] = 1; } }
+    var same = seq.length === units.length;
+    if (same) for (i = 0; i < seq.length; i++) if (seq[i] !== units[i]){ same = false; break; }
+    if (same) return;
+    var anchor = units[units.length - 1].nextSibling;
+    applying = true;
+    for (i = 0; i < seq.length; i++) container.insertBefore(seq[i], anchor);
+    applying = false;
+  }
+  function tagHeads(){
+    var heads = lib.querySelectorAll(".nest-head");
+    for (var i = 0; i < heads.length; i++)
+      if (isSubUnit(heads[i].parentElement)) heads[i].classList.add("libsub-head");
+  }
+  function applyAll(){
+    tagHeads();
+    var store = load();
+    if (!Object.keys(store.containers).length) return;
+    var containers = [], nests = lib.querySelectorAll(".nest"), i, p;
+    for (i = 0; i < nests.length; i++){
+      if (!isSubUnit(nests[i])) continue;
+      p = nests[i].parentElement;
+      if (p && containers.indexOf(p) === -1) containers.push(p);
+    }
+    for (i = 0; i < containers.length; i++) applyContainer(containers[i], store);
+  }
+
+  /* ---- drag: pointerdown nominates, 7px of travel commits ---- */
+  var cand = null, drag = null, supUnit = null, supUntil = 0;
+  lib.addEventListener("pointerdown", function(e){
+    if (e.button !== undefined && e.button !== 0) return;
+    var h = e.target && e.target.closest ? e.target.closest(".nest-head") : null;
+    if (!h || !lib.contains(h)) return;
+    var unit = h.parentElement;
+    if (!isSubUnit(unit)) return;
+    cand = { unit: unit, x: e.clientX, y: e.clientY, id: e.pointerId };
+  });
+  window.addEventListener("pointermove", function(e){
+    if (!cand || e.pointerId !== cand.id) return;
+    if (!drag){
+      var dx = e.clientX - cand.x, dy = e.clientY - cand.y;
+      if (dx * dx + dy * dy < THRESH * THRESH) return;
+      drag = { unit: cand.unit, container: cand.unit.parentElement };
+      drag.unit.classList.add("libsub-dragging");
+    }
+    if (e.cancelable) e.preventDefault();
+    var container = drag.container, unit = drag.unit, sibs = unitsOf(container), i, r;
+    var before = null, afterLast = null;
+    for (i = 0; i < sibs.length; i++){
+      if (sibs[i] === unit) continue;
+      r = sibs[i].getBoundingClientRect();
+      var cy = r.top + r.height / 2, cx = r.left + r.width / 2;
+      if (e.clientY < cy - 2 || (Math.abs(e.clientY - cy) <= 2 && e.clientX < cx)){ before = sibs[i]; break; }
+      afterLast = sibs[i];
+    }
+    if (before){ if (unit.nextSibling !== before) container.insertBefore(unit, before); }
+    else if (afterLast){ if (afterLast.nextSibling !== unit) container.insertBefore(unit, afterLast.nextSibling); }
+  }, { passive: false });
+  function endDrag(e){
+    if (cand && e.pointerId !== undefined && e.pointerId !== cand.id) return;
+    if (drag){
+      drag.unit.classList.remove("libsub-dragging");
+      persist(drag.container);
+      supUnit = drag.unit; supUntil = Date.now() + 800;
+      drag = null;
+    }
+    cand = null;
+  }
+  window.addEventListener("pointerup", endDrag);
+  window.addEventListener("pointercancel", endDrag);
+  /* the click that ends a drag must not also toggle the subcategory:
+     swallow it in the capture phase, before the page's delegated
+     .nest-head toggle (a bubble-phase document listener) can see it */
+  document.addEventListener("click", function(e){
+    if (!supUnit || Date.now() > supUntil) return;
+    var h = e.target && e.target.closest ? e.target.closest(".nest-head") : null;
+    if (h && h.parentElement === supUnit){ e.stopPropagation(); e.preventDefault(); supUnit = null; }
+  }, true);
+
+  function init(){ applyAll(); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+  /* lazy groups render after load (folders, monster types, uploaded
+     categories): re-apply the saved order as they appear */
+  var moTimer = null;
+  new MutationObserver(function(){
+    if (applying || drag || moTimer) return;
+    moTimer = setTimeout(function(){ moTimer = null; applyAll(); }, 120);
+  }).observe(lib, { childList: true, subtree: true });
+})();
+</script>
+
 </body>
 </html>
