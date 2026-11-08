@@ -1360,7 +1360,7 @@ setInterval(loadSharedEntries, 60000);
   let bounds = [[0, 0], [MH, MW]];
   let baseOverlay = L.imageOverlay("assets/maps/faerun-3e.webp", bounds, { pane: "layerMap" }).addTo(map);
   map.fitBounds([[MH * (1 - 0.34), MW * 0.02], [MH * (1 - 0.005), MW * 0.38]]);
-  map.setMaxBounds([[-MH * 0.08, -MW * 0.08], [MH * 1.08, MW * 1.08]]);
+  map.setMaxBounds([[-MH, -MW], [MH * 2, MW * 2]]); /* v1.88: padded a full image-size on every side — the +-8% bounds were smaller than the viewport when zoomed out, so Leaflet force-centred the view and every pan snapped back to the middle (Shaun, 2026-11-07 ~19:02) */
   const layer = L.layerGroup().addTo(map);
   const veilLayer = L.layerGroup().addTo(map);
   function drawVeil(){
@@ -3089,7 +3089,7 @@ setInterval(loadSharedEntries, 60000);
     mapRot = 0; /* rotation is per map: the incoming map starts natural until its own stored rotation lands via loadVttSettings */
     MW = def.w; MH = def.h; CELL = def.cell;
     bounds = [[0, 0], [MH, MW]];
-    map.setMaxBounds([[-MH * 0.08, -MW * 0.08], [MH * 1.08, MW * 1.08]]);
+    map.setMaxBounds([[-MH, -MW], [MH * 2, MW * 2]]); /* v1.88: padded a full image-size on every side — the +-8% bounds were smaller than the viewport when zoomed out, so Leaflet force-centred the view and every pan snapped back to the middle (Shaun, 2026-11-07 ~19:02) */
     map.removeLayer(baseOverlay);
     baseOverlay = L.imageOverlay(def.img, bounds, { pane: "layerMap" }).addTo(map);
     baseOverlay.bringToBack();
@@ -3162,7 +3162,7 @@ setInterval(loadSharedEntries, 60000);
     const idAtStart = currentMapId, rotAtStart = mapRot;
     const def = MAPS[currentMapId];
     bounds = frameBounds();
-    map.setMaxBounds([[-frameH() * 0.08, -frameW() * 0.08], [frameH() * 1.08, frameW() * 1.08]]);
+    map.setMaxBounds([[-frameH(), -frameW()], [frameH() * 2, frameW() * 2]]); /* v1.88: padded, see above */
     if (def) {
       let url = def.img;
       try { url = await rotatedMapUrl(def); } catch(e) { url = def.img; }
@@ -6889,7 +6889,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1908";
+        var BUILD_STAMP = "2026-11-07-1924";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9508,10 +9508,10 @@ function floorConnected(L, cols, rows){
     if (!closedState()) return;
     var de = document.documentElement, ih = window.innerHeight;
     var slack = ih - de.scrollHeight;
-    if (slack >= 8) return;
+    if (slack >= 1) return; /* v1.88: was 8 — the bubble now fills to the screen bottom (APOC-V188), so the guard only trims a genuine overflow */
     var am = document.getElementById("apocMap"); if (!am) return;
     var cur = am.getBoundingClientRect().height;
-    var nh = Math.max(240, Math.round(cur - (8 - slack)));
+    var nh = Math.max(240, Math.round(cur - (1 - slack))); /* v1.88: slack target 1, see above */
     if (nh >= cur) return;
     am.style.height = nh + "px";
     window.__v179.trimmed += Math.round(cur - nh);
@@ -10425,7 +10425,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     }
     if (!floated || repo.classList.contains("per-dragging")) return;
     var mr = rect(am); if (!mr || mr.height < 50) return;
-    var B = mr.bottom;
+    var B = window.innerHeight; /* v1.88: the opened floated Library runs to the SCREEN bottom, floating over the buttons (Shaun's consolidated order) — the v1.87 anchor stopped at the map's bottom edge */
     if (!snap) snap = { top: repo.style.top, height: repo.style.height };
     var rr = rect(repo);
     var top = rr.top;
@@ -10471,6 +10471,229 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (lib && lib.classList.contains("open")) anchorLib();
     guardRepo();
   }, 1200);
+})();
+</script>
+
+
+<style id="APOC-V188">
+/* v1.88 — (b) the bubble's last bottom padding goes: the panel's
+   bottom edge is the page's bottom edge, and APOC-V188 grows the
+   map window until that edge touches the screen bottom. */
+.page{padding-bottom:0}
+/* (d) resize handles on the floated Library box — normal view,
+   dark blue like every treatment outline (Shaun, 2026-11-07
+   18:02). Shown only while the box floats. */
+.v188-rsz{position:absolute;z-index:1200;display:none;touch-action:none;-webkit-user-select:none;user-select:none}
+.map-repo.per-float > .v188-rsz{display:block}
+.v188-rsz-r{right:-4px;top:0;width:9px;height:100%;cursor:ew-resize}
+.v188-rsz-b{left:0;bottom:-4px;width:100%;height:9px;cursor:ns-resize}
+.v188-rsz-br{right:-6px;bottom:-6px;width:16px;height:16px;cursor:nwse-resize}
+.v188-rsz:hover{background:rgba(30,64,175,.45);border-radius:4px}
+</style>
+
+<script>
+/* APOC-V188 (Shaun, voice calls 2026-11-07 ~18:40-19:06 + "do
+   whatever you have to do to make things right") — the items the
+   v1.87 build did not carry:
+   (b) MAP BUBBLE TO THE BOTTOM OF THE SCREEN: in the fully
+       closed state the map window grows by the measured gap
+       between the page's bottom and the viewport's bottom, so
+       the bubble uses all the real estate and the closed page
+       still has no scrollbar (any overshoot is handed back).
+   (a) LIBRARY, the rest: the floated box's open anchor is
+       re-pointed at the screen bottom in the APOC-V187 block
+       (this build); here, the inner library is filled to its
+       box while open, and the DOCKED open overlay panel is
+       sized to the screen bottom, contents scrolling inside.
+   (d) LIBRARY BOX RESIZE: the floated box takes right / bottom
+       / corner drags in the normal view (moving it is the
+       v1.83 grip drag). Width merges into the perimeter float
+       record; height persists under its own key so other
+       writers of the record can't drop it.
+   (c) MAP VIEW PERSISTENCE: the pan fix itself is the padded
+       maxBounds in the engine (this build); this block saves
+       the view (centre + zoom) per device per map and restores
+       it on load / map switch — so where Shaun leaves the map
+       is where it stays, across reloads too. Saves happen ONLY
+       after real user interaction with the map (pointer/wheel):
+       the engine's own fit on load/switch fires moveend, and an
+       unguarded saver would overwrite the dropped view with
+       that fit before the restore ever ran. Restore fires once
+       per map per load, after the fit settles. TV/display
+       copies never run this block.
+   Everything here is per-device localStorage: zero shared
+   writes. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var MQ = window.matchMedia("(min-width: 821px)");
+  var PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1",
+      HKEY = "apocVttLibBoxH", VKEY = "apocVttViewV1";
+  function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
+  function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  function rect(el){ return el ? el.getBoundingClientRect() : null; }
+  function blocked(){ return !MQ.matches || !!document.fullscreenElement ||
+    document.body.classList.contains("displaying") ||
+    document.body.classList.contains("map-expanded") ||
+    document.body.classList.contains("map-fs"); }
+  function closedState(){
+    if (document.fullscreenElement) return false;
+    if (document.querySelector(".artlib.open, .nest.open")) return false;
+    var pcs = document.querySelectorAll(".per-collapsible");
+    for (var i = 0; i < pcs.length; i++) if (!pcs[i].classList.contains("per-collapsed")) return false;
+    return true;
+  }
+
+  /* ================= (b) bubble fill ================= */
+  function bubbleFill(){
+    if (blocked() || !closedState()) return;
+    var page = document.querySelector(".page"), am = document.getElementById("apocMap");
+    if (!page || !am) return;
+    var ih = window.innerHeight;
+    var gap = Math.floor(ih - page.getBoundingClientRect().bottom) - 1;
+    if (gap <= 0) return;
+    var cur = am.getBoundingClientRect().height;
+    am.style.height = Math.round(cur + gap) + "px";
+    var over = document.documentElement.scrollHeight - ih;
+    if (over > 0) am.style.height = Math.round(cur + gap - over) + "px";
+    try { if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false }); } catch(e) {}
+  }
+
+  /* ================= (a) library fill + docked overlay ================= */
+  function repo(){ return document.querySelector(".map-repo"); }
+  function lib(){ return document.getElementById("artLibrary"); }
+  var libFilled = false;
+  function libTick(){
+    var rp = repo(), lb = lib(); if (!rp || !lb) return;
+    buildHandles();
+    if (!lb.classList.contains("open")) {
+      if (libFilled) { lb.style.height = ""; if (lb.style.marginBottom) lb.style.marginBottom = ""; libFilled = false; }
+      var ov0 = lb.querySelector(":scope > .nest-body");
+      if (ov0 && ov0.dataset.v188) { ov0.style.height = ""; ov0.style.maxHeight = ""; delete ov0.dataset.v188; }
+      applySavedH();
+      return;
+    }
+    if (blocked()) return;
+    var ih = window.innerHeight;
+    if (rp.classList.contains("per-float")) {
+      /* the APOC-V187 anchor (re-pointed at the screen bottom in
+         this build) sizes the box; the inner library fills it. */
+      var lr = rect(lb), rr = rect(rp);
+      if (lr && rr && rr.height > 0) {
+        var lh = Math.round(lr.height + (rr.bottom - 2 - lr.bottom));
+        if (lh > 80 && Math.abs(lr.height - lh) > 1) { lb.style.height = lh + "px"; libFilled = true; }
+        if (lb.style.marginBottom) lb.style.marginBottom = "";
+      }
+    } else {
+      /* docked: the open overlay panel runs to the screen bottom */
+      var body = lb.querySelector(":scope > .nest-body");
+      if (body) {
+        var br = rect(body);
+        if (br && br.height > 0) {
+          var bh = Math.round(br.height + (ih - br.bottom));
+          if (bh > 120 && Math.abs(br.height - bh) > 1) { body.style.height = bh + "px"; body.style.maxHeight = "none"; body.dataset.v188 = "1"; }
+        }
+      }
+    }
+  }
+  function applySavedH(){
+    var rp = repo(), lb = lib(); if (!rp || !rp.classList.contains("per-float")) return;
+    if (rp.classList.contains("per-dragging")) return;
+    if (lb && lb.classList.contains("open")) return;
+    var h = 0; try { h = parseInt(localStorage.getItem(HKEY) || "0", 10) || 0; } catch(e) {}
+    if (h >= 60 && Math.abs(rp.getBoundingClientRect().height - h) > 1) rp.style.height = h + "px";
+  }
+
+  /* ================= (d) resize handles ================= */
+  var rsz = null;
+  function buildHandles(){
+    var rp = repo(); if (!rp || rp.querySelector(".v188-rsz")) return;
+    [["v188-rsz v188-rsz-r", "r"], ["v188-rsz v188-rsz-b", "b"], ["v188-rsz v188-rsz-br", "br"]].forEach(function(pair){
+      var d = document.createElement("div");
+      d.className = pair[0]; d.dataset.mode = pair[1];
+      d.title = "Drag to resize the Art Library box";
+      rp.appendChild(d);
+    });
+  }
+  window.addEventListener("pointerdown", function(e){
+    if (rsz || e.button > 0 || !MQ.matches) return;
+    var t = e.target;
+    if (!t || !t.classList || !t.classList.contains("v188-rsz")) return;
+    var rp = repo(); if (!rp || !rp.classList.contains("per-float")) return;
+    var fp = loadJ(FKEY); if (fp["per-repo"] && fp["per-repo"].lock) return;
+    e.preventDefault(); e.stopPropagation();
+    var rr = rect(rp);
+    rsz = { mode: t.dataset.mode, sx: e.clientX, sy: e.clientY, w: rr.width, h: rr.height };
+    try { t.setPointerCapture(e.pointerId); } catch(err) {}
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!rsz) return;
+    var rp = repo(); if (!rp) return;
+    var pn = document.getElementById("mapPanel");
+    var pw = pn ? pn.getBoundingClientRect().width : 2600;
+    if (rsz.mode.indexOf("r") >= 0) rp.style.width = Math.round(Math.max(220, Math.min(rsz.w + (e.clientX - rsz.sx), pw - 12))) + "px";
+    if (rsz.mode.indexOf("b") >= 0) rp.style.height = Math.round(Math.max(60, Math.min(rsz.h + (e.clientY - rsz.sy), window.innerHeight))) + "px";
+  }, true);
+  function endRsz(){
+    if (!rsz) return;
+    rsz = null;
+    var rp = repo(); if (!rp) return;
+    var rr = rect(rp);
+    var st = loadJ(PKEY);
+    if (st.repo && st.repo.float) { st.repo.float.w = Math.round(rr.width); saveJ(PKEY, st); }
+    try { localStorage.setItem(HKEY, String(Math.round(rr.height))); } catch(e) {}
+  }
+  window.addEventListener("pointerup", endRsz, true);
+  window.addEventListener("pointercancel", endRsz, true);
+
+  /* ================= (c) view persistence ================= */
+  var interacted = false, restoring = false, saveT = null;
+  var seenId = null, seenSince = 0, restoredFor = null;
+  function curMapId(){ var s = document.getElementById("mapSelect"); return s ? s.value : null; }
+  function saveView(){
+    var m = window.map; if (!m || restoring || !interacted) return;
+    var id = curMapId(); if (!id) return;
+    var all = loadJ(VKEY);
+    var c = m.getCenter();
+    all[id] = { c: [c.lat, c.lng], z: m.getZoom() };
+    saveJ(VKEY, all);
+  }
+  function tryRestore(){
+    var m = window.map; if (!m) return;
+    var id = curMapId(); if (!id) return;
+    var now = Date.now();
+    if (id !== seenId) { seenId = id; seenSince = now; return; }
+    if (restoredFor === id || now - seenSince < 1200) return;
+    var all = loadJ(VKEY), v = all[id];
+    restoredFor = id;
+    if (!v || !v.c) return;
+    restoring = true;
+    try { m.setView(v.c, v.z, { animate: false }); } catch(e) {}
+    setTimeout(function(){ restoring = false; }, 500);
+  }
+  (function waitMap(){
+    var m = window.map;
+    if (m && m.on) {
+      var el = document.getElementById("apocMap");
+      if (el) {
+        el.addEventListener("pointerdown", function(){ interacted = true; }, true);
+        el.addEventListener("wheel", function(){ interacted = true; }, true);
+      }
+      m.on("moveend zoomend", function(){ clearTimeout(saveT); saveT = setTimeout(saveView, 300); });
+      setInterval(tryRestore, 700);
+    } else setTimeout(waitMap, 150);
+  })();
+
+  /* ================= scheduling ================= */
+  document.addEventListener("click", function(){
+    setTimeout(bubbleFill, 1000); setTimeout(bubbleFill, 1800);
+    setTimeout(libTick, 1500); setTimeout(libTick, 2400);
+  }, true);
+  window.addEventListener("resize", function(){ setTimeout(bubbleFill, 900); setTimeout(libTick, 500); });
+  window.addEventListener("pointerup", function(){ setTimeout(libTick, 160); }, true);
+  [2400, 3600, 5200, 7000].forEach(function(ms){ setTimeout(function(){ bubbleFill(); libTick(); }, ms); });
+  setInterval(libTick, 450);
+  setInterval(bubbleFill, 2500);
 })();
 </script>
 
