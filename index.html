@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1815";
+        var BUILD_STAMP = "2026-11-07-1818";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9123,6 +9123,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
 .fp-h:hover,.fp-h:active{background:rgba(30,64,175,.6)!important}
 .map-rsz:hover{background:rgba(30,64,175,.45)!important}
 .fp-piece-float,.per-float{outline:2px solid rgba(30,64,175,.65);outline-offset:1px}
+.per-dragging{outline:2px dashed #1e40af!important}
 #zoomBar input[type=range],#zoomBar .zb-pinch input{accent-color:#1e40af!important}
 </style>
 
