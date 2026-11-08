@@ -720,6 +720,7 @@ body.map-expanded .stage-row{display:contents}
           <div class="td-ui">
             <button type="button" class="btn primary" id="tdBackBtn">Back to 2D</button>
             <button type="button" class="btn" id="tdAssetsBtn">Assets</button>
+            <label class="td-zoom" title="3D zoom — always works, like the 2D slider. The Pinch checkbox governs only gestures (wheel + two-finger pinch)." style="display:flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;letter-spacing:.04em;color:#cfd3da">Zoom <input type="range" id="tdZoomSlider" min="0" max="100" step="1" value="50" aria-label="3D zoom" style="width:110px;accent-color:#1e40af"></label>
             <span class="td-hint" id="tdStatus"></span>
           </div>
         </div>
@@ -4649,9 +4650,10 @@ setInterval(loadSharedEntries, 60000);
      State per map in the shared store, key vtt_light / vtt_light_<mapId>:
      { enabled, walls:[{id,kind:"wall"|"door"|"window",a:[x,y],b:[x,y],open}],
        lights:[{id,name,x,y,bright,dim,color,flame}] } — positions in map %,
-     radii in feet (converted with the map's shared scale). Windows (v1.60)
-     never block: light and vision pass straight through them; they are
-     drawn as boundaries in GM view and persist with the walls. Realtime +
+     radii in feet (converted with the map's shared scale). Windows block
+     light and vision while CLOSED and pass both while OPEN (v1.90, the
+     same rule as doors; v1.60 had them never blocking); they are drawn
+     as boundaries in GM view and persist with the walls. Realtime +
      30-second refresh, same pattern as fog/drawings.
      Visibility: raycast polygon per emitter — rays only at wall-endpoint
      angles (±0.0001 rad), nearest segment hit clamped to the radius, arc
@@ -4724,12 +4726,13 @@ setInterval(loadSharedEntries, 60000);
     const segs = [];
     for (const w of lightState.walls) {
       if (w.kind === "door" && w.open) continue;
-      if (w.kind === "window") continue; /* v1.60: windows never occlude — light and vision pass straight through */
+      if (w.kind === "window" && w.open) continue; /* v1.90: a CLOSED window occludes like a wall (light + vision); an OPEN window lets both through — the same rule as doors. (v1.60 had windows never occluding.) */
       const a = toUnits({ x: w.a[0], y: w.a[1] }), b = toUnits({ x: w.b[0], y: w.b[1] });
       segs.push([a[0], a[1], b[0], b[1]]);
     }
     return segs;
   }
+  window.__apocLightTest = { blockers: lightBlockers, visPoly, pointInPolyU };
   function lightIcon(src){
     return L.divIcon({ className: "light-icon", html: `<span class="light-dot" style="background:${esc(src.color || "#ffb347")};box-shadow:0 0 14px 5px ${esc(src.color || "#ffb347")}"></span><span class="light-name">${esc(src.name || "Light")}</span>`, iconAnchor: [9, 9] });
   }
@@ -4761,8 +4764,8 @@ setInterval(loadSharedEntries, 60000);
       for (const w of lightState.walls) {
         const a = toLatLng(w.a[0], w.a[1]), b = toLatLng(w.b[0], w.b[1]);
         if (w.kind === "door") wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }));
-        else if (w.kind === "window") { /* v1.60: glass — dark-blue frame line under a pale-blue pane line */
-          wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#3d7ea6", weight: 5, opacity: 0.9, interactive: false }));
+        else if (w.kind === "window") { /* glass — dark-blue frame line under a pale-blue pane line; the frame dashes while OPEN (the door convention) */
+          wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#3d7ea6", weight: 5, opacity: 0.9, dashArray: w.open ? "3 6" : null, interactive: false }));
           wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#bfe6f5", weight: 2, opacity: 0.95, interactive: false }));
         }
         else wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#9aa0a8", weight: 3, interactive: false }));
@@ -6651,13 +6654,19 @@ function floorConnected(L, cols, rows){
         const lintelH = (10 / feetPerSquare) - hU;
         if (lintelH > 0.05) { const lin = new THREE.Mesh(new THREE.BoxGeometry(len, lintelH, 0.22), wallMat); lin.position.set((ax + bx) / 2, hU + lintelH / 2, (az + bz) / 2); lin.rotation.y = -ang; wallsGrp.add(lin); }
       } else if (w.kind === "window") {
-        /* v1.60: a window stands as a glass pane on a sill with a lintel, not a solid wall */
+        /* a window stands as a glass pane on a sill with a lintel, not a solid wall.
+           v1.90: the pane swings on a hinge at end A while OPEN — the 3D reflection
+           of the shared open state (a closed window now occludes in 2D lighting too) */
         const sill = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.32, 0.26), wallMat);
         sill.position.set((ax + bx) / 2, hU * 0.16, (az + bz) / 2); sill.rotation.y = -ang; wallsGrp.add(sill);
         const linW = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.18, 0.26), wallMat);
         linW.position.set((ax + bx) / 2, hU * 0.91, (az + bz) / 2); linW.rotation.y = -ang; wallsGrp.add(linW);
+        const winHinge = new THREE.Group(); winHinge.position.set(ax, 0, az); winHinge.rotation.y = -ang;
         const glass = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.5, 0.06), new THREE.MeshStandardMaterial({ color: 0x9fd4ee, transparent: true, opacity: 0.4, roughness: 0.1 }));
-        glass.position.set((ax + bx) / 2, hU * 0.57, (az + bz) / 2); glass.rotation.y = -ang; wallsGrp.add(glass);
+        glass.position.set(len / 2, hU * 0.57, 0); winHinge.add(glass);
+        winHinge.userData.tdWindowId = w.id; winHinge.userData.tdOpen = !!w.open;
+        if (w.open) winHinge.rotation.y = -ang + THREE.MathUtils.degToRad(100);
+        wallsGrp.add(winHinge);
       } else {
         const seg = new THREE.Mesh(new THREE.BoxGeometry(len, hU, 0.24), wallMat);
         seg.position.set((ax + bx) / 2, hU / 2, (az + bz) / 2); seg.rotation.y = -ang;
@@ -6854,7 +6863,19 @@ function floorConnected(L, cols, rows){
         if (v) TD.drag.grp.position.set(v.x, 0, v.z);
         return;
       }
-      if (ptrs.size === 2) return; /* pinch handled on up/down deltas only — wheel/pinch zoom below */
+      if (ptrs.size === 2) {
+        /* v1.90: real two-finger pinch zoom (v1.89 and earlier had the
+           gesture ignored here — the only 3D zoom was the wheel). It is
+           a GESTURE zoom, so the Pinch checkbox governs it through
+           window.__apocPinchOn, exactly like the wheel and the 2D
+           gestures; the 3D zoom slider above always zooms regardless. */
+        if (window.__apocPinchOn && !window.__apocPinchOn()) { TD.pinchD = 0; return; }
+        const [q1, q2] = [...ptrs.values()];
+        const dNow = Math.hypot(q1.x - q2.x, q1.y - q2.y);
+        if (TD.pinchD > 0 && dNow > 0) TD.cam.dist = Math.max(4, Math.min(160, TD.cam.dist * (TD.pinchD / dNow)));
+        TD.pinchD = dNow;
+        return;
+      }
       if (e.shiftKey || e.buttons === 4 || e.buttons === 2) {
         const s = TD.cam.dist / 220;
         const sin = Math.sin(TD.cam.az), cos = Math.cos(TD.cam.az);
@@ -6866,6 +6887,7 @@ function floorConnected(L, cols, rows){
     });
     async function endPtr(e){
       ptrs.delete(e.pointerId);
+      if (ptrs.size < 2) TD.pinchD = 0;
       if (TD.drag && ptrs.size === 0) {
         const { tk, grp } = TD.drag; TD.drag = null;
         /* v1.64: the drag plane is the rotated frame — convert back to the
@@ -6886,6 +6908,24 @@ function floorConnected(L, cols, rows){
     el.addEventListener("contextmenu", e => e.preventDefault());
   }
   $("view3dBtn").addEventListener("click", () => { if (TD.active) exit3D(false); else enter3D(false); });
+  /* v1.90: the 3D view's own zoom slider. The 2D zoom bar hides in 3D
+     (its sync() keys off the 2D map element's width, which is 0 while
+     the map is hidden) and its slider drives Leaflet zoom anyway, so
+     the 3D view had NO always-on zoom control: the mouse wheel was its
+     only zoom path, and the v1.89 pinch gate blocks the wheel whenever
+     the Pinch checkbox is off (the default) — 3D zoom was simply dead.
+     This slider is the 3D analog of the 2D slider doctrine: it ALWAYS
+     zooms, checkbox or not; the Pinch checkbox governs only the
+     gestures (wheel + two-finger pinch). Log scale over the camera
+     distance range 4..160, kept in sync with the camera. */
+  const tdZoomSlider = $("tdZoomSlider");
+  if (tdZoomSlider) {
+    const TD_DMIN = 4, TD_DMAX = 160;
+    const d2s = d => Math.round(100 * Math.log(Math.max(TD_DMIN, Math.min(TD_DMAX, d)) / TD_DMIN) / Math.log(TD_DMAX / TD_DMIN));
+    const s2d = v => TD_DMIN * Math.pow(TD_DMAX / TD_DMIN, Math.max(0, Math.min(100, v)) / 100);
+    tdZoomSlider.addEventListener("input", () => { TD.cam.dist = s2d(parseFloat(tdZoomSlider.value)); });
+    setInterval(() => { if (TD.active && document.activeElement !== tdZoomSlider) tdZoomSlider.value = d2s(TD.cam.dist); }, 400);
+  }
   $("tdBackBtn").addEventListener("click", () => exit3D(false));
   /* Follow the shared view mode (Push to TV shows 3D too) and keep
      the scene in step with shared state changes. */
@@ -6911,7 +6951,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2013";
+        var BUILD_STAMP = "2026-11-07-2046";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8639,6 +8679,7 @@ function floorConnected(L, cols, rows){
     });
   }
   window.__apocPinchApply = apply;
+  window.__apocPinchOn = isOn; /* v1.90: the 3D pinch handler reads the same switch through here */
   if (chk) {
     try { chk.checked = localStorage.getItem(KEY) === "1"; } catch(e) { chk.checked = false; }
     chk.addEventListener("change", function(){
@@ -11656,7 +11697,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   function renderLevels(){
     var cur = curMapId(), sh = shelf();
     var grp = groupOf(cur);
-    var isDrop = cur.indexOf("drop-") === 0;
+    var isDrop = cur.indexOf("drop-") === 0 || cur.indexOf("gen-") === 0; /* v1.90: generated maps are repository maps too and can head a scenario (v1.89 checked drop- only, so the stories bar never appeared for them) */
     var sig = cur + "|" + (grp ? grp.mapIds.join(",") : "-") + "|" + (sh ? lvState.groups.length : 0);
     if (sig === lvSig && !lvBar.hidden) return;
     lvSig = sig;
@@ -11720,6 +11761,32 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       grp.mapIds.push(id);
       return saveLevels();
     }).then(function(){
+      /* v1.90: if the ground floor is a GENERATED map, the new story is
+         generated in its own right — its own seed, layout variation and
+         dressing — instead of staying a verbatim copy of the floor below.
+         runGeneration re-rolls the story in place (floor image, walls,
+         lights, props, genData); its registry path is then pointed at its
+         own floor image, and the view returns to the story the GM was
+         standing on. Any failure leaves the plain copy in place. */
+      var gen = null; try { gen = eval("runGeneration"); } catch(e){}
+      var gk = null; try { gk = eval("genKey"); } catch(e){}
+      if (typeof gen !== "function" || typeof gk !== "function") return null;
+      return d.from(lvTable()).select("value").eq("key", gk(srcId)).maybeSingle().then(function(res){
+        var gd = res.data && res.data.value;
+        if (!gd || !gd.type) return null;
+        sayAr("Story added — generating its own layout and dressing…");
+        return gen({ id: id, name: rec.name, type: gd.type, theme: gd.theme, size: gd.size || "medium", notes: gd.notes || "", seed: (Date.now() % 2000000000) + Math.floor(Math.random() * 100000) }).then(function(){
+          rec.path = "vtt-maps/" + id + ".png";
+          var all = sh.recs() || [];
+          all.forEach(function(r){ if (r.id === id) r.path = rec.path; });
+          sh.setRecs(all);
+          return sh.saveRegistry();
+        }).then(function(){
+          var ms = $("mapSelect");
+          if (ms && curMapId() === id) { ms.value = srcId; ms.dispatchEvent(new Event("change", { bubbles: true })); }
+        }).catch(function(){ return null; });
+      }).catch(function(){ return null; });
+    }).then(function(){
       lvSig = ""; renderLevels();
       sayAr("Story " + grp.mapIds.length + " added on the same footprint — it appears in the switcher as soon as the registry loads it (seconds).");
       (function waitReg(n){
@@ -11747,6 +11814,196 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       sayAr("Story removed.");
     });
   }
+})();
+</script>
+<script>
+/* APOC-V190 — 3D STORY STACKS (Shaun, 2026-11-07 ~19:12 multi-story,
+   20:23 "make it all work"): the 3D view renders EVERY story of a
+   multi-story scenario, stacked at its level height. The active story is
+   the main build at y=0; stories BELOW render solid, stories ABOVE
+   render ghosted (transparent, depth-write off) so the active floor
+   stays readable. Each stacked story gets its floor picture (a plain
+   slab if the picture can't load), its own walls/doors/windows — door
+   panels and window panes swing when open, matching the shared state —
+   and its placed props as art planes. Staircase assets (Stairs up/down,
+   Ladder, Iron hatch) get a stepped link mesh climbing one story at
+   their position, on every level that has a story above it. State comes
+   straight from the shared store (vtt_levels + per-level
+   vtt_light_<id> / vtt_draw_<id>) — the same rows the 2D view uses. The
+   group rebuilds whenever the 3D scene rebuilds or the story layout
+   changes; ?display copies run the same 3D build, so TVs stack too. */
+(function(){
+  "use strict";
+  function G(name){ try { return eval(name); } catch(e){ return undefined; } }
+  function keyFor(kind, id){ return id === "faerun" ? "vtt_" + kind : "vtt_" + kind + "_" + id; }
+  var lastRootRef = null, lastSig = "", building = false, levelsCache = null, levelsAt = 0;
+  function storyH(){ var fps = G("feetPerSquare") || 5; return 10 / fps; } /* world units per story: walls stand 10 ft */
+  function worldXY(xPct, yPct){
+    var TD = window.__apoc3d;
+    var MW = G("MW"), MH = G("MH"), CELL = G("CELL");
+    var fw = MW, fh = MH, fx = xPct, fy = yPct;
+    if (TD && TD.rot) {
+      var rp = G("rotPct");
+      if (typeof rp === "function") { var f = rp(xPct, yPct); fx = f.x; fy = f.y; }
+      if (TD.rot % 2 === 1) { fw = MH; fh = MW; }
+    }
+    return [fx / 100 * fw / CELL, fy / 100 * fh / CELL];
+  }
+  async function fetchVal(key){
+    var d = G("db"); if (!d) return null;
+    try { var res = await d.from(G("SETTINGS_TABLE") || "site_settings").select("value").eq("key", key).maybeSingle(); return res.data ? res.data.value : null; }
+    catch(e){ return null; }
+  }
+  function texFromUrl(url){
+    return new Promise(function(res){
+      var img = new Image(); img.crossOrigin = "anonymous";
+      img.onload = function(){ try { res(new THREE.CanvasTexture(img)); } catch(e){ res(null); } };
+      img.onerror = function(){ res(null); };
+      img.src = url;
+    });
+  }
+  function buildWallRun(grp, walls, ghost){
+    var wallMat = new THREE.MeshStandardMaterial({ color: 0x8a8d94, roughness: .95, transparent: ghost, opacity: ghost ? .22 : 1, depthWrite: !ghost });
+    var doorMat = new THREE.MeshStandardMaterial({ color: 0x7a5230, roughness: .85, transparent: ghost, opacity: ghost ? .22 : 1, depthWrite: !ghost });
+    var glassMat = new THREE.MeshStandardMaterial({ color: 0x9fd4ee, transparent: true, opacity: ghost ? .12 : .4, roughness: .1, depthWrite: false });
+    var fps = G("feetPerSquare") || 5;
+    for (var i = 0; i < walls.length && i < 600; i++) {
+      var w = walls[i];
+      var A = worldXY(w.a[0], w.a[1]), B = worldXY(w.b[0], w.b[1]);
+      var ax = A[0], az = A[1], bx = B[0], bz = B[1];
+      var len = Math.hypot(bx - ax, bz - az); if (len < 0.01) continue;
+      var ang = Math.atan2(bz - az, bx - ax);
+      var hU = (w.h || 10) / fps;
+      var mx = (ax + bx) / 2, mz = (az + bz) / 2;
+      if (w.kind === "door") {
+        var hinge = new THREE.Group(); hinge.position.set(ax, 0, az); hinge.rotation.y = -ang;
+        var panel = new THREE.Mesh(new THREE.BoxGeometry(len * 0.96, hU, 0.07), doorMat);
+        panel.position.set(len / 2, hU / 2, 0); hinge.add(panel);
+        if (w.open) hinge.rotation.y = -ang + THREE.MathUtils.degToRad(100);
+        grp.add(hinge);
+      } else if (w.kind === "window") {
+        var sill = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.32, 0.26), wallMat);
+        sill.position.set(mx, hU * 0.16, mz); sill.rotation.y = -ang; grp.add(sill);
+        var linW = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.18, 0.26), wallMat);
+        linW.position.set(mx, hU * 0.91, mz); linW.rotation.y = -ang; grp.add(linW);
+        var wh = new THREE.Group(); wh.position.set(ax, 0, az); wh.rotation.y = -ang;
+        var glass = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.5, 0.06), glassMat);
+        glass.position.set(len / 2, hU * 0.57, 0); wh.add(glass);
+        if (w.open) wh.rotation.y = -ang + THREE.MathUtils.degToRad(100);
+        grp.add(wh);
+      } else {
+        var seg = new THREE.Mesh(new THREE.BoxGeometry(len, hU, 0.24), wallMat);
+        seg.position.set(mx, hU / 2, mz); seg.rotation.y = -ang; grp.add(seg);
+      }
+    }
+  }
+  function buildProps(grp, items, ghost){
+    var BR = window.__apocAssets || {};
+    for (var i = 0; i < items.length && i < 400; i++) {
+      var it = items[i];
+      if (!it || it.type !== "stamp" || it.gm) continue;
+      var url = it.img || "";
+      if (!url && it.prop && typeof BR.propArtURL === "function") { try { url = BR.propArtURL(it.prop, it.rot || 0).url || ""; } catch(e){} }
+      if (!url) continue;
+      var P = worldXY(it.x, it.y);
+      (function(url, px, pz, fw, fh, rot){
+        texFromUrl(url).then(function(tex){
+          if (!tex || !grp.parent) return;
+          var m = new THREE.Mesh(new THREE.PlaneGeometry(fw, fh), new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: ghost ? .3 : .95, depthWrite: !ghost, side: THREE.DoubleSide }));
+          m.rotation.x = -Math.PI / 2; m.rotation.z = -(rot || 0) * Math.PI / 180;
+          m.position.set(px, 0.03, pz);
+          grp.add(m);
+        });
+      })(url, P[0], P[1], it.fw || it.size || 1, it.fh || it.size || 1, it.rot);
+    }
+  }
+  function buildStairs(grp, items, hasAbove){
+    if (!hasAbove) return;
+    var mat = new THREE.MeshStandardMaterial({ color: 0x6e6b64, roughness: .9 });
+    var H = storyH();
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (!it || it.type !== "stamp") continue;
+      if (!/stairs|ladder|hatch/i.test(String(it.name || ""))) continue;
+      var P = worldXY(it.x, it.y);
+      var link = new THREE.Group(); link.name = "APOC-V190-stairs";
+      var steps = 5, sw = Math.max(0.8, (it.size || 2) * 0.8), sd = (it.size || 2) / steps;
+      for (var s = 0; s < steps; s++) {
+        var step = new THREE.Mesh(new THREE.BoxGeometry(sw, H / steps, sd), mat);
+        step.position.set(0, H * (s + 0.5) / steps, (s - (steps - 1) / 2) * sd);
+        link.add(step);
+      }
+      link.position.set(P[0], 0, P[1]);
+      link.rotation.y = -(it.rot || 0) * Math.PI / 180;
+      link.userData.stairFrom = String(it.name || "");
+      grp.add(link);
+    }
+  }
+  async function buildStacks(){
+    var TD = window.__apoc3d;
+    if (!TD || !TD.active || !TD.root || !window.THREE) return;
+    var shelf = window.__apocShelf; if (!shelf) return;
+    var cur = shelf.current();
+    if (!levelsCache || Date.now() - levelsAt > 8000) { levelsCache = await fetchVal("vtt_levels"); levelsAt = Date.now(); }
+    var levels = levelsCache;
+    if (!levels || !Array.isArray(levels.groups)) return;
+    var grp = null;
+    for (var i = 0; i < levels.groups.length; i++) if (levels.groups[i].mapIds.indexOf(cur) >= 0) grp = levels.groups[i];
+    if (!grp || grp.mapIds.length < 2) return;
+    if (!TD.root || TD.root !== lastRootRef) return; /* the scene rebuilt mid-fetch — the next tick handles the new root */
+    var a = grp.mapIds.indexOf(cur);
+    var sig = grp.mapIds.join(",") + "@" + a;
+    var existing = TD.root.getObjectByName("APOC-V190-stacks");
+    if (existing && sig === lastSig) return;
+    if (existing) TD.root.remove(existing);
+    lastSig = sig;
+    var root = new THREE.Group(); root.name = "APOC-V190-stacks";
+    root.userData.levelIds = grp.mapIds.slice();
+    TD.root.add(root);
+    var H = storyH();
+    /* stairs on the ACTIVE story link upward from the main floor */
+    var drawCur = G("drawItems") || [];
+    var activeLinks = new THREE.Group();
+    buildStairs(activeLinks, drawCur, a < grp.mapIds.length - 1);
+    if (activeLinks.children.length) root.add(activeLinks);
+    /* every other story, stacked at its level height */
+    grp.mapIds.forEach(function(id, idx){
+      if (idx === a) return;
+      var ghost = idx > a;
+      var gStory = new THREE.Group(); gStory.position.y = (idx - a) * H; gStory.userData.storyId = id;
+      root.add(gStory);
+      Promise.all([fetchVal(keyFor("light", id)), fetchVal(keyFor("draw", id))]).then(function(vals){
+        if (!root.parent) return;
+        var light = vals[0] || {}, draw = vals[1] || {};
+        var items = Array.isArray(draw.items) ? draw.items : [];
+        var def = shelf.def(id);
+        var MW = G("MW"), MH = G("MH"), CELL = G("CELL");
+        var fw = (TD.rot % 2 === 1 ? MH : MW) / CELL, fh = (TD.rot % 2 === 1 ? MW : MH) / CELL;
+        function addFloor(tex){
+          if (!root.parent) return;
+          var mat = tex ? new THREE.MeshBasicMaterial({ map: tex, transparent: ghost, opacity: ghost ? .25 : 1, depthWrite: !ghost })
+                         : new THREE.MeshBasicMaterial({ color: 0x555a63, transparent: ghost, opacity: ghost ? .25 : 1, depthWrite: !ghost });
+          var fl = new THREE.Mesh(new THREE.PlaneGeometry(fw, fh), mat);
+          fl.rotation.x = -Math.PI / 2; fl.position.set(fw / 2, 0, fh / 2);
+          fl.userData.stackFloor = true; fl.userData.storyId = id;
+          gStory.add(fl);
+        }
+        if (def && def.img) texFromUrl(def.img).then(function(tex){ addFloor(tex); });
+        else addFloor(null);
+        buildWallRun(gStory, Array.isArray(light.walls) ? light.walls : [], ghost);
+        buildProps(gStory, items, ghost);
+        buildStairs(gStory, items, idx < grp.mapIds.length - 1);
+      });
+    });
+  }
+  setInterval(function(){
+    var TD = window.__apoc3d;
+    if (!TD || !TD.active || !TD.root) { lastRootRef = null; lastSig = ""; return; }
+    if (TD.root !== lastRootRef) { lastRootRef = TD.root; lastSig = ""; }
+    if (building) return;
+    building = true;
+    Promise.resolve().then(buildStacks).catch(function(){}).then(function(){ building = false; });
+  }, 900);
 })();
 </script>
 </body>
