@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1727";
+        var BUILD_STAMP = "2026-11-07-1747";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8770,6 +8770,325 @@ function floorConnected(L, cols, rows){
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ schedule(1800); setTimeout(guard, 4200); });
   else { schedule(1800); setTimeout(guard, 4200); }
   schedule(2600);
+})();
+</script>
+
+
+<style id="APOC-V180">
+/* v1.80 (Shaun, voice call 2026-11-07 ~17:19-17:29) — map bubble to the
+   very top; title+version in their own bubble inside it; Art Library
+   opens full-length to the map's bottom edge with tight packing and
+   no top bar; bottom sets open downward as overlays; every piece can
+   be moved, resized, re-oriented and locked (APOC-V180 script). */
+.page{padding-top:0}
+#mapPanel{margin-top:0;border-top-width:0}
+.vtt-head.head-gone{display:none}
+#titleBubble{display:inline-flex;flex-wrap:nowrap;white-space:nowrap;align-items:center;gap:8px;margin:2px 0 1px 2px;padding:0 10px;line-height:1.15;border:1px solid #2b2f38;border-radius:999px;background:rgba(10,12,16,.55);cursor:grab}
+#titleBubble h1{font-size:.98rem;margin:0;display:inline;line-height:1.15}
+#titleBubble #siteVersion{display:inline!important;font-size:.78rem}
+#titleBubble #layoutResetBtn{font-size:.72rem!important;padding:1px 8px!important;line-height:1.5!important;min-height:0!important}
+.map-stage{margin-top:2px}
+/* Art Library: no top bar — the perimeter grip lives inline in the head */
+#artLibrary .artlib-head .per-grip{display:inline-flex!important;align-items:center;background:none;border:none;padding:0 5px 0 0;margin:0;font-size:.95rem;min-height:0;cursor:grab}
+/* tight packing inside the Library (add-on 4) */
+#artLibrary .nest{margin:0}
+#artLibrary .nest-body{padding:2px 4px 4px}
+#artLibrary .lib-grid{gap:4px}
+#artLibrary .mr-body{padding:2px 2px 4px}
+#artLibrary .mr-item{margin:0}
+#artLibrary .lib-panel{margin:0}
+.map-repo .artlib.open > .nest-body{gap:4px}
+#artLibrary #tokenLib:not([hidden]){gap:4px}
+.mr-list, #libMonsters{gap:4px}
+/* opened Library fills its box; contents scroll inside (add-ons 2/3/5) */
+#artLibrary.open{display:flex;flex-direction:column}
+#artLibrary.open > .nest-body{flex:1 1 auto;overflow-y:auto;min-height:0}
+/* bottom sets open DOWNWARD (add-on 7): the standing rule anchored
+   them above the row (bottom:100%+6, up over the map) — flip the
+   anchor so they hang BELOW the row and extend downward, keeping
+   that rule's overlay, cap and internal scroll. */
+.ctl-set{top:calc(100% + 6px);bottom:auto}
+/* free pieces (add-ons 10-13) */
+.fp-grip{display:inline-flex;align-items:center;padding:0 3px;cursor:grab;opacity:.6;font-size:.9rem;user-select:none;touch-action:none}
+.fp-lock{cursor:pointer;background:none;border:none;padding:0 2px;font-size:.8rem;opacity:.85;line-height:1}
+.fp-piece-float{position:fixed!important;z-index:280;box-shadow:0 8px 28px rgba(0,0,0,.5);margin:0!important}
+.fp-h{position:absolute;width:11px;height:11px;z-index:6;display:none;background:transparent}
+.fp-piece-float .fp-h, .per-float .fp-h{display:block}
+.fp-locked .fp-h{display:none!important}
+.fp-h[data-d="n"]{top:-5px;left:50%;margin-left:-5px;cursor:ns-resize}
+.fp-h[data-d="s"]{bottom:-5px;left:50%;margin-left:-5px;cursor:ns-resize}
+.fp-h[data-d="e"]{right:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+.fp-h[data-d="w"]{left:-5px;top:50%;margin-top:-5px;cursor:ew-resize}
+.fp-h[data-d="ne"]{right:-5px;top:-5px;cursor:nesw-resize}
+.fp-h[data-d="sw"]{left:-5px;bottom:-5px;cursor:nesw-resize}
+.fp-h[data-d="nw"]{left:-5px;top:-5px;cursor:nwse-resize}
+.fp-h[data-d="se"]{right:-5px;bottom:-5px;cursor:nwse-resize}
+</style>
+
+<script>
+/* APOC-V180 (Shaun, voice call 2026-11-07 ~17:19-17:29):
+   (8/9) the map bubble goes to the very top of the page; "APOC VTT" +
+   the version tag move out of the header into their own small bubble
+   inside the panel, above the map (never over the map picture); the
+   empty header row goes away and the buttons below pull up.
+   (6) the Art Library's top bar is removed: its perimeter grip moves
+   inline into the "Art Library" head, dots only; drag unchanged.
+   (2/3/5) when the Library opens, its box runs from its top down to
+   the MAP'S BOTTOM EDGE (re-anchored as the map moves/resizes), and
+   an opened subcategory uses that full length; contents scroll
+   inside the box.
+   (7) the bottom row's sets (.ctl-set) open DOWNWARD: the standing
+   rule anchored them ABOVE the row (bottom:calc(100% + 6px)), up
+   over the map; the anchor flips to top:calc(100% + 6px) so they
+   hang below the row, overlay as before, max-height capped at the
+   viewport with internal scroll (placeSet).
+   (10-13) FREE PIECES: one reusable system — the tools bar, the
+   bottom button row, the title bubble and (through their existing
+   perimeter grips) every perimeter group incl. the Art Library can
+   be dragged anywhere, resized by 8 edge/corner handles, reflow
+   vertical<->horizontal with their shape, and locked individually.
+   Positions/sizes/locks persist per device in localStorage
+   "apocVttFreeLayoutV1" (never shared state). "Reset layout" in the
+   title bubble clears every layout record and reloads to defaults.
+   The map box itself stays anchored (its own move/resize system is
+   unchanged); TV/display copies get none of this. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var KEY = "apocVttFreeLayoutV1";
+  function load(){ try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch(e){ return {}; } }
+  function save(rec){ try { localStorage.setItem(KEY, JSON.stringify(rec)); } catch(e){} }
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+  /* ---- (9) title bubble + (8) header gone + reset ---- */
+  var titleBubble = null;
+  function moveTitle(){
+    var head = document.querySelector(".vtt-head");
+    var title = document.querySelector(".head-title");
+    var panel = document.getElementById("mapPanel");
+    if (!head || !title || !panel || document.getElementById("titleBubble")) return;
+    titleBubble = document.createElement("div");
+    titleBubble.id = "titleBubble";
+    titleBubble.title = "Drag to move";
+    while (title.firstChild) titleBubble.appendChild(title.firstChild);
+    var ver = titleBubble.querySelector("#siteVersion");
+    if (ver) ver.hidden = false;
+    var rb = document.createElement("button");
+    rb.type = "button"; rb.className = "btn"; rb.id = "layoutResetBtn";
+    rb.textContent = "Reset layout";
+    rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
+    rb.addEventListener("click", function(){
+      [KEY, "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      location.reload();
+    });
+    titleBubble.appendChild(rb);
+    panel.insertBefore(titleBubble, panel.firstChild);
+    head.classList.add("head-gone");
+  }
+
+  /* ---- (6) repo grip inline in the Art Library head ---- */
+  function gripInline(){
+    var repo = document.querySelector(".map-repo");
+    var headBtn = document.querySelector("#artLibrary .artlib-head");
+    if (!repo || !headBtn) return;
+    var grip = repo.querySelector(":scope > .per-grip");
+    if (grip && grip.parentElement !== headBtn) {
+      grip.textContent = "\u283f";
+      grip.title = "Drag to move the Art Library";
+      headBtn.insertBefore(grip, headBtn.firstChild);
+    }
+  }
+
+  /* ---- (2/3/5) Library box bottom == map bottom ---- */
+  function fitLib(){
+    var lib = document.getElementById("artLibrary");
+    var am = document.getElementById("apocMap");
+    if (!lib || !am || !lib.classList.contains("open")) return;
+    var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
+    var h = Math.round(mr.bottom - lr.top);
+    if (h > 120 && Math.abs((lr.height) - h) > 1) lib.style.height = h + "px";
+  }
+
+  /* ---- (7) ctl sets open downward as overlays ---- */
+  function placeSet(set){
+    if (set.hidden) { set.style.maxHeight = ""; return; }
+    var row = document.querySelector(".ctl-row");
+    if (!row) return;
+    var rb = row.getBoundingClientRect();
+    set.style.maxHeight = Math.max(120, window.innerHeight - Math.round(rb.bottom + 6) - 8) + "px";
+  }
+  function watchSets(){
+    document.querySelectorAll(".ctl-set").forEach(function(set){
+      if (set.dataset.fpWatched) return;
+      set.dataset.fpWatched = "1";
+      new MutationObserver(function(){ placeSet(set); }).observe(set, { attributes: true, attributeFilter: ["hidden"] });
+      if (!set.hidden) placeSet(set);
+    });
+  }
+
+  /* ---- (10-13) free pieces ---- */
+  var DIRS = ["n","s","e","w","ne","nw","se","sw"];
+  function orientTarget(el){
+    if (getComputedStyle(el).display === "flex") return el;
+    var kids = el.querySelectorAll("*");
+    for (var i = 0; i < kids.length && i < 12; i++) if (getComputedStyle(kids[i]).display === "flex") return kids[i];
+    return el;
+  }
+  function applyOrient(el){
+    var r = el.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) return;
+    var t = orientTarget(el);
+    if (r.height > r.width * 1.2) { t.style.flexDirection = "column"; t.style.flexWrap = "nowrap"; }
+    else if (r.width > r.height * 1.2) { t.style.flexDirection = "row"; t.style.flexWrap = "wrap"; }
+    else { t.style.flexDirection = ""; t.style.flexWrap = ""; }
+  }
+  function isFloated(el){ return el.classList.contains("fp-piece-float") || el.classList.contains("per-float") || getComputedStyle(el).position === "fixed"; }
+  function addHandles(el, id){
+    if (el.querySelector(":scope > .fp-h")) return;
+    DIRS.forEach(function(d){
+      var h = document.createElement("span");
+      h.className = "fp-h"; h.dataset.d = d; h.dataset.piece = id;
+      el.appendChild(h);
+    });
+  }
+  function addLock(el, id, anchor){
+    if (el.querySelector(":scope .fp-lock")) return null;
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "fp-lock"; b.dataset.piece = id;
+    b.title = "Lock/unlock this piece in place";
+    (anchor || el).appendChild(b);
+    b.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      var rec = load(); rec[id] = rec[id] || {};
+      rec[id].lock = !rec[id].lock; save(rec); paintLock(el, id);
+    });
+    paintLock(el, id);
+    return b;
+  }
+  function paintLock(el, id){
+    var rec = load(); var locked = !!(rec[id] && rec[id].lock);
+    var b = el.querySelector(".fp-lock");
+    if (b) b.textContent = locked ? "\ud83d\udd12" : "\ud83d\udd13";
+    el.classList.toggle("fp-locked", locked);
+  }
+  function detach(el, r){
+    el.classList.add("fp-piece-float");
+    el.style.left = Math.round(r.left) + "px"; el.style.top = Math.round(r.top) + "px";
+    el.style.width = Math.round(r.width) + "px"; el.style.height = Math.round(r.height) + "px";
+  }
+  function storeRect(id, el){
+    var rec = load(); var r = el.getBoundingClientRect();
+    rec[id] = rec[id] || {};
+    rec[id].x = Math.round(r.left); rec[id].y = Math.round(r.top);
+    rec[id].w = Math.round(r.width); rec[id].h = Math.round(r.height);
+    save(rec);
+  }
+  var dragState = null, resizeState = null, suppressClick = false;
+  document.addEventListener("click", function(e){ if (suppressClick) { e.stopPropagation(); e.preventDefault(); suppressClick = false; } }, true);
+  function makeDraggable(el, id, handle){
+    handle.addEventListener("pointerdown", function(e){
+      var rec = load(); if (rec[id] && rec[id].lock) return;
+      if (e.button !== 0) return;
+      var r = el.getBoundingClientRect();
+      dragState = { el: el, id: id, dx: e.clientX - r.left, dy: e.clientY - r.top, moved: false, floated: isFloated(el) };
+      e.preventDefault();
+    });
+  }
+  document.addEventListener("pointermove", function(e){
+    if (dragState) {
+      var ds = dragState;
+      if (!ds.moved) {
+        var r0 = ds.el.getBoundingClientRect();
+        if (Math.abs(e.clientX - (r0.left + ds.dx)) < 4 && Math.abs(e.clientY - (r0.top + ds.dy)) < 4 && ds.floated) return;
+        if (!ds.floated) detach(ds.el, r0);
+        ds.moved = true;
+      }
+      ds.el.style.left = clamp(e.clientX - ds.dx, -20, window.innerWidth - 60) + "px";
+      ds.el.style.top = clamp(e.clientY - ds.dy, 0, window.innerHeight - 26) + "px";
+      return;
+    }
+    if (resizeState) {
+      var rs = resizeState, d = rs.d, r = rs.r;
+      var L = r.left, T = r.top, R = r.right, B = r.bottom;
+      if (d.indexOf("e") >= 0) R = Math.max(L + 60, e.clientX);
+      if (d.indexOf("s") >= 0) B = Math.max(T + 30, e.clientY);
+      if (d.indexOf("w") >= 0) L = Math.min(R - 60, e.clientX);
+      if (d.indexOf("n") >= 0) T = Math.min(B - 30, e.clientY);
+      rs.el.style.left = L + "px"; rs.el.style.top = T + "px";
+      rs.el.style.width = (R - L) + "px"; rs.el.style.height = (B - T) + "px";
+    }
+  });
+  document.addEventListener("pointerup", function(){
+    if (dragState && dragState.moved) { storeRect(dragState.id, dragState.el); applyOrient(dragState.el); suppressClick = true; setTimeout(function(){ suppressClick = false; }, 350); }
+    if (resizeState) { storeRect(resizeState.id, resizeState.el); applyOrient(resizeState.el); }
+    dragState = null; resizeState = null;
+  });
+  document.addEventListener("pointerdown", function(e){
+    var h = e.target.closest ? e.target.closest(".fp-h") : null;
+    if (h) {
+      var el = h.parentElement, id = h.dataset.piece;
+      var rec = load(); if (rec[id] && rec[id].lock) return;
+      if (!isFloated(el)) return;
+      resizeState = { el: el, id: id, d: h.dataset.d, r: el.getBoundingClientRect() };
+      e.preventDefault(); e.stopPropagation(); return;
+    }
+    /* locked perimeter pieces: their own grip drag is blocked */
+    var g = e.target.closest ? e.target.closest(".per-grip") : null;
+    if (g) {
+      var grp = g.closest(".per-group, .map-repo");
+      if (grp) {
+        var gid = grp.classList.contains("map-repo") ? "per-repo" : ("per-" + (grp.dataset.perGroup || ""));
+        var rec2 = load();
+        if (rec2[gid] && rec2[gid].lock) { e.stopPropagation(); e.preventDefault(); }
+      }
+    }
+  }, true);
+
+  function register(){
+    moveTitle(); gripInline(); watchSets();
+    var rec = load();
+    function gripFor(el, id, makeGrip){
+      var anchor = el;
+      if (makeGrip && !el.querySelector(":scope > .fp-grip")) {
+        var g = document.createElement("span");
+        g.className = "fp-grip"; g.textContent = "\u283f"; g.title = "Drag to move";
+        el.insertBefore(g, el.firstChild);
+        makeDraggable(el, id, g);
+      }
+      addLock(el, id, anchor);
+      addHandles(el, id);
+      var r = rec[id];
+      if (r && typeof r.x === "number") {
+        detach(el, { left: clamp(r.x, -20, window.innerWidth - 60), top: clamp(r.y, 0, window.innerHeight - 26), width: r.w || el.getBoundingClientRect().width, height: r.h || el.getBoundingClientRect().height });
+        applyOrient(el);
+      } else if (r && (r.w || r.h)) {
+        if (r.w) el.style.width = r.w + "px"; if (r.h) el.style.height = r.h + "px";
+        applyOrient(el);
+      }
+      paintLock(el, id);
+    }
+    var cr = document.querySelector(".ctl-row"); if (cr && !cr.dataset.fpDone) { cr.dataset.fpDone = "1"; var bar = cr.querySelector(".ctl-bar") || cr; if (!bar.querySelector(":scope > .fp-grip")) { var g2 = document.createElement("span"); g2.className = "fp-grip"; g2.textContent = "\u283f"; g2.title = "Drag to move"; bar.insertBefore(g2, bar.firstChild); makeDraggable(cr, "ctlrow", g2); } addLock(cr, "ctlrow", bar); addHandles(cr, "ctlrow"); var rr = rec.ctlrow; if (rr && typeof rr.x === "number") { detach(cr, { left: clamp(rr.x, -20, window.innerWidth - 60), top: clamp(rr.y, 0, window.innerHeight - 26), width: rr.w || cr.getBoundingClientRect().width, height: rr.h || cr.getBoundingClientRect().height }); applyOrient(cr); } paintLock(cr, "ctlrow"); }
+    if (titleBubble && !titleBubble.dataset.fpDone) { titleBubble.dataset.fpDone = "1"; makeDraggable(titleBubble, "title", titleBubble); addLock(titleBubble, "title", titleBubble); addHandles(titleBubble, "title"); var rt = rec.title; if (rt && typeof rt.x === "number") { detach(titleBubble, { left: clamp(rt.x, -20, window.innerWidth - 60), top: clamp(rt.y, 0, window.innerHeight - 26), width: rt.w || titleBubble.getBoundingClientRect().width, height: rt.h || titleBubble.getBoundingClientRect().height }); } paintLock(titleBubble, "title"); }
+    document.querySelectorAll(".per-group, .map-repo").forEach(function(el){
+      if (el.dataset.fpDone) return; el.dataset.fpDone = "1";
+      var id = el.classList.contains("map-repo") ? "per-repo" : ("per-" + (el.dataset.perGroup || el.id || "grp"));
+      var grip = el.querySelector(".per-grip");
+      addLock(el, id, grip && grip.parentElement === el ? grip : el);
+      addHandles(el, id);
+      var rp = rec[id];
+      if (rp && (rp.w || rp.h)) { if (rp.w) el.style.width = rp.w + "px"; if (rp.h) el.style.height = rp.h + "px"; }
+      paintLock(el, id);
+    });
+    var zb = document.getElementById("zoomBar"); if (zb && !zb.dataset.fpDone) { zb.dataset.fpDone = "1"; addLock(zb, "zoombar", zb); paintLock(zb, "zoombar"); }
+  }
+
+  var tries = 0;
+  function boot(){ register(); fitLib(); if (++tries < 4) setTimeout(boot, 1600); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ setTimeout(boot, 2200); });
+  else setTimeout(boot, 2200);
+  document.addEventListener("click", function(){ setTimeout(fitLib, 350); setTimeout(fitLib, 1000); }, true);
+  window.addEventListener("resize", function(){ setTimeout(fitLib, 300); });
+  setInterval(function(){ var lib = document.getElementById("artLibrary"); if (lib && lib.classList.contains("open")) fitLib(); }, 1800);
 })();
 </script>
 
