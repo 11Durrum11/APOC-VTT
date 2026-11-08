@@ -7289,7 +7289,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1228";
+        var BUILD_STAMP = "2026-11-08-1233";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10481,7 +10481,7 @@ function floorConnected(L, cols, rows){
     rb.textContent = "Reset layout";
     rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
     rb.addEventListener("click", function(){
-      [KEY, "apocVttLibSubOrderV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     titleBubble.appendChild(rb);
@@ -10909,7 +10909,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     rl.addEventListener("click", function(){
       var b = document.getElementById("layoutResetBtn");
       if (b) { b.click(); return; }
-      ["apocVttLibSubOrderV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
@@ -13818,8 +13818,8 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     return segs.join("/");
   }
   function load(){
-    try { var v = JSON.parse(localStorage.getItem(KEY) || "null"); if (v && v.containers) return v; } catch(e){}
-    return { containers: {} };
+    try { var v = JSON.parse(localStorage.getItem(KEY) || "null"); if (v && v.containers) { if (!v.parks) v.parks = {}; return v; } } catch(e){}
+    return { containers: {}, parks: {} };
   }
   function save(store){ try { localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} }
   function persist(container){
@@ -13827,6 +13827,87 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     for (var i = 0; i < units.length; i++) ids.push(uidOf(units[i], units));
     store.containers[containerKey(container)] = ids;
     save(store);
+  }
+
+  /* ---- APOC-V216: out-of-panel parking. Parks ride in this same
+     store (same key), so the treatment Reset clears them together
+     with the saved order. A parked unit is the WHOLE nest, detached
+     to <body> at fixed coordinates; its head still toggles it (the
+     page's .nest-head toggle is a document-level listener). ---- */
+  function allContainers(){
+    var out = [], nests = lib.querySelectorAll(".nest"), i, p;
+    for (i = 0; i < nests.length; i++){
+      if (!isSubUnit(nests[i])) continue;
+      p = nests[i].parentElement;
+      if (p && out.indexOf(p) === -1) out.push(p);
+    }
+    return out;
+  }
+  function unitByUid(container, uid){
+    var units = unitsOf(container), i;
+    for (i = 0; i < units.length; i++) if (uidOf(units[i], units) === uid) return units[i];
+    var base = uid.replace(/~\d+$/, ""), found = null, n = 0;
+    for (i = 0; i < units.length; i++) if (slug(labelOf(headOf(units[i]))) === base) { found = units[i]; n++; }
+    return n === 1 ? found : null;
+  }
+  function parkSave(ck, uid, x, y){
+    var store = load();
+    if (!store.parks) store.parks = {};
+    if (!store.parks[ck]) store.parks[ck] = {};
+    store.parks[ck][uid] = { x: Math.round(x), y: Math.round(y) };
+    save(store);
+  }
+  function parkClear(ck, uid){
+    if (!ck || !uid) return;
+    var store = load();
+    if (store.parks && store.parks[ck] && store.parks[ck][uid]) { delete store.parks[ck][uid]; save(store); }
+  }
+  function parkUnit(unit, x, y, ck, uid){
+    var r = unit.getBoundingClientRect();
+    document.body.appendChild(unit);
+    unit.classList.add("libsub-parked");
+    if (ck) unit.dataset.libsubCk = ck;
+    if (uid) unit.dataset.libsubUid = uid;
+    unit.style.position = "fixed";
+    unit.style.left = Math.round(x) + "px";
+    unit.style.top = Math.round(y) + "px";
+    unit.style.width = Math.round(r.width) + "px";
+    unit.style.zIndex = "4600";
+    unit.style.margin = "0";
+  }
+  function unparkUnit(unit){
+    unit.classList.remove("libsub-parked");
+    delete unit.dataset.libsubCk; delete unit.dataset.libsubUid;
+    unit.style.position = ""; unit.style.left = ""; unit.style.top = "";
+    unit.style.width = ""; unit.style.zIndex = ""; unit.style.margin = "";
+  }
+  function insertAtPoint(container, unit, y){
+    var units = unitsOf(container), i, r;
+    for (i = 0; i < units.length; i++){
+      if (units[i] === unit) continue;
+      r = units[i].getBoundingClientRect();
+      if (y < r.top + r.height / 2) { container.insertBefore(unit, units[i]); return; }
+    }
+    container.appendChild(unit);
+  }
+  function restoreParks(){
+    var store = load();
+    if (!store.parks) return;
+    var cks = Object.keys(store.parks);
+    if (!cks.length) return;
+    var cons = allContainers(), byKey = {}, i, j;
+    for (i = 0; i < cons.length; i++) byKey[containerKey(cons[i])] = cons[i];
+    for (i = 0; i < cks.length; i++){
+      var c = byKey[cks[i]]; if (!c) continue;
+      var uids = Object.keys(store.parks[cks[i]]);
+      for (j = 0; j < uids.length; j++){
+        var u = unitByUid(c, uids[j]);
+        if (!u || u.classList.contains("libsub-parked")) continue;
+        var p = store.parks[cks[i]][uids[j]];
+        parkUnit(u, Math.max(0, Math.min(p.x, window.innerWidth - 60)),
+                    Math.max(0, Math.min(p.y, window.innerHeight - 26)), cks[i], uids[j]);
+      }
+    }
   }
 
   var applying = false;
@@ -13882,10 +13963,40 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       var dx = e.clientX - cand.x, dy = e.clientY - cand.y;
       if (dx * dx + dy * dy < THRESH * THRESH) return;
       drag = { unit: cand.unit, container: cand.unit.parentElement };
+      if (cand.parked) {
+        /* APOC-V216: re-dragging a parked unit — it roams from the
+           first pixel; its origin container is resolved by key. */
+        drag.parked = true; drag.roam = true;
+        drag.gx = cand.gx; drag.gy = cand.gy;
+        drag.originKey = cand.originKey; drag.uid = cand.uid;
+        drag.origin = null;
+        var consP = allContainers();
+        for (var oi = 0; oi < consP.length; oi++) if (containerKey(consP[oi]) === cand.originKey) { drag.origin = consP[oi]; break; }
+      }
       drag.unit.classList.add("libsub-dragging");
     }
     if (e.cancelable) e.preventDefault();
-    var container = drag.container, unit = drag.unit, sibs = unitsOf(container), i, r;
+    var unit = drag.unit;
+    var lrNow = lib.getBoundingClientRect();
+    var outLib = e.clientX < lrNow.left - 48 || e.clientX > lrNow.right + 48 || e.clientY < lrNow.top - 28 || e.clientY > lrNow.bottom + 28;
+    if (!drag.roam && outLib) {
+      /* APOC-V216: dragged clear out of the panel — the whole nest
+         leaves the stack and follows the pointer; releasing outside
+         parks it there, releasing back over the panel re-slots it. */
+      drag.roam = true;
+      drag.origin = drag.container;
+      drag.uid = uidOf(unit, unitsOf(drag.container));
+      var ur = unit.getBoundingClientRect();
+      drag.gx = Math.max(8, Math.min(e.clientX - ur.left, Math.max(8, ur.width - 8)));
+      drag.gy = Math.max(4, Math.min(e.clientY - ur.top, 30));
+      parkUnit(unit, ur.left, ur.top, null, null);
+    }
+    if (drag.roam) {
+      unit.style.left = Math.round(e.clientX - (drag.gx || 12)) + "px";
+      unit.style.top = Math.round(e.clientY - (drag.gy || 10)) + "px";
+      return;
+    }
+    var container = drag.container, sibs = unitsOf(container), i, r;
     var before = null, afterLast = null;
     for (i = 0; i < sibs.length; i++){
       if (sibs[i] === unit) continue;
@@ -13901,7 +14012,37 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (cand && e.pointerId !== undefined && e.pointerId !== cand.id) return;
     if (drag){
       drag.unit.classList.remove("libsub-dragging");
-      persist(drag.container);
+      if (drag.roam) {
+        /* APOC-V216: a roam ends parked where it lies, or re-slotted
+           if it was released back over the Library panel. */
+        var u2 = drag.unit;
+        var px = parseInt(u2.style.left, 10) || 0, py = parseInt(u2.style.top, 10) || 0;
+        var lrE = lib.getBoundingClientRect();
+        var overLib = typeof e.clientX === "number" && e.clientX >= lrE.left - 8 && e.clientX <= lrE.right + 8 && e.clientY >= lrE.top - 8 && e.clientY <= lrE.bottom + 8;
+        var target = null;
+        if (overLib) {
+          target = drag.origin || null;
+          var consE = allContainers();
+          for (var ci = 0; ci < consE.length; ci++) {
+            var crE = consE[ci].getBoundingClientRect();
+            if (e.clientX >= crE.left - 4 && e.clientX <= crE.right + 4 && e.clientY >= crE.top - 4 && e.clientY <= crE.bottom + 4) { target = consE[ci]; break; }
+          }
+          if (!target && consE.length) target = consE[0];
+        }
+        if (target) {
+          if (drag.parked) parkClear(drag.originKey, drag.uid);
+          unparkUnit(u2);
+          insertAtPoint(target, u2, e.clientY);
+          persist(target);
+        } else {
+          var ckP = drag.parked ? drag.originKey : containerKey(drag.origin);
+          var uidP = drag.uid || uidOf(u2, unitsOf(drag.origin));
+          if (ckP) { u2.dataset.libsubCk = ckP; u2.dataset.libsubUid = uidP; parkSave(ckP, uidP, px, py); }
+          if (!drag.parked && drag.origin) persist(drag.origin);
+        }
+      } else {
+        persist(drag.container);
+      }
       supUnit = drag.unit; supUntil = Date.now() + 800;
       drag = null;
     }
@@ -13918,7 +14059,22 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (h && h.parentElement === supUnit){ e.stopPropagation(); e.preventDefault(); supUnit = null; }
   }, true);
 
-  function init(){ applyAll(); }
+  /* APOC-V216: a parked unit's head starts a drag from anywhere on
+     screen — drag it back over the panel to re-slot it, or drop it
+     somewhere new to re-park it there. */
+  document.addEventListener("pointerdown", function(e){
+    if (e.button !== undefined && e.button !== 0) return;
+    var h = e.target && e.target.closest ? e.target.closest(".nest-head") : null;
+    if (!h) return;
+    var unit = h.parentElement;
+    if (!unit || !unit.classList || !unit.classList.contains("libsub-parked")) return;
+    var r = unit.getBoundingClientRect();
+    cand = { unit: unit, x: e.clientX, y: e.clientY, id: e.pointerId, parked: true,
+             originKey: unit.dataset.libsubCk || null, uid: unit.dataset.libsubUid || null,
+             gx: e.clientX - r.left, gy: e.clientY - r.top };
+  });
+
+  function init(){ applyAll(); restoreParks(); }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
   /* lazy groups render after load (folders, monster types, uploaded
@@ -13926,7 +14082,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   var moTimer = null;
   new MutationObserver(function(){
     if (applying || drag || moTimer) return;
-    moTimer = setTimeout(function(){ moTimer = null; applyAll(); }, 120);
+    moTimer = setTimeout(function(){ moTimer = null; applyAll(); restoreParks(); }, 120);
   }).observe(lib, { childList: true, subtree: true });
 })();
 </script>
@@ -14403,5 +14559,202 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   else queued();
 })();
 </script>
+
+<style id="APOC-V216">
+/* APOC-V216 (Shaun, voice call 2026-11-08 ~03:02-03:13 — the compact
+   rollout, VTT side) —
+   (a) MINIMUM FOOTPRINTS: every button on the control page shrinks
+   to its label. The Library sub-heads were already halved in
+   APOC-V204; the main chrome still ran the base metrics (.btn
+   min-height 44px / padding 10-15px, .map-tools .btn 48px / 12-18px,
+   .ctl-tab 9-16px). Desktop scope like APOC-V200/V204 — the phone
+   drawer is untouched.
+   (b) Parked Library nests (APOC-V208 extension) and roamed buttons
+   (script below) wear the standing dark-blue drag outline. */
+@media (min-width:821px){
+  .btn{min-height:0!important;padding:4px 10px!important;line-height:1.25!important}
+  .map-tools .btn{min-height:0!important;padding:4px 10px!important}
+  .map-tools .atlas-toggle{min-height:0;padding:4px 6px}
+  .actions .btn{min-height:0!important;padding:4px 10px!important}
+  .ctl-tab{padding:4px 10px}
+  .td-ui .btn{padding:3px 8px!important}
+  /* the 09:52 re-press ("all the buttons... and every sub button",
+     no exceptions): the Map dropdown button and the Library's
+     section heads + its own head join the treatment — V204 had
+     deliberately kept section heads at full metrics. Sub-heads
+     below section level keep V204's tighter 11px/2px spec. */
+  .mapdd-btn{min-height:0!important;padding:4px 10px!important}
+  #artLibrary > .nest-body > .nest > .nest-head, #artLibrary > .artlib-head{min-height:0!important;padding:4px 8px!important;line-height:1.25!important}
+  .ctl-tab,.map-tools .btn,.td-ui .btn{touch-action:none}
+}
+.libsub-parked{box-shadow:0 8px 28px rgba(0,0,0,.5);background:rgba(10,12,16,.94);border:1px solid #2b2f38;border-radius:10px;padding:2px}
+.libsub-parked > .nest-head{cursor:grab;touch-action:none}
+.btn-roam{outline:2px solid rgba(30,64,175,.65);outline-offset:1px;box-shadow:0 8px 28px rgba(0,0,0,.5);cursor:grabbing}
+</style>
+<script>
+/* APOC-V216 — EVERY BUTTON MOVABLE (Shaun, voice call 2026-11-08
+   ~03:02-03:13): the Art Library subcategory buttons reorder inside
+   the Library and, from this build, park OUTSIDE it (APOC-V208
+   extension above); this block gives every other chrome button the
+   same treatment — the bottom-row tabs, the GM / Push to TV /
+   Ambience / Screen 2 / TV-DM cluster, the map-tools tool buttons
+   and the 3D view's controls. Drag a button (7px threshold, so a
+   plain click still clicks) and it leaves its bar and follows the
+   pointer; release away from home and it PARKS there — per device
+   only (apocVttBtnParkV1), still fully clickable; drag it back over
+   its home bar and release to re-slot it. "Reset layout" clears the
+   parks with every other layout record (both Reset lists carry the
+   key). Not DM-gated — a per-device layout control, the APOC-V208
+   principle. Display copies (?display) get none of it. Out of
+   scope, by design: buttons inside the map (Leaflet), inside the
+   Art Library (APOC-V208 owns those heads), inside dialogs/menus,
+   and the treatment chrome itself. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var KEY = "apocVttBtnParkV1", THRESH = 7;
+  function load(){ try { var v = JSON.parse(localStorage.getItem(KEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function save(s){ try { localStorage.setItem(KEY, JSON.stringify(s)); } catch(e){} }
+  function slug(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "btn"; }
+  function keyOf(btn){
+    if (btn.dataset && btn.dataset.roamKey) return btn.dataset.roamKey;
+    if (btn.id) return "#" + btn.id;
+    if (btn.dataset && btn.dataset.tdview) return "tdview:" + btn.dataset.tdview;
+    var p = btn.parentElement;
+    var psig = p ? (p.id ? "#" + p.id : slug(typeof p.className === "string" ? p.className.split(/\s+/)[0] : "")) : "?";
+    var base = psig + "/" + slug(btn.textContent), n = 0, sib = p ? p.children : [], mine = slug(btn.textContent), i;
+    for (i = 0; i < sib.length; i++){
+      if (sib[i] === btn) break;
+      if (sib[i].tagName === "BUTTON" && !sib[i].id && slug(sib[i].textContent) === mine) n++;
+    }
+    return n ? base + "~" + (n + 1) : base;
+  }
+  function parentDesc(el){
+    if (!el) return null;
+    if (el.id) return { id: el.id };
+    var cls = (typeof el.className === "string" ? el.className.split(/\s+/)[0] : "");
+    if (!cls) return null;
+    var all = document.getElementsByClassName(cls), idx = 0, i;
+    for (i = 0; i < all.length; i++){ if (all[i] === el) { idx = i; break; } }
+    return { cls: cls, idx: idx };
+  }
+  function parentByDesc(d){
+    if (!d) return null;
+    if (d.id) return document.getElementById(d.id);
+    var all = document.getElementsByClassName(d.cls || "");
+    return all[d.idx || 0] || all[0] || null;
+  }
+  function isTarget(btn){
+    if (!btn || btn.tagName !== "BUTTON") return false;
+    if (btn.id === "layoutResetBtn" || btn.classList.contains("fp-lock")) return false;
+    if (btn.closest("#artLibrary") || btn.closest("#apocMap") || btn.closest("#dmBarV181") || btn.closest("#titleBubble")) return false;
+    if (btn.closest(".leaflet") || btn.closest(".ctx-menu") || btn.closest("[role=dialog]")) return false;
+    return !!(btn.closest(".ctl-bar") || btn.closest(".map-tools") || btn.closest(".td-ui") || btn.id === "mapExpandBtn" || btn.id === "fsBtn" || btn.id === "view3dBtn" || btn.id === "mapDdBtn");
+  }
+  function findByKey(key){
+    if (key.charAt(0) === "#") return document.getElementById(key.slice(1));
+    var all = document.querySelectorAll("button"), i;
+    for (i = 0; i < all.length; i++) if (keyOf(all[i]) === key) return all[i];
+    return null;
+  }
+  function detach(btn, x, y, key){
+    var r = btn.getBoundingClientRect();
+    document.body.appendChild(btn);
+    btn.classList.add("btn-roam");
+    if (key) btn.dataset.roamKey = key;
+    btn.style.position = "fixed";
+    btn.style.left = Math.round(x) + "px";
+    btn.style.top = Math.round(y) + "px";
+    btn.style.width = Math.round(r.width) + "px";
+    btn.style.zIndex = "4600";
+    btn.style.margin = "0";
+  }
+  function undetach(btn){
+    btn.classList.remove("btn-roam");
+    btn.style.position = ""; btn.style.left = ""; btn.style.top = "";
+    btn.style.width = ""; btn.style.zIndex = ""; btn.style.margin = "";
+  }
+  function restore(){
+    var store = load(), keys = Object.keys(store), i, btn, rec;
+    for (i = 0; i < keys.length; i++){
+      rec = store[keys[i]]; if (!rec || typeof rec.x !== "number") continue;
+      btn = findByKey(keys[i]);
+      if (!btn || btn.classList.contains("btn-roam")) continue;
+      detach(btn, Math.max(0, Math.min(rec.x, window.innerWidth - 40)), Math.max(0, Math.min(rec.y, window.innerHeight - 24)), keys[i]);
+    }
+  }
+  var candB = null, dragB = null, supBtn = null, supUntilB = 0;
+  document.addEventListener("pointerdown", function(e){
+    if (e.button !== undefined && e.button !== 0) return;
+    var b = e.target && e.target.closest ? e.target.closest("button") : null;
+    /* a parked button sits in <body>, outside every scope ancestor —
+       it stays draggable by its .btn-roam class alone */
+    if (!b || (!b.classList.contains("btn-roam") && !isTarget(b))) return;
+    candB = { btn: b, x: e.clientX, y: e.clientY, id: e.pointerId,
+              parked: b.classList.contains("btn-roam"),
+              parent: b.parentElement, next: b.nextSibling, gx: 0, gy: 0, key: null, pdesc: null };
+  });
+  window.addEventListener("pointermove", function(e){
+    if (!candB || e.pointerId !== candB.id) return;
+    if (!dragB){
+      var dx = e.clientX - candB.x, dy = e.clientY - candB.y;
+      if (dx * dx + dy * dy < THRESH * THRESH) return;
+      dragB = candB;
+      dragB.key = dragB.btn.dataset.roamKey || keyOf(dragB.btn);
+      var r = dragB.btn.getBoundingClientRect();
+      dragB.gx = e.clientX - r.left; dragB.gy = e.clientY - r.top;
+      if (!dragB.parked) {
+        dragB.pdesc = parentDesc(dragB.parent);
+        detach(dragB.btn, r.left, r.top, dragB.key);
+      }
+    }
+    if (e.cancelable) e.preventDefault();
+    dragB.btn.style.left = Math.round(e.clientX - dragB.gx) + "px";
+    dragB.btn.style.top = Math.round(e.clientY - dragB.gy) + "px";
+  }, { passive: false });
+  function endB(e){
+    if (candB && e.pointerId !== undefined && e.pointerId !== candB.id) return;
+    if (dragB){
+      var b = dragB.btn, key = dragB.key || keyOf(b);
+      var rec = (load()[key] || {});
+      var home = dragB.parked ? parentByDesc(rec.pdesc) : dragB.parent;
+      var hr = home ? home.getBoundingClientRect() : null;
+      var overHome = hr && typeof e.clientX === "number" && e.clientX >= hr.left - 14 && e.clientX <= hr.right + 14 && e.clientY >= hr.top - 14 && e.clientY <= hr.bottom + 14;
+      if (overHome && home) {
+        undetach(b);
+        var nx = dragB.parked ? null : dragB.next;
+        if (nx && nx.parentElement === home) home.insertBefore(b, nx); else home.appendChild(b);
+        var st = load(); delete st[key]; save(st);
+      } else {
+        var st2 = load();
+        st2[key] = { x: parseInt(b.style.left, 10) || 0, y: parseInt(b.style.top, 10) || 0,
+                     pdesc: dragB.parked ? (st2[key] || {}).pdesc : dragB.pdesc };
+        save(st2);
+      }
+      supBtn = b; supUntilB = Date.now() + 800;
+      dragB = null;
+    }
+    candB = null;
+  }
+  window.addEventListener("pointerup", endB);
+  window.addEventListener("pointercancel", endB);
+  document.addEventListener("click", function(e){
+    if (!supBtn || Date.now() > supUntilB) return;
+    var b = e.target && e.target.closest ? e.target.closest("button") : null;
+    if (b && b === supBtn) { e.stopPropagation(); e.preventDefault(); supBtn = null; }
+  }, true);
+  /* Restore after the page's own relocation scripts settle — the
+     cluster assert runs ~10s and the TV-button placer ~12s, so the
+     late retries land after both and a parked cluster button stays
+     parked. */
+  [600, 2000, 5000, 11500, 13500].forEach(function(ms){ setTimeout(restore, ms); });
+  var moT = null;
+  new MutationObserver(function(){
+    if (dragB || moT) return;
+    moT = setTimeout(function(){ moT = null; restore(); }, 400);
+  }).observe(document.body, { childList: true, subtree: true });
+})();
+</script>
+
 </body>
 </html>
