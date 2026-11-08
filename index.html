@@ -788,7 +788,7 @@ body.map-expanded .stage-row{display:contents}
             </div>
             <div class="lib-panel" id="mapRepo">
               <div class="nest" id="mapsNest">
-                <button type="button" class="nest-head" aria-expanded="false"><span>Maps repository <span class="muted small" id="mapRepoCount"></span></span></button>
+                <button type="button" class="nest-head" aria-expanded="false"><span>Maps <span class="muted small" id="mapRepoCount"></span></span></button>
                 <div class="nest-body">
                   <div class="field">
                     <label for="mapRepoSearch">Search maps</label>
@@ -12469,5 +12469,75 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   }, 1500);
 })();
 </script>
+
+<style id="APOC-V199">
+/* v1.99 (Shaun, 2026-11-07 ~23:26-23:28) — Art Library finish pass.
+   (1) Maps is a top-level section of the Library: its head takes the
+   full section-head metrics (same as the Assets head), overriding
+   v1.76's halved .lib-panel head rule. */
+#artLibrary #mapsNest > .nest-head{font-size:1rem;min-height:44px;padding:8px 10px;line-height:1.3;white-space:normal}
+/* (2) Sub-buttons pack at the TOP of the opened Library in every
+   mode — no spreading down the box, no stretched gaps; opened
+   content flows below its own header. */
+.map-repo .artlib.open > .nest-body{align-content:start !important;justify-content:flex-start !important}
+/* (3) Hover previews for Library art: smallish. The .pv-lib class is
+   added by the script below only while the preview was triggered
+   from inside the Art Library. */
+#apocHoverPreview.pv-lib img{max-width:260px;max-height:260px}
+#apocHoverPreview.pv-lib .hp-name{max-width:260px}
+</style>
+
+<script>
+/* APOC-V199: Art Library hover previews go LEFT of the Library and
+   stay small (Shaun, 2026-11-07 ~23:26). The v1.75 shared preview
+   (#apocHoverPreview) is reused untouched; this block only tracks
+   whether the hovered picker item lives inside #artLibrary and, if
+   so, tags the preview .pv-lib (CSS caps it at 260px) and parks it
+   with its right edge 12px left of the Library panel. Hover still
+   never loads or selects anything; clicks are untouched. */
+(function(){
+  "use strict";
+  var pv = document.getElementById("apocHoverPreview");
+  if (!pv) return;
+  var ctx = { inLib: false, top: 0 };
+  function panelRect(){
+    var repo = document.querySelector(".map-repo");
+    if (repo && repo.classList.contains("per-float")) return repo.getBoundingClientRect();
+    var body = document.querySelector("#artLibrary > .nest-body");
+    return body ? body.getBoundingClientRect() : (repo ? repo.getBoundingClientRect() : null);
+  }
+  function placeLeft(){
+    if (!pv.classList.contains("open") || !pv.classList.contains("pv-lib")) return;
+    var pr = panelRect();
+    if (!pr) return;
+    var w = pv.offsetWidth || 276, h = pv.offsetHeight || 200;
+    var left = Math.round(pr.left - w - 12);
+    if (left < 8) left = Math.min(window.innerWidth - w - 8, Math.round(pr.right + 12));
+    var top = Math.round(Math.max(8, Math.min(ctx.top || pr.top, window.innerHeight - h - 8)));
+    pv.style.left = Math.max(8, left) + "px";
+    pv.style.top = top + "px";
+  }
+  /* Registered after the v1.75 listener, so on any picker hover it
+     runs in the same dispatch, right after the preview opens: tag
+     Library-triggered previews .pv-lib and park them left of the
+     panel before paint. Non-Library hovers lose the tag and keep
+     the v1.75 placement. */
+  document.addEventListener("mouseover", function(e){
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var item = t.closest(".mr-item") || t.closest(".lib-item");
+    if (!item) return;
+    ctx.inLib = !!item.closest("#artLibrary");
+    ctx.top = item.getBoundingClientRect().top;
+    if (!pv.classList.contains("open")) return;
+    if (ctx.inLib) { pv.classList.add("pv-lib"); placeLeft(); }
+    else pv.classList.remove("pv-lib");
+  }, false);
+  var img = pv.querySelector("img");
+  if (img) img.addEventListener("load", placeLeft);
+  window.addEventListener("resize", placeLeft);
+})();
+</script>
+
 </body>
 </html>
