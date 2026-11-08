@@ -7286,7 +7286,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1220";
+        var BUILD_STAMP = "2026-11-08-1224";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10504,7 +10504,7 @@ function floorConnected(L, cols, rows){
     var rp196 = document.querySelector(".map-repo");
     if (rp196 && rp196.classList.contains("per-float")) return; /* APOC-V196: floated — the screen-bottom fill owns the wrapper height; this map-bottom anchor fighting it was the S5 flicker */
     var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
-    var h = Math.round((window.innerHeight - 2) - lr.top); /* APOC-V198: screen bottom, not map bottom */
+    var h = Math.round((window.innerHeight - 2) - (lr.top + window.scrollY)); /* APOC-V198: screen bottom, not map bottom. APOC-V219: document-space top — a viewport-relative top grows the box by exactly the scroll offset on every pass (the scroll-drop ratchet) */
     if (h > 120 && Math.abs((lr.height) - h) > 1) lib.style.height = h + "px";
   }
 
@@ -11028,8 +11028,8 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (!lib.classList.contains("open")) { if (lib.style.marginBottom) lib.style.marginBottom = ""; return; }
     var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
     var target = window.innerHeight - 2; /* APOC-V198: screen bottom (Shaun standing order), superseding the v1.87 map-bottom anchor */
-    var h = Math.round(target - lr.top);
-    var ext = Math.round(target - mr.bottom);
+    var h = Math.round(target - (lr.top + window.scrollY)); /* APOC-V219: document-space tops (see fitLib) */
+    var ext = Math.round(target - (mr.bottom + window.scrollY));
     if (h > 120 && Math.abs(lr.height - h) > 1) lib.style.height = h + "px";
     var want = ext > 0 ? (-ext) + "px" : "";
     if (lib.style.marginBottom !== want) lib.style.marginBottom = want;
@@ -11297,7 +11297,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var dTop = Math.round(top - rr.top);
     if (dTop) repo.style.top = (repo.offsetTop + dTop) + "px";
     repo.classList.add("lib187-open");
-    var want = Math.round(B - top);
+    var want = Math.round(B - top - window.scrollY); /* APOC-V219: B/top are viewport coords; the height lives in panel space — net out the scroll offset or the floated box grows by it while open */
     var rr2 = rect(repo);
     if (Math.abs(rr2.height - want) > 1) repo.style.height = want + "px";
   }
@@ -11410,7 +11410,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var page = document.querySelector(".page"), am = document.getElementById("apocMap");
     if (!page || !am) return;
     var ih = window.innerHeight;
-    var gap = Math.floor(ih - page.getBoundingClientRect().bottom) - 1;
+    var gap = Math.floor(ih - (page.getBoundingClientRect().bottom + window.scrollY)) - 1; /* APOC-V219: document-space bottom — a viewport-relative bottom grows the map by exactly the scroll offset on every 2.5s pass */
     if (gap <= 0) return;
     var cur = am.getBoundingClientRect().height;
     am.style.height = Math.round(cur + gap) + "px";
@@ -11450,7 +11450,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       if (body) {
         var br = rect(body);
         if (br && br.height > 0) {
-          var bh = Math.round(br.height + (ih - br.bottom));
+          var bh = Math.round(br.height + (ih - (br.bottom + window.scrollY))); /* APOC-V219: document-space bottom */
           if (bh > 120 && Math.abs(br.height - bh) > 1) { body.style.height = bh + "px"; body.style.maxHeight = "none"; body.dataset.v188 = "1"; }
         }
       }
@@ -13196,7 +13196,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     } else {
       var br = body.getBoundingClientRect();
       if (br.height > 0 && Math.abs(br.bottom - ih) > 2) {
-        body.style.height = Math.round(br.height + (ih - br.bottom)) + "px";
+        body.style.height = Math.round(br.height + (ih - (br.bottom + window.scrollY))) + "px"; /* APOC-V219: document-space bottom */
         body.style.maxHeight = "none";
       }
     }
@@ -13252,7 +13252,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (repo.classList.contains("per-float")) return; /* floated: v1.87/v1.96 own the box */
     var lr = lib.getBoundingClientRect();
     if (lr.height < 10) return;
-    var want = Math.round(window.innerHeight - lr.top);
+    var want = Math.round(window.innerHeight - (lr.top + window.scrollY)); /* APOC-V219: document-space top */
     if (want > 80 && Math.abs(lr.height - want) > 1) lib.style.height = want + "px";
     if (body) { body.style.height = ""; body.style.maxHeight = ""; } /* flex owns the body height; clear any px the V196 tick set */
   }
@@ -14335,5 +14335,17 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   setInterval(mirror, 800);
 })();
 </script>
+
+<style id="APOC-V219">
+/* APOC-V219 (Shaun, voice call 2026-11-08 ~10:12 — "Art library keeps
+   dropping down when I scroll down the screen"): the phone opener tab
+   sat at top:42% of the initial containing block; that block grows
+   when the mobile browser chrome collapses mid-scroll, dropping the
+   tab on every scroll-down. 42svh is the small-viewport height —
+   identical while the chrome is shown, unchanged when it hides. */
+@media (max-width:820px){
+  #repoTab{top:42svh}
+}
+</style>
 </body>
 </html>
