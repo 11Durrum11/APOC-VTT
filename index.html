@@ -7291,7 +7291,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1456";
+        var BUILD_STAMP = "2026-11-08-1607";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8805,7 +8805,12 @@ function floorConnected(L, cols, rows){
     /* Heal by the element's own height too: the float must land fully
        inside the panel, not just with its top clamped. */
     var h = el.offsetHeight || 120;
-    y = Math.min(y, Math.max(0, pr.height - 48));
+    /* APOC-V228: clamp only once the panel height has SETTLED (two
+       consecutive reads within 2px). Clamping against a still-growing
+       panel rewrote Shaun's saved float y=455 to 0 during load. */
+    var keyH = Math.round(pr.height);
+    if (keyH >= 200 && typeof window.__apocPH === "number" && Math.abs(window.__apocPH - keyH) <= 2) y = Math.min(y, Math.max(0, pr.height - 48));
+    window.__apocPH = keyH;
     el.style.left = x + "px";
     el.style.top = y + "px";
   }
@@ -11069,7 +11074,12 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     el.classList.add("per-float");
     el.style.width = w + "px";
     var h = el.offsetHeight || 120;
-    y = Math.min(y, Math.max(0, pr.height - 48));
+    /* APOC-V228: clamp only once the panel height has SETTLED (two
+       consecutive reads within 2px). Clamping against a still-growing
+       panel rewrote Shaun's saved float y=455 to 0 during load. */
+    var keyH = Math.round(pr.height);
+    if (keyH >= 200 && typeof window.__apocPH === "number" && Math.abs(window.__apocPH - keyH) <= 2) y = Math.min(y, Math.max(0, pr.height - 48));
+    window.__apocPH = keyH;
     el.style.left = x + "px";
     el.style.top = y + "px";
   }
@@ -11317,16 +11327,25 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (repo.classList.contains("per-dragging")) return;
     if (lib && lib.classList.contains("open")) return;
     if (snap) return;
+    /* APOC-V228: hands off a float that is sitting exactly where the
+       user's saved record puts it — the overlap with the button row in
+       Shaun's layout is his placement, not an error to rescue. (In
+       scrolled states this guard otherwise re-measured the overlap
+       every tick and ratcheted the element up the page.) */
+    try {
+      var stR = JSON.parse(localStorage.getItem(PERKEY) || "{}");
+      if (stR.repo && stR.repo.float && typeof stR.repo.float.y === "number" && Math.abs(repo.offsetTop - stR.repo.float.y) <= 2) return;
+    } catch(e){}
     var rr = rect(repo), rw = rect(document.querySelector(".ctl-row"));
     if (!hits(rr, rw)) return;
     var delta = Math.round(rr.bottom - rw.top) + 2;
     if (delta <= 0) return;
     var nt = Math.max(0, repo.offsetTop - delta);
     repo.style.top = nt + "px";
-    try {
-      var st = JSON.parse(localStorage.getItem(PERKEY) || "{}");
-      if (st.repo && st.repo.float) { st.repo.float.y = nt; localStorage.setItem(PERKEY, JSON.stringify(st)); }
-    } catch(e){}
+    /* APOC-V228: the element adjustment above stays for this
+       session's reachability, but the RECORD is never written by a
+       tick — the saved float is the user's position, and in his
+       layout the overlap this guard "rescues" is deliberate. */
   }
   function guards(){ guardRepo(); anchorLib(); }
 
@@ -13432,11 +13451,13 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 
   /* ===== (5) full-height dropdowns: pin each open set exactly ===== */
   var TABID = { fog: "fogTab", lighting: "lightTab" };
+  var pinFrozen = {}; /* APOC-V228: open-dropdown heights frozen at open time */
   function pinSets(){
     if (window.innerWidth < 821) return;
     document.querySelectorAll(".ctl-set").forEach(function(set){
       if (set.hidden) {
         if (set.style.height || set.style.top) { set.style.height = ""; set.style.top = ""; }
+        delete pinFrozen[set.id];
         return;
       }
       var name = set.id.replace(/^set-/, "");
@@ -13445,13 +13466,19 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       if (!tab || !op) return;
       var tr = tab.getBoundingClientRect(), orr = op.getBoundingClientRect();
       var ts = Math.round(tr.bottom - orr.top) + "px";
-      var hs = Math.max(80, Math.round(window.innerHeight - tr.bottom)) + "px";
+      /* APOC-V228: the height is frozen at OPEN time. The v2.00 formula
+         (innerHeight - the tab's VIEWPORT bottom) re-evaluated every
+         200ms grows the open dropdown 1:1 with scrollY — the bubble
+         Shaun watched expand and follow him down the page (measured
+         +57px per 57px scroll step in his saved layout, probe229). */
+      var hs = pinFrozen[set.id];
+      if (hs === undefined) { hs = pinFrozen[set.id] = Math.max(80, Math.round(window.innerHeight - tr.bottom)) + "px"; }
       if (set.style.top !== ts) set.style.top = ts;
       if (set.style.height !== hs) set.style.height = hs;
     });
   }
   setInterval(pinSets, 200);
-  window.addEventListener("resize", pinSets);
+  window.addEventListener("resize", function(){ pinFrozen = {}; pinSets(); });
 
   /* ===== (6) control page: per-screen DM view choice =====
      Two toggle buttons ride with the Push to TV / Screen 2 cluster.
@@ -14249,8 +14276,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     var curY = fl && typeof fl.y === "number" ? fl.y : Math.round(m.repo.top - pr.top);
     var curW = fl && fl.w ? fl.w : Math.round(m.repo.width);
     var nx = Math.round(curX + dx), ny = Math.max(0, Math.round(curY + dy));
-    st.repo = { float: { x: nx, y: ny, w: curW } };
-    saveJ(PKEY, st);
+    /* APOC-V228: record write removed — see G1. The follow-up
+       inline assertion below keeps this session's grip reachable. */
     window.dispatchEvent(new Event("resize"));
     /* The perimeter clamp is panel-relative and can re-park the
        panel outside a smaller viewport (wide-panel geometry): if
@@ -14270,9 +14297,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       el.style.top = Math.max(0, Math.round(ct + ddy)) + "px";
       var st2 = loadJ(PKEY);
       if (st2.repo && st2.repo.float) {
-        st2.repo.float.x = Math.round((st2.repo.float.x || 0) + ddx);
-        st2.repo.float.y = Math.max(0, Math.round((st2.repo.float.y || 0) + ddy));
-        saveJ(PKEY, st2);
+        /* APOC-V228: record write removed — see G1. */
       }
     }, 200);
   }
@@ -14683,6 +14708,10 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       btn = findByKey(keys[i]);
       if (!btn || btn.classList.contains("btn-roam")) continue;
       detach(btn, Math.max(0, Math.min(rec.x, window.innerWidth - 40)), Math.max(0, Math.min(rec.y, window.innerHeight - 24)), keys[i]);
+      /* APOC-V228: menu-set state rides the same record — width
+         multiplier and hidden survive reloads like the position does. */
+      if (typeof rec.wmult === "number" && rec.wmult !== 1 && rec.bw) btn.style.width = Math.max(24, Math.round(rec.bw * rec.wmult)) + "px";
+      if (rec.hidden) btn.style.display = "none";
     }
   }
   var candB = null, dragB = null, supBtn = null, supUntilB = 0;
@@ -14703,6 +14732,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       if (dx * dx + dy * dy < THRESH * THRESH) return;
       dragB = candB;
       dragB.key = dragB.btn.dataset.roamKey || keyOf(dragB.btn);
+      var recL = load()[dragB.key];
+      if (recL && recL.lock) { candB = null; dragB = null; return; } /* APOC-V228: right-click Lock holds the button */
       var r = dragB.btn.getBoundingClientRect();
       dragB.gx = e.clientX - r.left; dragB.gy = e.clientY - r.top;
       if (!dragB.parked) {
@@ -14729,8 +14760,27 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
         var st = load(); delete st[key]; save(st);
       } else {
         var st2 = load();
-        st2[key] = { x: parseInt(b.style.left, 10) || 0, y: parseInt(b.style.top, 10) || 0,
-                     pdesc: dragB.parked ? (st2[key] || {}).pdesc : dragB.pdesc };
+        var nx2 = parseInt(b.style.left, 10) || 0, ny2 = parseInt(b.style.top, 10) || 0;
+        /* APOC-V228 snap-to-line (Shaun): a drop within 18px of its home
+           bar's line — or another parked button's line — locks exactly
+           onto that line, horizontally in line with its row or
+           vertically in line with its column. */
+        try {
+          var homeEl = dragB.parked ? parentByDesc((st2[key] || {}).pdesc) : dragB.parent;
+          if (homeEl) { var hr2 = homeEl.getBoundingClientRect();
+            if (Math.abs(ny2 - hr2.top) <= 26) ny2 = Math.round(hr2.top);
+            if (Math.abs(nx2 - hr2.left) <= 26) nx2 = Math.round(hr2.left);
+          }
+          Object.keys(st2).forEach(function(k2){ if (k2 === key) return; var r2 = st2[k2]; if (!r2 || typeof r2.x !== "number") return;
+            if (Math.abs(ny2 - r2.y) <= 26) ny2 = r2.y;
+            if (Math.abs(nx2 - r2.x) <= 26) nx2 = r2.x;
+          });
+          b.style.left = nx2 + "px"; b.style.top = ny2 + "px";
+        } catch(e){}
+        /* APOC-V228: merge, never replace — lock/wmult/hidden set via
+           the right-click menu must survive re-drags. */
+        st2[key] = Object.assign({}, st2[key] || {}, { x: nx2, y: ny2,
+                     pdesc: dragB.parked ? (st2[key] || {}).pdesc : dragB.pdesc });
         save(st2);
       }
       supBtn = b; supUntilB = Date.now() + 800;
@@ -14809,5 +14859,392 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
   #artLibrary > .nest-head.artlib-head{font-size:.78rem;padding:4px 5px!important;gap:5px}
 }
 </style>
+
+<style id="APOC-V228-CSS">
+/* v2.28 — right-click menu for movable buttons/heads/pieces: minimum
+   footprint closed (it is not in the layout at all), opens sized to its
+   content, ONE uniform scheme — white on near-black — dark-blue
+   treatment border, no orange/gold. */
+#btnCtxMenu{position:fixed;z-index:4900;min-width:200px;max-width:280px;background:rgba(10,12,16,.97);border:1.5px solid #1e40af;border-radius:10px;padding:5px;display:flex;flex-direction:column;gap:2px;box-shadow:0 14px 34px rgba(0,0,0,.55)}
+#btnCtxMenu[hidden]{display:none}
+#btnCtxMenu .bcm-title{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#9db4d8;padding:3px 8px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#btnCtxMenu button{text-align:left;background:transparent;border:0;color:#f5f5f5;font:inherit;font-size:.92rem;padding:7px 8px;border-radius:7px;cursor:pointer;min-height:32px}
+#btnCtxMenu button:hover{background:rgba(30,64,175,.35);color:#fff}
+#btnCtxMenu button.danger:hover{background:rgba(160,40,40,.25);color:#f0b1b1}
+#btnCtxMenu .bcm-sep{height:1px;background:rgba(157,180,216,.25);margin:3px 4px}
+.btn-picked{outline:2px solid #1e40af !important;outline-offset:1px}
+</style>
+<script>
+/* APOC-V228a — Library float record guard. The perimeter passes could
+   rewrite apocVttPerimeterV2's repo.float without the user touching
+   anything (a load-time clamp rendered Shaun's saved y=455 as 0 and a
+   later pass saved the clobber; one scroll excursion rewrote it again
+   to the map's document top). This guard snapshots the float at load;
+   any change NOT preceded by a pointer drag on the Library itself is
+   reverted within a second. A real drag (or send-home) is adopted as
+   the new snapshot. Per-device only; display copies excluded. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var PKEY = "apocVttPerimeterV2";
+  function loadJ(){ try { return JSON.parse(localStorage.getItem(PKEY) || "{}") || {}; } catch(e){ return {}; } }
+  function saveJ(v){ try { localStorage.setItem(PKEY, JSON.stringify(v)); } catch(e){} }
+  function floatOf(st){ return (st && st.repo && st.repo.float) ? JSON.stringify(st.repo.float) : null; }
+  var snap = floatOf(loadJ()), userAt = 0, touching = false;
+  document.addEventListener("pointerdown", function(e){
+    if (e.target && e.target.closest && e.target.closest(".map-repo")) touching = true;
+  }, true);
+  document.addEventListener("pointerup", function(){
+    if (!touching) return;
+    touching = false; userAt = Date.now();
+    setTimeout(function(){ snap = floatOf(loadJ()); }, 900);
+  }, true);
+  setInterval(function(){
+    if (touching || Date.now() - userAt < 2000) return;
+    var st = loadJ(), cur = floatOf(st);
+    if (cur === snap) return;
+    if (cur === null) { snap = null; return; }        /* sent home: adopt */
+    if (snap === null) { snap = cur; return; }        /* first float: adopt */
+    st.repo = st.repo || {}; st.repo.float = JSON.parse(snap); saveJ(st);
+    window.dispatchEvent(new Event("resize"));
+  }, 1000);
+})();
+</script>
+<script>
+/* APOC-V228b — right-click options for movable buttons, Library
+   sub-unit heads, section heads and treatment pieces (Shaun: "Build
+   them out" — delete/resize/move/lock/nest/reset as applicable).
+   Every action writes the SAME per-device stores the drag paths use,
+   so menu-set state persists across reload exactly like drag-set
+   state: apocVttBtnParkV1 (buttons: x/y/pdesc + lock/wmult/bw/hidden),
+   apocVttLibSubOrderV1 (sub-unit order/parks + locks, enforced by the
+   capture-phase blocker below), apocVttFreeLayoutV1 (pieces, via
+   their own .fp-lock buttons), apocVttPerimeterV2 (Library float).
+   The map's own object menu (#ctxMenu) is untouched: this menu only
+   opens on the chrome above, never on the map surface. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var BKEY = "apocVttBtnParkV1", SKEY = "apocVttLibSubOrderV1", PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1";
+  function loadB(){ try { var v = JSON.parse(localStorage.getItem(BKEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function saveB(s){ try { localStorage.setItem(BKEY, JSON.stringify(s)); } catch(e){} }
+  function loadS(){ try { var v = JSON.parse(localStorage.getItem(SKEY) || "null"); if (v && v.containers) { if (!v.parks) v.parks = {}; if (!v.locks) v.locks = {}; return v; } } catch(e){} return { containers: {}, parks: {}, locks: {} }; }
+  function saveS(s){ try { localStorage.setItem(SKEY, JSON.stringify(s)); } catch(e){} }
+  function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
+  function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  function slug(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "btn"; }
+  function slug48(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "x"; }
+  /* V216 keyOf / parentDesc / parentByDesc, replicated exactly so menu
+     actions land on the same records the drag path writes. */
+  function keyOf(btn){
+    if (btn.dataset && btn.dataset.roamKey) return btn.dataset.roamKey;
+    if (btn.id) return "#" + btn.id;
+    if (btn.dataset && btn.dataset.tdview) return "tdview:" + btn.dataset.tdview;
+    var p = btn.parentElement;
+    var psig = p ? (p.id ? "#" + p.id : slug(typeof p.className === "string" ? p.className.split(/\s+/)[0] : "")) : "?";
+    var base = psig + "/" + slug(btn.textContent), n = 0, sib = p ? p.children : [], mine = slug(btn.textContent), i;
+    for (i = 0; i < sib.length; i++){ if (sib[i] === btn) break; if (sib[i].tagName === "BUTTON" && !sib[i].id && slug(sib[i].textContent) === mine) n++; }
+    return n ? base + "~" + (n + 1) : base;
+  }
+  function parentDesc(el){
+    if (!el) return null;
+    if (el.id) return { id: el.id };
+    var cls = (typeof el.className === "string" ? el.className.split(/\s+/)[0] : "");
+    if (!cls) return null;
+    var all = document.getElementsByClassName(cls), idx = 0, i;
+    for (i = 0; i < all.length; i++){ if (all[i] === el) { idx = i; break; } }
+    return { cls: cls, idx: idx };
+  }
+  function parentByDesc(d){
+    if (!d) return null;
+    if (d.id) return document.getElementById(d.id);
+    var all = document.getElementsByClassName(d.cls || "");
+    return all[d.idx || 0] || all[0] || null;
+  }
+  function findByKey(key){
+    if (key.charAt(0) === "#") return document.getElementById(key.slice(1));
+    var all = document.querySelectorAll("button"), i;
+    for (i = 0; i < all.length; i++) if (keyOf(all[i]) === key) return all[i];
+    return null;
+  }
+  function isRoamBtn(btn){
+    if (!btn || btn.tagName !== "BUTTON") return false;
+    if (btn.id === "layoutResetBtn" || btn.classList.contains("fp-lock")) return false;
+    if (btn.closest("#artLibrary") || btn.closest("#apocMap") || btn.closest("#dmBarV181") || btn.closest("#titleBubble")) return false;
+    if (btn.closest(".leaflet") || btn.closest(".ctx-menu") || btn.closest("[role=dialog]") || btn.closest("#btnCtxMenu")) return false;
+    return !!(btn.classList.contains("btn-roam") || btn.closest(".ctl-bar") || btn.closest(".map-tools") || btn.closest(".td-ui") || btn.closest(".ctl-set") || btn.id === "mapExpandBtn" || btn.id === "fsBtn" || btn.id === "view3dBtn" || btn.id === "mapDdBtn");
+  }
+  /* Library sub-unit identity, replicating APOC-V208's labelOf/uidOf/
+     containerKey so locks land where its drag looks them up (via the
+     blocker below — V208 itself needs no edit). */
+  var lib = document.getElementById("artLibrary");
+  function labelOf(head){
+    var t = head ? (head.textContent || "") : "";
+    t = t.replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "");
+    t = t.replace(/\s*\(\d+(\s*\/\s*\d+)?\)\s*$/, "");
+    return t || "(untitled)";
+  }
+  function isSubUnit(el){
+    if (!el || !el.classList || !el.classList.contains("nest") || el === lib) return false;
+    var tb = lib ? lib.querySelector(":scope > .nest-body") : null;
+    if (tb && el.parentElement === tb) return false;
+    return !!el.querySelector(":scope > .nest-head");
+  }
+  function unitsOf(container){
+    var out = [];
+    for (var i = 0; i < container.children.length; i++) if (isSubUnit(container.children[i])) out.push(container.children[i]);
+    return out;
+  }
+  function uidOf(unit, siblings){
+    var base = slug48(labelOf(unit.querySelector(":scope > .nest-head"))), n = 0;
+    for (var i = 0; i < siblings.length; i++){ if (siblings[i] === unit) break; if (slug48(labelOf(siblings[i].querySelector(":scope > .nest-head"))) === base) n++; }
+    return n ? base + "~" + (n + 1) : base;
+  }
+  function segOf(el){
+    if (el.id) return "#" + el.id;
+    if (el.classList.contains("nest")) return slug48(labelOf(el.querySelector(":scope > .nest-head")));
+    var c = (typeof el.className === "string" ? el.className : "").split(/\s+/)[0];
+    return c || el.tagName.toLowerCase();
+  }
+  function containerKey(container){
+    var segs = [], el = container, guard = 0;
+    while (el && el !== lib && guard++ < 12){
+      if (!el.classList.contains("nest-body")) segs.unshift(segOf(el));
+      el = el.parentElement;
+    }
+    return segs.join("/");
+  }
+  function unitId(unit){
+    if (!unit) return null;
+    if (unit.classList.contains("libsub-parked")) return { ck: unit.dataset.libsubCk || "", uid: unit.dataset.libsubUid || "" };
+    var p = unit.parentElement; if (!p) return null;
+    return { ck: containerKey(p), uid: uidOf(unit, unitsOf(p)) };
+  }
+  function unitLocked(unit){
+    var id = unitId(unit); if (!id || !id.ck) return false;
+    var st = loadS();
+    return !!(st.locks && st.locks[id.ck] && st.locks[id.ck][id.uid]);
+  }
+  /* Lock enforcement: a capture-phase pointerdown on a locked sub-unit
+     head never reaches APOC-V208's own (bubble-phase, on #artLibrary)
+     drag nomination. Clicks (toggles) still pass: only movement past
+     the drag threshold is V208's, and it keys off this same event, so
+     blocking it blocks the drag while a plain press still toggles. */
+  document.addEventListener("pointerdown", function(e){
+    var h = e.target && e.target.closest ? e.target.closest(".nest-head") : null;
+    if (!h) return;
+    var unit = h.parentElement;
+    if (unit && isSubUnit(unit) && unitLocked(unit)) {
+      /* let the toggle click through, kill only the drag: V208 reads
+         pointermove on window after nominating on this pointerdown;
+         stopping this event's propagation to #artLibrary's listener
+         prevents nomination entirely. The head's own click (document
+         toggle listener) is a separate event and still fires. */
+      e.stopPropagation();
+    }
+  }, true);
+
+  /* ---------- menu element ---------- */
+  var menu = document.createElement("div");
+  menu.id = "btnCtxMenu"; menu.hidden = true;
+  document.body.appendChild(menu);
+  function close(){ menu.hidden = true; menu.innerHTML = ""; }
+  function open(x, y, title, items){
+    menu.innerHTML = "";
+    var t = document.createElement("div"); t.className = "bcm-title"; t.textContent = title; menu.appendChild(t);
+    items.forEach(function(it){
+      if (it.sep) { var s = document.createElement("div"); s.className = "bcm-sep"; menu.appendChild(s); return; }
+      var b = document.createElement("button"); b.type = "button"; b.textContent = it.label;
+      if (it.danger) b.className = "danger";
+      b.addEventListener("click", function(){ close(); it.fn(); });
+      menu.appendChild(b);
+    });
+    menu.hidden = false;
+    var w = menu.offsetWidth, h = menu.offsetHeight;
+    menu.style.left = Math.min(x, Math.max(4, window.innerWidth - w - 6)) + "px";
+    menu.style.top = Math.min(y, Math.max(4, window.innerHeight - h - 6)) + "px";
+  }
+  document.addEventListener("pointerdown", function(e){ if (!menu.hidden && !menu.contains(e.target)) close(); });
+  document.addEventListener("keydown", function(e){ if (e.key === "Escape") { close(); cancelPick(); } });
+
+  /* ---------- pick up / drop (the menu's move path) ---------- */
+  var pick = null;
+  function snapXY(btn, homeEl, nx, ny){
+    try {
+      if (homeEl) { var hr = homeEl.getBoundingClientRect();
+        if (Math.abs(ny - hr.top) <= 26) ny = Math.round(hr.top);
+        if (Math.abs(nx - hr.left) <= 26) nx = Math.round(hr.left);
+      }
+      var st = loadB();
+      Object.keys(st).forEach(function(k){ var r = st[k]; if (!r || typeof r.x !== "number") return;
+        if (Math.abs(ny - r.y) <= 26) ny = r.y;
+        if (Math.abs(nx - r.x) <= 26) nx = r.x;
+      });
+    } catch(e){}
+    return { x: nx, y: ny };
+  }
+  function detachBtn(btn, key){
+    var r = btn.getBoundingClientRect();
+    document.body.appendChild(btn);
+    btn.classList.add("btn-roam");
+    if (key) btn.dataset.roamKey = key;
+    btn.style.position = "fixed";
+    btn.style.left = Math.round(r.left) + "px"; btn.style.top = Math.round(r.top) + "px";
+    btn.style.width = Math.round(r.width) + "px"; btn.style.zIndex = "4600"; btn.style.margin = "0";
+    return r;
+  }
+  function undetachBtn(btn){
+    btn.classList.remove("btn-roam");
+    btn.style.position = ""; btn.style.left = ""; btn.style.top = "";
+    btn.style.width = ""; btn.style.zIndex = ""; btn.style.margin = "";
+  }
+  function startPick(btn){
+    var key = btn.dataset.roamKey || keyOf(btn);
+    var parked = btn.classList.contains("btn-roam");
+    var st = loadB(), rec = st[key] || {};
+    var home = parked ? parentByDesc(rec.pdesc) : btn.parentElement;
+    var r = parked ? btn.getBoundingClientRect() : detachBtn(btn, key);
+    pick = { btn: btn, key: key, parked: parked, home: home,
+             parent: parked ? null : home, next: parked ? null : btn.nextSibling,
+             pdesc: parked ? rec.pdesc : parentDesc(home), gx: r.width / 2, gy: r.height / 2 };
+    btn.classList.add("btn-picked");
+  }
+  function cancelPick(){
+    if (!pick) return;
+    var p = pick; pick = null;
+    p.btn.classList.remove("btn-picked");
+    if (!p.parked) { undetachBtn(p.btn); if (p.parent) { if (p.next && p.next.parentElement === p.parent) p.parent.insertBefore(p.btn, p.next); else p.parent.appendChild(p.btn); } }
+  }
+  window.addEventListener("pointermove", function(e){
+    if (!pick) return;
+    pick.btn.style.left = Math.round(e.clientX - pick.gx) + "px";
+    pick.btn.style.top = Math.round(e.clientY - pick.gy) + "px";
+  }, true);
+  document.addEventListener("pointerdown", function(e){
+    if (!pick) return;
+    if (menu.contains(e.target)) return;
+    var p = pick; pick = null;
+    p.btn.classList.remove("btn-picked");
+    e.preventDefault(); e.stopPropagation();
+    var hr = p.home ? p.home.getBoundingClientRect() : null;
+    var overHome = hr && e.clientX >= hr.left - 14 && e.clientX <= hr.right + 14 && e.clientY >= hr.top - 14 && e.clientY <= hr.bottom + 14;
+    var st = loadB();
+    if (overHome && p.home) {
+      undetachBtn(p.btn);
+      if (!p.parked) { if (p.next && p.next.parentElement === p.home) p.home.insertBefore(p.btn, p.next); else p.home.appendChild(p.btn); }
+      else p.home.appendChild(p.btn);
+      delete st[p.key]; saveB(st);
+    } else {
+      var nx = parseInt(p.btn.style.left, 10) || 0, ny = parseInt(p.btn.style.top, 10) || 0;
+      var sn = snapXY(p.btn, p.home, nx, ny);
+      p.btn.style.left = sn.x + "px"; p.btn.style.top = sn.y + "px";
+      st[p.key] = Object.assign({}, st[p.key] || {}, { x: sn.x, y: sn.y, pdesc: p.pdesc });
+      saveB(st);
+    }
+    /* swallow the click this drop would otherwise deliver */
+    var kill = function(ev){ ev.stopPropagation(); ev.preventDefault(); document.removeEventListener("click", kill, true); };
+    document.addEventListener("click", kill, true);
+    setTimeout(function(){ document.removeEventListener("click", kill, true); }, 600);
+  }, true);
+
+  /* ---------- menu builders ---------- */
+  function btnItems(btn){
+    var key = btn.dataset.roamKey || keyOf(btn);
+    var st = loadB(), rec = st[key] || {};
+    var items = [];
+    items.push({ label: pick && pick.btn === btn ? "Drop it here (or press Esc to cancel)" : "Pick up / move", fn: function(){ if (pick && pick.btn === btn) cancelPick(); else startPick(btn); } });
+    items.push({ label: rec.lock ? "Unlock (let it move again)" : "Lock (hold it right here)", fn: function(){
+      var s = loadB(); s[key] = Object.assign({}, s[key] || {}, { lock: !(s[key] && s[key].lock) }); saveB(s);
+    } });
+    items.push({ sep: true });
+    [0.75, 1, 1.25].forEach(function(m){
+      items.push({ label: (m === 0.75 ? "Resize — Narrow" : m === 1 ? "Resize — Default width" : "Resize — Wide") + ((rec.wmult || 1) === m ? "  ✓" : ""), fn: function(){
+        var s = loadB(), r = Object.assign({}, s[key] || {});
+        var curW = btn.getBoundingClientRect().width;
+        if (!r.bw) r.bw = Math.round(curW / (r.wmult || 1));
+        r.wmult = m; s[key] = r; saveB(s);
+        if (btn.classList.contains("btn-roam")) btn.style.width = Math.max(24, Math.round(r.bw * m)) + "px";
+      } });
+    });
+    items.push({ sep: true });
+    if (btn.classList.contains("btn-roam") || rec.x !== undefined) items.push({ label: "Send back to its bar", fn: function(){
+      var s = loadB(), r = s[key] || {};
+      var home = parentByDesc(r.pdesc);
+      if (home) { undetachBtn(btn); home.appendChild(btn); }
+      delete s[key]; saveB(s);
+    } });
+    items.push({ label: "Hide this button", danger: true, fn: function(){
+      var s = loadB(); s[key] = Object.assign({}, s[key] || {}, { hidden: true }); saveB(s);
+      btn.style.display = "none";
+    } });
+    var hiddenKeys = Object.keys(loadB()).filter(function(k){ var r = loadB()[k]; return r && r.hidden; });
+    if (hiddenKeys.length) items.push({ label: "Restore hidden buttons (" + hiddenKeys.length + ")", fn: function(){
+      var s = loadB();
+      Object.keys(s).forEach(function(k){ if (s[k] && s[k].hidden) { s[k].hidden = false; var b = findByKey(k); if (b) b.style.display = ""; } });
+      saveB(s);
+    } });
+    return items;
+  }
+  function headItems(head){
+    var unit = head.parentElement;
+    var items = [];
+    items.push({ label: "Open / close this section", fn: function(){ head.click(); } });
+    if (unit && isSubUnit(unit)) {
+      var id = unitId(unit), locked = unitLocked(unit);
+      items.push({ label: locked ? "Unlock (let it move again)" : "Lock (hold it right here)", fn: function(){
+        var s = loadS(); if (!s.locks) s.locks = {}; if (!s.locks[id.ck]) s.locks[id.ck] = {};
+        s.locks[id.ck][id.uid] = !locked; saveS(s);
+      } });
+      if (unit.classList.contains("libsub-parked")) items.push({ label: "Send back into the panel", fn: function(){
+        var s = loadS(); if (s.parks && s.parks[id.ck]) { delete s.parks[id.ck][id.uid]; saveS(s); }
+        location.reload();
+      } });
+      items.push({ label: "Reset this section's order", fn: function(){
+        var s = loadS(); if (s.containers) { delete s.containers[id.ck]; saveS(s); }
+        location.reload();
+      } });
+    }
+    if (head.classList.contains("artlib-head")) {
+      items.push({ sep: true });
+      var fl = loadJ(FKEY), repoLock = !!(fl["per-repo"] && fl["per-repo"].lock);
+      items.push({ label: repoLock ? "Unlock the Library" : "Lock the Library here", fn: function(){
+        var f = loadJ(FKEY); f["per-repo"] = Object.assign({}, f["per-repo"] || {}, { lock: !repoLock }); saveJ(FKEY, f);
+      } });
+      items.push({ label: "Send the Library home", fn: function(){
+        var st = loadJ(PKEY); delete st.repo; saveJ(PKEY, st); location.reload();
+      } });
+    }
+    return items;
+  }
+  function pieceItems(piece, pid){
+    var items = [];
+    var lockBtn = piece.querySelector(".fp-lock");
+    if (lockBtn) items.push({ label: "Lock / unlock this piece", fn: function(){ lockBtn.click(); } });
+    items.push({ label: "Reset this piece", fn: function(){
+      var f = loadJ(FKEY); if (f[pid]) { delete f[pid]; saveJ(FKEY, f); }
+      location.reload();
+    } });
+    return items;
+  }
+
+  document.addEventListener("contextmenu", function(e){
+    var t = e.target;
+    if (!t || !t.closest) return;
+    if (t.closest("#apocMap") || t.closest(".leaflet")) return; /* the map's own menu owns the map */
+    var head = t.closest(".nest-head");
+    if (head && lib && lib.contains(head)) { e.preventDefault(); open(e.clientX, e.clientY, labelOf(head) || "Section", headItems(head)); return; }
+    var repo = t.closest(".map-repo");
+    if (repo && !head) { e.preventDefault(); open(e.clientX, e.clientY, "Art Library", headItems(lib ? lib.querySelector(".artlib-head") : repo)); return; }
+    var btn = t.closest("button");
+    if (btn && isRoamBtn(btn)) { e.preventDefault(); open(e.clientX, e.clientY, (btn.textContent || "Button").replace(/\s+/g, " ").trim().slice(0, 40) || "Button", btnItems(btn)); return; }
+    var piece = t.closest(".per-group, .ctl-row, #titleBubble");
+    if (piece) {
+      var pid = piece.id === "titleBubble" ? "title" : piece.classList.contains("ctl-row") ? "ctlrow" : ("per-" + (piece.dataset.perGroup || ""));
+      e.preventDefault(); open(e.clientX, e.clientY, "Piece", pieceItems(piece, pid)); return;
+    }
+  });
+})();
+</script>
+
 </body>
 </html>
