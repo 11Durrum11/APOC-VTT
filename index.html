@@ -574,7 +574,7 @@ body.displaying .td-ui{display:none}
 .map-rsz-tl{cursor:nwse-resize;width:15px;height:15px}
 .map-rsz-tr{cursor:nesw-resize;width:15px;height:15px}
 .map-rsz-bl{cursor:nesw-resize;width:15px;height:15px}
-.map-rsz:hover{background:rgba(216,178,90,.38);border-radius:4px}
+.map-rsz:hover{background:rgba(30,64,175,.45);border-radius:4px}
 @media (max-width:820px){
 .map-rsz{display:none}
 }
@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1747";
+        var BUILD_STAMP = "2026-11-07-1815";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9089,6 +9089,261 @@ function floorConnected(L, cols, rows){
   document.addEventListener("click", function(){ setTimeout(fitLib, 350); setTimeout(fitLib, 1000); }, true);
   window.addEventListener("resize", function(){ setTimeout(fitLib, 300); });
   setInterval(function(){ var lib = document.getElementById("artLibrary"); if (lib && lib.classList.contains("open")) fitLib(); }, 1800);
+})();
+</script>
+
+<style id="APOC-V181">
+/* v1.81 (Shaun, 2026-11-07) — THE TREATMENT COMPLETION, Weather-v25
+   pattern: the whole free-pieces treatment + in-place text editing
+   are DM-ONLY. DM mode arms per device via ?dm=1 (localStorage
+   apocVttDM); the Edit Lock defaults LOCKED. Unless this device is
+   armed AND unlocked (body.vtt-dm-edit), every grip, resize handle,
+   per-piece lock and the Reset-layout button is display:none and
+   inert — player view and the TV/display copies are clean.
+   Campaign artwork is exempt: never gated, moved, resized or
+   text-edited by this block (targets are text headers/labels only). */
+body:not(.vtt-dm-edit) .fp-h, body:not(.vtt-dm-edit) .fp-lock,
+body:not(.vtt-dm-edit) #layoutResetBtn, body:not(.vtt-dm-edit) .per-grip,
+body:not(.vtt-dm-edit) .fp-grip, body:not(.vtt-dm-edit) .zb-grip,
+body:not(.vtt-dm-edit) .ff-grip{display:none!important}
+#dmBarV181{position:fixed;top:6px;right:6px;z-index:500;display:flex;gap:6px;align-items:center;background:rgba(10,12,16,.88);border:1px solid #6b5a33;border-radius:999px;padding:3px 8px;font-size:.78rem;color:#f3e2b3;box-shadow:0 4px 16px rgba(0,0,0,.5)}
+#dmBarV181 .dm-tag{font-weight:700;letter-spacing:.06em;color:#e8a33d}
+#dmBarV181 button{font:inherit;font-size:.78rem;padding:2px 9px;border-radius:999px;border:1px solid #6b5a33;background:#241d12;color:#f3e2b3;cursor:pointer;min-height:0}
+#dmBarV181 button:hover{background:#6b5a33;color:#fff7e0}
+body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-offset:1px;cursor:text}
+[data-v181-ed].v181-editing{outline:2px solid #1e40af!important;background:rgba(30,64,175,.14)}
+/* DARK BLUE treatment highlights (Shaun, 2026-11-07 ~18:02 — dark
+   blue governs, superseding every orange/gold move highlight):
+   grips, resize handles, drag/selection outlines for the movable
+   pieces, the map resize handle hover and the zoom-bar accents all
+   render dark blue (#1e40af; grip glyphs #2f62d6 for contrast on
+   the dark UI). !important so they win over the v1.79/v1.80 rules. */
+.fp-grip,.per-grip,.zb-grip,.ff-grip{color:#2f62d6!important;opacity:1!important}
+.fp-h{background:rgba(30,64,175,.28)!important;border:1px solid #1e40af!important}
+.fp-h:hover,.fp-h:active{background:rgba(30,64,175,.6)!important}
+.map-rsz:hover{background:rgba(30,64,175,.45)!important}
+.fp-piece-float,.per-float{outline:2px solid rgba(30,64,175,.65);outline-offset:1px}
+#zoomBar input[type=range],#zoomBar .zb-pinch input{accent-color:#1e40af!important}
+</style>
+
+<script>
+/* APOC-V181 — TREATMENT COMPLETION (Shaun, 2026-11-07), Weather-v25
+   pattern. (a) DM ARMING: ?dm=1 arms DM mode on this device only
+   (localStorage apocVttDM='1'); a DM bar renders only when armed:
+   Edit Lock (default LOCKED), Reset Layout, Reset Text, Exit DM.
+   ?display copies never arm. (b) GATE: all v1.80 treatment UI
+   (.fp-h handles, .fp-lock locks, #layoutResetBtn, .per-grip /
+   .fp-grip / .zb-grip / .ff-grip grips) is hidden by the APOC-V181
+   stylesheet and inert unless body.vtt-dm-edit (armed + unlocked);
+   the capture-phase pointerdown guard below belt-and-braces blocks
+   gestures on those selectors whenever edit is off (the V180
+   handlers live in their own closure and are not edited).
+   (c) EDIT IN PLACE (edit-on only): double-click a framing label —
+   panel h3 headings, .nest-head labels, the Art Library head,
+   .ctl-tab labels, #titleBubble h1, .mr-folder-head map folders,
+   monster type heads (also .nest-head) — to rename it; Enter/blur
+   commits, Esc cancels. Keys are deterministic: group + DOM index.
+   Saves SHARED via the page's own Supabase site_settings store
+   (global db + SETTINGS_TABLE), key 'vtt_labels', value
+   {labels:{key:text}}; a per-device mirror (apocVttLabelsV1) is the
+   offline fallback. Reset Text clears both and reloads.
+   EXEMPTION: campaign artwork is left completely alone — no target
+   inside an artwork tile/grid, no image is ever a target. */
+(function(){
+  "use strict";
+  var qs = new URLSearchParams(location.search);
+  var isDisplay = !!qs.get("display");
+
+  /* ---- capture-phase guard: treatment gestures inert when not edit-on ---- */
+  var TREAT_SEL = ".fp-h,.fp-lock,.per-grip,.fp-grip,.zb-grip,.ff-grip,#layoutResetBtn";
+  document.addEventListener("pointerdown", function(e){
+    if (document.body && document.body.classList.contains("vtt-dm-edit")) return;
+    var t = e.target;
+    if (t && t.closest && t.closest(TREAT_SEL)) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }
+  }, true);
+
+  if (isDisplay) return; /* TV/display copies never arm */
+
+  var DMKEY = "apocVttDM", UKEY = "apocVttEditUnlocked", LKEY = "apocVttLabelsV1", SKEY = "vtt_labels";
+  var armed = false;
+  try {
+    if (qs.get("dm") === "1") { localStorage.setItem(DMKEY, "1"); armed = true; }
+    else armed = localStorage.getItem(DMKEY) === "1";
+  } catch(e){}
+  if (!armed) return; /* ===== PLAYER SIDE: clean, locked, no DM bar ===== */
+
+  function unlocked(){ try { return localStorage.getItem(UKEY) === "1"; } catch(e){ return false; } }
+  function editOn(){ return unlocked(); }
+
+  /* ---- shared label store ---- */
+  var labels = {};
+  function loadMirror(){ try { var v = JSON.parse(localStorage.getItem(LKEY) || "null"); if (v && v.labels && typeof v.labels === "object") labels = v.labels; } catch(e){} }
+  function saveMirror(){ try { localStorage.setItem(LKEY, JSON.stringify({ labels: labels })); } catch(e){} }
+  function dbReady(){ return (typeof db !== "undefined") && !!db && (typeof SETTINGS_TABLE !== "undefined"); }
+  async function loadShared(){
+    if (!dbReady()) return;
+    try {
+      var res = await db.from(SETTINGS_TABLE).select("value").eq("key", SKEY);
+      var row = res && res.data && res.data[0];
+      if (row && row.value && row.value.labels && typeof row.value.labels === "object") { labels = row.value.labels; saveMirror(); applyAll(); }
+    } catch(e){}
+  }
+  async function saveShared(){
+    saveMirror();
+    if (!dbReady()) return;
+    try { await db.from(SETTINGS_TABLE).upsert({ key: SKEY, value: { labels: labels }, updated_at: new Date().toISOString() }, { onConflict: "key" }); } catch(e){}
+  }
+
+  /* ---- editable registry: deterministic keys = group + DOM index ---- */
+  var GROUPS = [
+    ["title", "#titleBubble h1"],
+    ["h3", "h3"],
+    ["folder", ".mr-folder-head"],
+    ["tab", ".ctl-tab"],
+    ["nest", ".nest-head"]
+  ];
+  var ART_CTX = ".lib-grid,.lib-item,.art-item,.gallery,#libArtwork,#libSymbols,.mon-grid,.tk-grid";
+  var SKIP_CTX = ".fp-grip,.per-grip,.zb-grip,.ff-grip,.fp-lock,.ctl-caret,#siteVersion,#monsterCount,.muted";
+  function excluded(el){
+    if (!el) return true;
+    if (el.closest(ART_CTX)) return true;
+    if (el.querySelector("img,canvas,svg")) return true;
+    return false;
+  }
+  function labelNode(el){
+    var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    var n;
+    while ((n = walker.nextNode())) {
+      if (!n.nodeValue || !n.nodeValue.trim()) continue;
+      var p = n.parentElement, skip = false;
+      while (p && p !== el) { if (p.matches && p.matches(SKIP_CTX)) { skip = true; break; } p = p.parentElement; }
+      if (skip) continue;
+      if (/^[\s⠿🔒🔓·.]+$/.test(n.nodeValue.trim())) continue;
+      return n;
+    }
+    return null;
+  }
+  function getText(el){ var n = labelNode(el); return n ? n.nodeValue.trim() : ""; }
+  function setText(el, txt){ var n = labelNode(el); if (n) n.nodeValue = txt; }
+  function scan(){
+    var targets = [];
+    GROUPS.forEach(function(g){
+      document.querySelectorAll(g[1]).forEach(function(el, i){
+        if (el.dataset.v181Key) return;
+        if (excluded(el)) return;
+        el.dataset.v181Key = g[0] + ":" + i;
+        el.dataset.v181Ed = "1";
+        targets.push(el);
+      });
+    });
+    document.querySelectorAll("[data-v181-ed]").forEach(function(el){ if (targets.indexOf(el) < 0) targets.push(el); });
+    return targets;
+  }
+  function applyAll(){
+    scan().forEach(function(el){
+      var k = el.dataset.v181Key;
+      if (k && labels[k] && getText(el) !== labels[k]) setText(el, labels[k]);
+    });
+  }
+
+  /* ---- edit session ---- */
+  var editingEl = null;
+  function endEdit(save){
+    if (!editingEl) return;
+    var el = editingEl; editingEl = null;
+    el.contentEditable = "false"; el.classList.remove("v181-editing");
+    var old = el.dataset.v181Old || "";
+    if (save) {
+      var now = getText(el);
+      if (now && now !== old) { labels[el.dataset.v181Key] = now; saveShared(); }
+      else setText(el, old);
+    } else setText(el, old);
+    delete el.dataset.v181Old;
+  }
+  document.addEventListener("dblclick", function(e){
+    if (!editOn() || editingEl) return;
+    var t = e.target;
+    var el = t && t.closest ? t.closest("#titleBubble h1,h3,.mr-folder-head,.ctl-tab,.nest-head") : null;
+    if (!el || excluded(el)) return;
+    scan();
+    if (!el.dataset.v181Key) return;
+    e.preventDefault(); e.stopPropagation();
+    editingEl = el;
+    el.dataset.v181Old = getText(el);
+    el.contentEditable = "true"; el.classList.add("v181-editing");
+    el.focus();
+    var n = labelNode(el);
+    try { if (n) { var r = document.createRange(); r.setStart(n, 0); r.setEnd(n, n.nodeValue.length); var s = getSelection(); s.removeAllRanges(); s.addRange(r); } } catch(err){}
+  }, true);
+  document.addEventListener("keydown", function(e){
+    if (!editingEl) return;
+    if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); endEdit(true); editingEl = null; }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); endEdit(false); }
+  }, true);
+  document.addEventListener("focusout", function(){ if (editingEl) setTimeout(function(){ endEdit(true); }, 80); });
+  document.addEventListener("pointerdown", function(e){
+    if (editingEl && e.target !== editingEl && !(e.target.closest && e.target.closest("[data-v181-ed].v181-editing"))) { e.stopPropagation(); }
+  }, true);
+
+  /* ---- DM bar ---- */
+  function ensureBar(){
+    if (document.getElementById("dmBarV181") || !document.body) return;
+    var bar = document.createElement("div");
+    bar.id = "dmBarV181";
+    bar.innerHTML = '<span class="dm-tag">DM</span>';
+    var lock = document.createElement("button"); lock.type = "button"; lock.id = "dmLockBtn";
+    lock.addEventListener("click", function(){
+      var on = !unlocked();
+      try { localStorage.setItem(UKEY, on ? "1" : "0"); } catch(e){}
+      if (!on) endEdit(false);
+      paint();
+    });
+    var rl = document.createElement("button"); rl.type = "button"; rl.id = "dmResetLayoutBtn"; rl.textContent = "Reset Layout";
+    rl.title = "Return every piece to the default layout (same as Reset layout in the title bubble)";
+    rl.addEventListener("click", function(){
+      var b = document.getElementById("layoutResetBtn");
+      if (b) { b.click(); return; }
+      ["apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      location.reload();
+    });
+    var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
+    rt.title = "Clear every renamed label (shared store + this device) and reload";
+    rt.addEventListener("click", async function(){
+      labels = {};
+      try { localStorage.removeItem(LKEY); } catch(e){}
+      if (dbReady()) { try { await db.from(SETTINGS_TABLE).upsert({ key: SKEY, value: { labels: {} }, updated_at: new Date().toISOString() }, { onConflict: "key" }); } catch(e){} }
+      location.reload();
+    });
+    var ex = document.createElement("button"); ex.type = "button"; ex.id = "dmExitBtn"; ex.textContent = "Exit DM";
+    ex.addEventListener("click", function(){
+      try { localStorage.removeItem(DMKEY); localStorage.removeItem(UKEY); } catch(e){}
+      var u = new URL(location.href); u.searchParams.delete("dm");
+      location.replace(u.toString());
+    });
+    bar.appendChild(lock); bar.appendChild(rl); bar.appendChild(rt); bar.appendChild(ex);
+    document.body.appendChild(bar);
+    paint();
+  }
+  function paint(){
+    var b = document.getElementById("dmLockBtn");
+    if (b) b.textContent = unlocked() ? "🔓 Editing" : "🔒 Locked";
+    if (document.body) {
+      document.body.classList.add("vtt-dm-armed");
+      document.body.classList.toggle("vtt-dm-edit", editOn());
+    }
+  }
+  function tick(){ ensureBar(); paint(); applyAll(); }
+
+  loadMirror();
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ setTimeout(tick, 300); });
+  else setTimeout(tick, 300);
+  setTimeout(loadShared, 1200); setTimeout(loadShared, 4000); setTimeout(loadShared, 10000);
+  setInterval(tick, 2000);
+  try {
+    var mo = new MutationObserver(function(){ if (Object.keys(labels).length) applyAll(); });
+    var startObs = function(){ if (document.body) mo.observe(document.body, { childList: true, subtree: true }); };
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startObs); else startObs();
+  } catch(e){}
 })();
 </script>
 
