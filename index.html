@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1710";
+        var BUILD_STAMP = "2026-11-07-1716";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8640,6 +8640,59 @@ function floorConnected(L, cols, rows){
   var started = Date.now();
   var timer = setInterval(function(){
     addControls(); place();
+    if (Date.now() - started > 12000) clearInterval(timer);
+  }, 400);
+})();
+</script>
+
+<style id="APOC-V178">
+/* v1.78 — the Screen 2 opener sits with the Screen 2 pair in the cluster. */
+#screen2OpenBtn{white-space:nowrap}
+</style>
+<script>
+/* APOC-V178: adds the one control v1.77's Screen 2 build was missing —
+   OPEN Screen 2. v1.77 shipped "Screen 2: Send current map" and
+   "Screen 2: Mirror" beside the Push to TV cluster, but nothing on the
+   control copy opened the second display; Shaun's spec for the
+   two-screen option lists the opener first. This block creates it and
+   parks it directly BEFORE the Send button (same parent row as the
+   GM VIEW / PUSH TO TV / AMBIENCE cluster), re-asserting while the
+   v1.76/v1.77 placement scripts settle. Display copies (?display=1/2)
+   get nothing: the block returns immediately on them, and the button
+   only ever opens a local tab — it writes no shared state. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  function addOpen(){
+    var send = document.getElementById("screen2SendBtn");
+    var push = document.getElementById("pushTvBtn");
+    var open = document.getElementById("screen2OpenBtn");
+    if (!open) {
+      if (!send && !push) return;
+      open = document.createElement("button");
+      open.type = "button"; open.className = "btn"; open.id = "screen2OpenBtn";
+      open.textContent = "Screen 2";
+      open.title = "Open the Screen 2 TV copy in a new tab";
+      open.addEventListener("click", function(){
+        var u = new URL(location.href);
+        u.searchParams.set("display", "2");
+        u.searchParams.delete("v");
+        u.hash = "";
+        window.open(u.href, "_blank", "noopener");
+      });
+    }
+    if (send && send.parentNode) {
+      if (send.previousSibling !== open) send.parentNode.insertBefore(open, send);
+    } else if (push && push.parentNode && open !== push) {
+      if (push.nextSibling !== open) push.parentNode.insertBefore(open, push.nextSibling);
+    }
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", addOpen);
+  else addOpen();
+  addOpen();
+  var started = Date.now();
+  var timer = setInterval(function(){
+    addOpen();
     if (Date.now() - started > 12000) clearInterval(timer);
   }, 400);
 })();
