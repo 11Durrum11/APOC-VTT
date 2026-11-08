@@ -7286,7 +7286,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0951";
+        var BUILD_STAMP = "2026-11-08-1205";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -14242,5 +14242,69 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   .map-repo .btn{min-height:30px;padding:5px 8px;font-size:.85rem}
 }
 </style>
+<style id="APOC-VNPCBTN">
+/* APOC-VNPCBTN (Shaun, voice call in the VTT chat 2026-11-08 ~11:20 —
+   "Give me a NPC button under the damn layer nest. And populate it with
+   all my NPCs. With pictures."): a dedicated, always-visible NPCs
+   BUTTON directly under the Art Library header, top of the panel
+   (desktop rail + phone drawer alike). Shaun does not perceive the NPC
+   nest inside the Library as "the NPC button", so this is a real
+   button; its click opens the Library and the existing NPC nest — the
+   roster itself (all 150 NPCs from the shared vtt_npcs key, portraits
+   included) is rendered by the nest's own code; no second copy of the
+   data exists. Gating mirrors the nest: the button carries the nest
+   head's count line, which reads "— GM view only" until GM view is on,
+   and the nest body stays gated by the nest's own gate(). Display
+   copies (body.displaying) never see the button. Minimum footprint:
+   section-head metrics (4px 8px, line-height 1.25); phone keeps the
+   V217 24px head height. Treatment: the button rides with the Library
+   panel (the panel itself is the movable piece; section-level stack
+   inside the Library is kept by design — APOC-V208/V216 scope). */
+#npcOpenBtn{display:block;width:100%;margin:2px 0 4px;padding:4px 8px;min-height:0;line-height:1.25;font:inherit;font-size:.85rem;font-weight:700;text-align:left;color:#e8ecf3;background:rgba(47,98,214,.16);border:1px solid #2f62d6;border-radius:6px;cursor:pointer}
+#npcOpenBtn:hover{background:rgba(47,98,214,.28)}
+@media (max-width:820px){
+  #npcOpenBtn{min-height:24px;padding:3px 6px;font-size:.82rem;margin:2px 0}
+}
+</style>
+<script>
+/* APOC-VNPCBTN — see the style block above for Shaun's order. */
+(function(){
+  "use strict";
+  var lib = document.getElementById("artLibrary");
+  var nest = document.getElementById("npcNest");
+  if (!lib || !nest || document.getElementById("npcOpenBtn")) return;
+  var head = lib.querySelector(":scope > .nest-head");
+  if (!head) return;
+  var btn = document.createElement("button");
+  btn.type = "button";
+  btn.id = "npcOpenBtn";
+  btn.setAttribute("aria-label", "NPCs — open the roster");
+  btn.textContent = "NPCs";
+  head.insertAdjacentElement("afterend", btn);
+  function openNest(n){
+    if (!n.classList.contains("open")) {
+      n.classList.add("open");
+      var hd = n.querySelector(":scope > .nest-head");
+      if (hd) hd.setAttribute("aria-expanded", "true");
+    }
+  }
+  btn.addEventListener("click", function(){
+    openNest(lib);
+    openNest(nest);
+    try { nest.scrollIntoView({ block: "start" }); }
+    catch(e) { try { nest.scrollIntoView(); } catch(e2) {} }
+  });
+  var countEl = document.getElementById("npcCount");
+  function mirror(){
+    if (document.body.classList.contains("displaying")) { btn.style.display = "none"; return; }
+    btn.style.display = "";
+    var t = countEl ? (countEl.textContent || "").replace(/\s+/g, " ").replace(/^\s+|\s+$/g, "") : "";
+    var label = "NPCs" + (t ? " " + t : "");
+    if (btn.textContent !== label) btn.textContent = label;
+  }
+  mirror();
+  setInterval(mirror, 800);
+})();
+</script>
 </body>
 </html>
