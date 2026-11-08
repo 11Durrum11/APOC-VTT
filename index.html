@@ -34,7 +34,7 @@
     /* Interim hotlink: the scene files sit in this repo under
        assets/scenes/ (same paths as the tracker) once uploaded; until
        then the backdrop loads them from the tracker site. */
-    --scene-image:url("assets/scenes/bastion-streets.webp");
+    --scene-image:url("assets/cody/3974.webp");
   }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;overflow-x:hidden;overflow-x:clip}
@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1818";
+        var BUILD_STAMP = "2026-11-07-1853";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -6154,17 +6154,81 @@ function floorConnected(L, cols, rows){
       </script>
 <script>
 "use strict";
-/* ================= Backdrop slideshow — the tracker shell's, ported =================
-   The backdrop stays pinned in place (body::before) while it cycles
-   through every scene background; a scene picked in the tracker's
-   Campaign Status jumps the show to that scene, then it keeps cycling.
-   The scene lives in the same shared store (site_settings key
-   "campaign_status"), read here on the same 60-second rhythm as the
-   entry links. Scene files are hotlinked from the tracker site until
-   they are uploaded to this repo under assets/scenes/ — the local
-   copies sit at those same relative paths. */
+/* ================= Backdrop slideshow — Cody campaign artwork =================
+   Shaun's order (2026-11-07 ~18:51): his slideshow art — Cody's campaign
+   artwork, the tracker-gallery set — fills the background of the WHOLE
+   page body, behind everything (body::before: fixed, z-index -2,
+   pointer-events none; every control stays on top and clickable).
+   The show cycles the full 60-piece set with a calm 1.5s crossfade
+   every 16 seconds. Lazy by construction: only the current and next
+   pieces are ever fetched — no preload of the set, no layout shift.
+   The four excluded pictures (#4001, #4033, #4036, #4055) are not in
+   this list and are never used. A scene picked in the tracker's
+   Campaign Status still jumps the backdrop to that scene (shared
+   store, same 60-second rhythm as before); the art show then resumes. */
 (function(){
-  const SCENE_BASE = "";
+  const ART = [
+    "assets/cody/3974.webp",
+    "assets/cody/3975.webp",
+    "assets/cody/3976.webp",
+    "assets/cody/3977.webp",
+    "assets/cody/3978.webp",
+    "assets/cody/3979.webp",
+    "assets/cody/3980.webp",
+    "assets/cody/3981.webp",
+    "assets/cody/3982.webp",
+    "assets/cody/3983.webp",
+    "assets/cody/3984.webp",
+    "assets/cody/3993.webp",
+    "assets/cody/3994.webp",
+    "assets/cody/3996.webp",
+    "assets/cody/3998.webp",
+    "assets/cody/3999.webp",
+    "assets/cody/4000.webp",
+    "assets/cody/4002.webp",
+    "assets/cody/4003.webp",
+    "assets/cody/4004.webp",
+    "assets/cody/4005.webp",
+    "assets/cody/4006.webp",
+    "assets/cody/4007.webp",
+    "assets/cody/4008.webp",
+    "assets/cody/4018.webp",
+    "assets/cody/4019.webp",
+    "assets/cody/4020.webp",
+    "assets/cody/4021.webp",
+    "assets/cody/4022.webp",
+    "assets/cody/4023.webp",
+    "assets/cody/4024.webp",
+    "assets/cody/4025.webp",
+    "assets/cody/4026.webp",
+    "assets/cody/4027.webp",
+    "assets/cody/4028.webp",
+    "assets/cody/4029.webp",
+    "assets/cody/4030.webp",
+    "assets/cody/4032.webp",
+    "assets/cody/4034.webp",
+    "assets/cody/4035.webp",
+    "assets/cody/4037.webp",
+    "assets/cody/4045.webp",
+    "assets/cody/4046.webp",
+    "assets/cody/4047.webp",
+    "assets/cody/4048.webp",
+    "assets/cody/4049.webp",
+    "assets/cody/4050.webp",
+    "assets/cody/4051.webp",
+    "assets/cody/4052.webp",
+    "assets/cody/4053.webp",
+    "assets/cody/4054.webp",
+    "assets/cody/4056.webp",
+    "assets/cody/4058.webp",
+    "assets/cody/4059.webp",
+    "assets/cody/4060.webp",
+    "assets/cody/4061.webp",
+    "assets/cody/4062.webp",
+    "assets/cody/4065.webp",
+    "assets/cody/4067.webp",
+    "assets/cody/4068.webp"
+  ];
   const SCENES = {
     "bastion-streets":      "assets/scenes/bastion-streets.webp",
     "market-guild-streets": "assets/scenes/market-guild-streets.webp",
@@ -6174,27 +6238,33 @@ function floorConnected(L, cols, rows){
     "watch-precinct":       "assets/scenes/watch-precinct.webp",
     "broad-avenue":         "assets/scenes/broad-avenue.webp"
   };
-  const BG_FILES = [...new Set(Object.values(SCENES).map(f => SCENE_BASE + f))];
-  let bgIdx = 0;
-  BG_FILES.forEach(f => { const im = new Image(); im.src = f; });
+  let bgIdx = 0, jumped = false;
+  const reduceMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  function preload(i){ const im = new Image(); im.src = ART[i % ART.length]; }
   function paintBackdrop(){
-    document.body.style.setProperty("--scene-image", `url("${BG_FILES[bgIdx]}")`);
+    document.body.style.setProperty("--scene-image", `url("${ART[bgIdx]}")`);
   }
   function cycleBackdrop(){
     document.body.style.setProperty("--bg-opacity", "0");
     setTimeout(() => {
-      bgIdx = (bgIdx + 1) % BG_FILES.length;
+      if (!jumped) bgIdx = (bgIdx + 1) % ART.length;
+      jumped = false;
       paintBackdrop();
+      preload((bgIdx + 1) % ART.length);
       document.body.style.setProperty("--bg-opacity", ".45");
     }, 1500);
   }
   function jumpBackdropTo(sceneKey){
     const f = SCENES[sceneKey];
-    const i = f ? BG_FILES.indexOf(SCENE_BASE + f) : -1;
-    if (i >= 0) { bgIdx = i; paintBackdrop(); document.body.dataset.scene = sceneKey; }
+    if (!f) return;
+    jumped = true;
+    document.body.style.setProperty("--scene-image", `url("${f}")`);
+    document.body.dataset.scene = sceneKey;
   }
-  if (BG_FILES.length > 1) {
-    setInterval(cycleBackdrop, 14000);
+  paintBackdrop();
+  preload(1);
+  if (ART.length > 1 && !reduceMotion) {
+    setInterval(cycleBackdrop, 16000);
   }
   let lastScene = null;
   async function syncScene(){
@@ -9347,6 +9417,13 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
   } catch(e){}
 })();
 </script>
+
+
+<style id="APOC-BGSLIDE">
+/* Backdrop slideshow (Shaun, 2026-11-07): the art layer sits behind
+   the whole page and never takes a click — controls stay on top. */
+body::before{pointer-events:none}
+</style>
 
 </body>
 </html>
