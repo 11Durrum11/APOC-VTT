@@ -6951,7 +6951,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2046";
+        var BUILD_STAMP = "2026-11-07-2056";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -11260,7 +11260,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
    1) Placed assets are fully manipulable: the draw system's Select/move
       tool already moves stamps; this block adds an asset Edit mode with
       resize + rotate + per-asset steampunk toggle. A LOCK MAP toggle
-      freezes the map's pan at its current position (zoom untouched).
+      freezes the map at its current position — pan AND zoom (v1.91).
    2) Pinch zoom in the 3D view now obeys the same Pinch checkbox as 2D
       (default OFF): wheel/gesture zoom over the 3D canvas is blocked
       while the switch is off.
@@ -11298,12 +11298,24 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   function lockOn(){ try { return localStorage.getItem(LOCK_KEY) === "1"; } catch(e){ return false; } }
   var lockBtn = document.createElement("button");
   lockBtn.type = "button"; lockBtn.className = "btn"; lockBtn.id = "arLockBtn";
-  lockBtn.title = "Lock the map where it sits: no dragging or panning until you unlock it. Zoom still works.";
+  lockBtn.title = "Lock the map where it sits: no panning or zooming until you unlock it.";
   var lockBadge = document.createElement("div");
   lockBadge.id = "arLockBadge"; lockBadge.textContent = "🔒 MAP LOCKED"; lockBadge.hidden = true;
   function applyLock(){
     var on = lockOn(), m = window.map;
-    if (m && m.dragging) { if (on && m.dragging.enabled()) m.dragging.disable(); if (!on && !m.dragging.enabled()) m.dragging.enable(); }
+    if (m) {
+      if (m.dragging) { if (on && m.dragging.enabled()) m.dragging.disable(); if (!on && !m.dragging.enabled()) m.dragging.enable(); }
+      if (on) {
+        /* v1.91: the lock freezes pan AND zoom — every Leaflet zoom
+           handler goes off while locked (the 2500ms re-apply below also
+           re-freezes zoom if the Pinch checkbox is flipped mid-lock). */
+        ["scrollWheelZoom", "touchZoom", "doubleClickZoom", "boxZoom"].forEach(function(h){ var hh = m[h]; if (hh && hh.enabled()) hh.disable(); });
+      } else if (window.__apocPinchApply) {
+        /* unlock: the pinch-apply restores the zoom handlers per the
+           Pinch checkbox (and keeps boxZoom / keyboard off, as shipped) */
+        try { window.__apocPinchApply(); } catch(e){}
+      }
+    }
     lockBtn.setAttribute("aria-pressed", String(on));
     lockBtn.textContent = on ? "🔒 Map locked" : "Lock map";
     lockBadge.hidden = !on;
@@ -11311,7 +11323,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   lockBtn.addEventListener("click", function(){
     try { localStorage.setItem(LOCK_KEY, lockOn() ? "0" : "1"); } catch(e){}
     applyLock();
-    sayAr(lockOn() ? "Map locked here — it can't be dragged or panned until you unlock it. Zoom still works." : "Map unlocked — dragging and panning are back.");
+    sayAr(lockOn() ? "Map locked here — it can't be panned or zoomed until you unlock it." : "Map unlocked — panning and zoom are back.");
   });
   (function mountLock(){
     var gm = $("gmBtn");
