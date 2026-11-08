@@ -719,6 +719,7 @@ body.map-expanded .stage-row{display:contents}
           <div id="tdCanvas"></div>
           <div class="td-ui">
             <button type="button" class="btn primary" id="tdBackBtn">Back to 2D</button>
+            <button type="button" class="btn" id="tdAssetsBtn">Assets</button>
             <span class="td-hint" id="tdStatus"></span>
           </div>
         </div>
@@ -735,6 +736,14 @@ body.map-expanded .stage-row{display:contents}
         <div class="nest artlib" id="artLibrary">
           <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
           <div class="nest-body">
+            <div class="nest" id="assetsNest">
+              <button type="button" class="nest-head" aria-expanded="false"><span>Assets <span class="muted small" id="assetCount"></span></span></button>
+              <div class="nest-body">
+                <p class="muted small" style="margin:2px 0 8px">Everything you can put in — props, tokens, textures, lights, uploads. Drag a tile onto the map, or tap to place it at the centre. Placed props stand up in the 3D view.</p>
+                <div id="assetCats"></div>
+                <p class="muted small" id="assetStatus" style="margin:8px 0 0"></p>
+              </div>
+            </div>
             <div class="lib-panel" id="tokenLib" hidden>
               <div class="nest">
                 <button type="button" class="nest-head" aria-expanded="false">Symbols</button>
@@ -3340,10 +3349,10 @@ setInterval(loadSharedEntries, 60000);
     const rot = it.rot || 0, op = typeof opacity === "number" ? opacity : 1;
     let inner;
     if (it.prop && typeof PROP_ART !== "undefined" && PROP_ART[it.prop]) {
-      const pa = propArtURL(it.prop, it.rot || 0);
+      const pa = propArtURL(it.prop, it.rot || 0); const arSrc = it.steam && it.img ? it.img : pa.url;
       const cellPx = CELL * Math.pow(2, map.getZoom());
       const iw = Math.max(18, Math.min(900, Math.round(cellPx * pa.w))), ih = Math.max(18, Math.min(900, Math.round(cellPx * pa.h)));
-      inner = `<img src="${pa.url}" alt="" style="width:${iw}px;height:${ih}px;opacity:${op}">`;
+      inner = `<img src="${arSrc}" alt="" style="width:${iw}px;height:${ih}px;opacity:${op}${arSrc !== pa.url ? `;transform:rotate(${rot}deg)` : ""}">`;
       return L.divIcon({ className: "stamp-icon", html: inner, iconSize: [iw, ih], iconAnchor: [iw / 2, ih / 2] });
     }
     if (it.img) inner = `<img src="${esc(it.img)}" alt="" style="width:${px}px;height:${px}px;transform:rotate(${rot}deg);opacity:${op}">`;
@@ -6284,6 +6293,19 @@ function floorConnected(L, cols, rows){
     loadFaerun: async () => { switchMap("faerun"); await saveActiveMap(); }
   };
 
+  /* APOC-V187: Assets repository bridge — the repository script lives
+     outside this closure, so it reads the placeable catalogs through
+     here (same pattern as __apocShelf). Read-only views of the very
+     data the shelves and the generator use; nothing is duplicated. */
+  window.__apocAssets = {
+    propDefs: () => PROP_DEFS,
+    propArtURL: (k, r) => propArtURL(k, r),
+    symbols: () => LIB_SYMBOLS,
+    art: () => LIB_ART,
+    colors: () => LIB_COLORS,
+    hex: () => LIB_HEX
+  };
+
   /* ================= v1.14: 3D view — the 2D table, stood up =================
      A Three.js scene built from the SAME shared state as the 2D
      table: the map image becomes the ground, the walls layer
@@ -6889,7 +6911,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1924";
+        var BUILD_STAMP = "2026-11-07-2013";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10697,5 +10719,1035 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 })();
 </script>
 
+<style id="APOC-V187">
+/* APOC-V187 — Assets repository (Shaun, 2026-11-07 ~19:09): categories
+   and subcategories three abreast like the rest of the Library, opened
+   ones span the row; uniform tiles; every tile carries its visual. */
+.ar-subgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;align-items:start}
+.ar-subgrid.one{grid-template-columns:1fr}
+.ar-subgrid .mr-nest{margin:0;min-width:0}
+.ar-subgrid .mr-nest.open{grid-column:1/-1}
+#assetsNest .ar-tile img{border-radius:8px;object-fit:contain;background:rgba(255,255,255,.05);-webkit-user-drag:none;user-select:none}
+#assetsNest .ar-tile{touch-action:none}
+.ar-del{position:absolute;top:2px;right:4px;z-index:3;font-size:.72rem;line-height:1;padding:3px 5px;border-radius:6px;background:rgba(20,8,8,.85);color:#f0b1ab;border:1px solid rgba(240,177,171,.4);cursor:pointer}
+.ar-add{margin-top:8px}
+.ar-drop{border:1.5px dashed hsl(222 18% 34%);border-radius:10px;padding:14px 10px;text-align:center;font-size:.85rem;background:rgba(10,12,16,.35)}
+.ar-drop.ar-dragon{border-color:#1e40af;background:rgba(30,64,175,.14)}
+.ar-filebtn{color:#9fc0ff;text-decoration:underline;cursor:pointer}
+/* APOC-V188 add-ons: lock map, edit mode, levels, 3D pinch */
+#arLockBadge{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1200;pointer-events:none;background:rgba(20,10,4,.88);color:#f0b429;border:1.5px solid #f0b429;border-radius:999px;padding:3px 14px;font-weight:700;letter-spacing:.08em;font-size:.78rem}
+#arLockBtn[aria-pressed="true"]{background:#f0b429;color:#191204;border-color:#f0b429}
+#tdCanvas canvas{touch-action:none}
+.ar-mini{padding:2px 8px;font-size:.74rem;min-height:26px}
+#arEditBar{margin:0 0 8px}
+#arEditPanel .btn[aria-pressed="true"]{background:#1e40af;color:#fff}
+#arLevels{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:4px 2px}
+#arLevels .ar-lvl-label{font-size:.78rem;font-weight:700;letter-spacing:.04em;color:#cfd3da}
+#arLevels .ar-lvl-btn[aria-pressed="true"]{background:#1e40af;color:#fff;border-color:#2f62d6}
+.ar-sub-stairs .lib-grid{padding:2px}
+</style>
+<script>
+/* APOC-V187 — ASSETS REPOSITORY (Shaun, voice call 2026-11-07 ~19:09):
+   "Under the 3D, I want a repository of stuff I can put in. Assets.
+   Categorize and subcategorize and keep it tight and clean and neat.
+   And a visual for each. Drag and drop."
+   ONE repository for everything placeable, living in the Art Library
+   beside its sibling shelves (Monsters / Maps / Stamps) — it EXTENDS
+   those systems, it does not duplicate them: props place through the
+   same stamp drawings the generator writes (so they stand up in the
+   3D view as procedural models), tokens through the same token store,
+   lights through the same lighting store, artwork through the same
+   stamp images. Surfaced from the 3D view too: the "Assets" button in
+   the 3D bar opens this shelf.
+   Categories -> subcategories, headers first, tiles built lazily on
+   first opening (the Maps/Monsters pattern). EVERY tile carries a
+   visual: drawn prop art for props, the art itself for artwork, a
+   rendered floor tile for textures, a drawn glow for lights, the disc
+   for tokens. No text-only tiles, no emoji tiles.
+   Drag a tile onto the map = place at the drop point (libDrag, the
+   same helper the token shelf and monster shelf use); tap a tile =
+   place at the map centre. Placed pieces are ordinary placed pieces:
+   move them, right-click them, layer rules apply.
+   SHARED: assets Shaun adds (image uploads) go to the cody-artwork
+   bucket under vtt-assets/ with the registry in site_settings key
+   "vtt_assets" — the whole table sees them, not just this device.
+   Adding/removing uploads is GM work (GM view on), like the monster
+   shelf; viewing and placing follow each kind's existing gating
+   (lights are GM material, so light placement is GM-only too).
+   Exclusions: Cody #4001, #4033, #4036, #4055 are never listed. */
+(function(){
+  "use strict";
+  var nest = document.getElementById("assetsNest");
+  if (!nest) return;
+  var catsEl = document.getElementById("assetCats");
+  var statusEl = document.getElementById("assetStatus");
+  var countEl = document.getElementById("assetCount");
+  var PUB = "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/";
+  var EXCLUDED = { "4001": 1, "4033": 1, "4036": 1, "4055": 1 };
+  function G(name){ try { return eval(name); } catch(e){ return undefined; } }
+  /* catalog data lives in the main script's closure — read it through
+     the __apocAssets bridge (the __apocShelf pattern) */
+  var BR = window.__apocAssets || {};
+  function CAT(name){ try { return typeof BR[name] === "function" ? BR[name]() : undefined; } catch(e){ return undefined; } }
+  function gmOn(){
+    try { if (typeof effectiveGm === "function") return !!effectiveGm(); } catch(e){}
+    var b = document.getElementById("gmBtn");
+    return !!(b && b.getAttribute("aria-pressed") === "true");
+  }
+  function say(msg){ if (statusEl) statusEl.textContent = msg; }
+  function escS(s){ var f = G("esc"); return typeof f === "function" ? f(String(s)) : String(s).replace(/[&<>"]/g, ""); }
+  var placeN = 0;
+  function centre(){ var c = toXY(map.getCenter()); var off = (placeN++ % 5) * 1.5; return { x: Math.min(98, c.x + off), y: Math.min(98, c.y + off) }; }
+
+  /* ================= catalog ================= */
+  var PROP_SUBS = [
+    ["Furniture", ["table","chair","bench","stool","pew","counter","desk","shelf","wardrobe","lectern","rack","books","throne"]],
+    ["Beds & cloth", ["bed","bedroll","rug","banner"]],
+    ["Containers", ["barrel","crate","chest","keg","sack","pot","tub"]],
+    ["Fire & light", ["fireplace","brazier","candle","campfire"]],
+    ["Stone & sacred", ["altar","statue","pillar","plinth","coffin","well"]],
+    ["Outdoors", ["tree","rock","bush","stump","plant","tent","cart","hay","rubble"]],
+    ["Craft & work", ["anvil","cauldron"]]
+  ];
+  var TEX = [
+    ["stone", "Stone flags", "#6e6b64", "#76736b", "#3f3d38"],
+    ["wood", "Wood planks", "#7a5a38", "#84643f", "#3a2a18"],
+    ["dirt", "Dirt & rock", "#6b5a44", "#72614c", "#463a2a"],
+    ["marble", "Marble", "#b3afa2", "#bcb8ac", "#8f8b80"],
+    ["darkstone", "Dark stone", "#484852", "#50505a", "#232329"],
+    ["grass", "Grass & dirt", "#5d6c4b", "#647450", "#48543c"]
+  ];
+  var LIGHTS = [
+    ["candle", "Candle", { bright: 5, dim: 10, color: "#ffc46b", flame: true }],
+    ["torch", "Torch", { bright: 20, dim: 40, color: "#ff9a3c", flame: true }],
+    ["lantern", "Lantern", { bright: 30, dim: 60, color: "#ffd27a", flame: true }],
+    ["spell", "Spell light", { bright: 20, dim: 60, color: "#9fd8ff", flame: false }]
+  ];
+  function propName(k){ return k.charAt(0).toUpperCase() + k.slice(1); }
+  function rng(seed){ var a = seed >>> 0; return function(){ a |= 0; a = a + 0x6D2B79F5 | 0; var t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  function seedOf(s){ var h = 2166136261; for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+
+  /* texture tile: one drawn floor swatch per theme (2x2 cells) */
+  var texCache = {};
+  function texURL(key){
+    if (texCache[key]) return texCache[key];
+    var t = null; for (var i = 0; i < TEX.length; i++) if (TEX[i][0] === key) t = TEX[i];
+    if (!t) return "";
+    var kind = key, P = 144, cv = document.createElement("canvas"); cv.width = P * 2; cv.height = P * 2;
+    var g = cv.getContext("2d"), R = rng(seedOf("tex:" + key));
+    g.fillStyle = t[4]; g.fillRect(0, 0, cv.width, cv.height);
+    function cell(x, y){
+      var px = x * P, py = y * P, base = (x + y) % 2 ? t[2] : t[3], j;
+      if (kind === "stone" || kind === "darkstone") {
+        var cols = kind === "darkstone" ? 1 : 2;
+        for (var fy = 0; fy < 2; fy++) for (var fx = 0; fx < cols; fx++) {
+          var fw = P / cols, fh = P / 2, v = (R() - .5) * .16;
+          g.fillStyle = shade(base, v); roundRect(g, px + fx * fw + 3, py + fy * fh + 3, fw - 6, fh - 6, 7); g.fill();
+          for (j = 0; j < 4; j++) { g.fillStyle = "rgba(0,0,0,.07)"; g.fillRect(px + fx * fw + 6 + R() * (fw - 12), py + fy * fh + 6 + R() * (fh - 12), 3, 2); }
+          g.fillStyle = "rgba(255,255,255,.07)"; g.fillRect(px + fx * fw + 6, py + fy * fh + 5, fw - 12, 3);
+        }
+      } else if (kind === "wood") {
+        for (var p = 0; p < 3; p++) {
+          var ph = P / 3; g.fillStyle = shade(p % 2 ? t[2] : t[3], (R() - .5) * .1); g.fillRect(px + 1, py + p * ph + 1, P - 2, ph - 2);
+          g.strokeStyle = "rgba(46,29,12,.3)"; g.lineWidth = 1.5;
+          for (j = 0; j < 2; j++) { var gy = py + p * ph + ph * (0.3 + j * 0.35); g.beginPath(); g.moveTo(px + 4, gy); g.bezierCurveTo(px + P * .3, gy + 3, px + P * .7, gy - 3, px + P - 4, gy); g.stroke(); }
+        }
+      } else if (kind === "marble") {
+        g.fillStyle = base; g.fillRect(px, py, P, P);
+        g.strokeStyle = "rgba(90,90,110,.4)"; g.lineWidth = 1.4;
+        for (j = 0; j < 3; j++) { g.beginPath(); var vx = px + R() * P, vy = py; g.moveTo(vx, vy); while (vy < py + P) { vx += (R() - .5) * 26; vy += 14 + R() * 18; g.lineTo(vx, vy); } g.stroke(); }
+        g.fillStyle = "rgba(0,0,0,.1)"; g.fillRect(px, py, P, 2); g.fillRect(px, py, 2, P);
+      } else if (kind === "grass") {
+        g.fillStyle = base; g.fillRect(px, py, P, P);
+        for (j = 0; j < 260; j++) { g.strokeStyle = "rgba(30,46,22," + (.25 + R() * .3) + ")"; g.lineWidth = 1.4; var bx = px + R() * P, by = py + R() * P; g.beginPath(); g.moveTo(bx, by); g.lineTo(bx + (R() - .5) * 4, by - 4 - R() * 6); g.stroke(); }
+        for (j = 0; j < 3; j++) { g.fillStyle = "rgba(107,90,68,.35)"; g.beginPath(); g.ellipse(px + R() * P, py + R() * P, 10 + R() * 22, 7 + R() * 14, R() * 3, 0, 7); g.fill(); }
+      } else { /* dirt */
+        g.fillStyle = base; g.fillRect(px, py, P, P);
+        for (j = 0; j < 46; j++) { g.fillStyle = "rgba(0,0,0," + (.04 + R() * .06) + ")"; g.beginPath(); g.ellipse(px + R() * P, py + R() * P, 6 + R() * 26, 4 + R() * 16, R() * 3, 0, 7); g.fill(); }
+        for (j = 0; j < 130; j++) { g.fillStyle = "rgba(255,240,210," + (.03 + R() * .05) + ")"; g.fillRect(px + R() * P, py + R() * P, 2.4, 2.4); }
+      }
+    }
+    cell(0, 0); cell(1, 0); cell(0, 1); cell(1, 1);
+    texCache[key] = cv.toDataURL("image/png");
+    return texCache[key];
+  }
+  function roundRect(g, x, y, w, h, r){ g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath(); }
+  function shade(hex, f){ var n = parseInt(hex.slice(1), 16); var r = (n >> 16) & 255, gg = (n >> 8) & 255, b = n & 255; if (f >= 0) { r += (255 - r) * f; gg += (255 - gg) * f; b += (255 - b) * f; } else { r *= 1 + f; gg *= 1 + f; b *= 1 + f; } return "rgb(" + (r|0) + "," + (gg|0) + "," + (b|0) + ")"; }
+  var lightCache = {};
+  function lightURL(key, color, flame){
+    if (lightCache[key]) return lightCache[key];
+    var cv = document.createElement("canvas"); cv.width = 144; cv.height = 144;
+    var g = cv.getContext("2d");
+    g.fillStyle = "#101216"; g.fillRect(0, 0, 144, 144);
+    var grad = g.createRadialGradient(72, 72, 4, 72, 72, 66);
+    grad.addColorStop(0, color); grad.addColorStop(.45, color + "55"); grad.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = grad; g.beginPath(); g.arc(72, 72, 66, 0, 7); g.fill();
+    if (flame) {
+      g.fillStyle = "#e86a1e"; g.beginPath(); g.moveTo(60, 92); g.quadraticCurveTo(56, 66, 72, 44); g.quadraticCurveTo(88, 66, 84, 92); g.quadraticCurveTo(72, 102, 60, 92); g.fill();
+      g.fillStyle = "#ffc84d"; g.beginPath(); g.moveTo(66, 90); g.quadraticCurveTo(64, 74, 72, 60); g.quadraticCurveTo(80, 74, 78, 90); g.quadraticCurveTo(72, 96, 66, 90); g.fill();
+    } else {
+      g.fillStyle = "#eaf6ff"; g.beginPath(); g.arc(72, 72, 13, 0, 7); g.fill();
+      g.fillStyle = color; g.beginPath(); g.arc(72, 72, 8, 0, 7); g.fill();
+    }
+    lightCache[key] = cv.toDataURL("image/png");
+    return lightCache[key];
+  }
+
+  /* ================= tiles ================= */
+  function tileEl(kind, name, visual, data){
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "lib-item ar-tile";
+    b.dataset.kind = kind; b.title = name + " — drag onto the map, or tap to place at the centre";
+    Object.keys(data || {}).forEach(function(k){ b.dataset[k] = data[k]; });
+    if (visual.img) { var im = document.createElement("img"); im.src = visual.img; im.alt = name; im.loading = "lazy"; im.decoding = "async"; im.draggable = false; b.appendChild(im); }
+    else if (visual.sym != null) { var sp = document.createElement("span"); sp.className = "lib-sym"; sp.style.background = visual.bg; sp.style.border = "2px solid " + visual.bd; if (visual.txt) sp.textContent = visual.txt; b.appendChild(sp); }
+    var cap = document.createElement("span"); cap.className = "lib-cap"; cap.textContent = name;
+    b.appendChild(cap);
+    return b;
+  }
+  function gridOf(tiles){
+    var grid = document.createElement("div"); grid.className = "lib-grid";
+    tiles.forEach(function(t){ grid.appendChild(t); });
+    return grid;
+  }
+  function hexOf(color){ var H = CAT("hex") || {}; return H[color] || "#e8a33d"; }
+
+  function propTiles(keys){
+    var out = [], PD = CAT("propDefs");
+    keys.forEach(function(k){
+      if (!PD || !PD[k] || typeof BR.propArtURL !== "function") return;
+      var img = ""; try { img = BR.propArtURL(k, 0).url; } catch(e){}
+      if (!img) return;
+      out.push(tileEl("prop", propName(k), { img: img }, { prop: k }));
+    });
+    return out;
+  }
+  function tokenTiles(){
+    var subs = [], SYMS = CAT("symbols") || [], ART = CAT("art") || [], COLORS = CAT("colors") || ["amber","red","blue","green","violet","grey"];
+    var symTiles = SYMS.map(function(s){
+      return tileEl("sym", s[1], { sym: 1, bg: hexOf(s[2]) + "33", bd: hexOf(s[2]), txt: s[0] }, { sym: s[0], color: s[2], name: s[1] });
+    });
+    subs.push(["Symbols", symTiles]);
+    var discTiles = COLORS.map(function(c){
+      return tileEl("disc", c + " disc", { sym: 1, bg: hexOf(c), bd: hexOf(c), txt: "" }, { color: c, name: "Disc" });
+    });
+    for (var n = 1; n <= 20; n++) { var c = COLORS[(n - 1) % COLORS.length];
+      discTiles.push(tileEl("disc", "Number " + n, { sym: 1, bg: hexOf(c) + "33", bd: hexOf(c), txt: String(n) }, { sym: String(n), color: c, name: "Number " + n }));
+    }
+    subs.push(["Discs & numbers", discTiles]);
+    var artTiles = [];
+    ART.forEach(function(a){
+      var m = /(\d{4})\.webp/.exec(a[0]);
+      if (m && EXCLUDED[m[1]]) return; /* Cody exclusions — never listed */
+      artTiles.push(tileEl("art", a[1], { img: a[0] }, { img: a[0], name: a[1] }));
+    });
+    subs.push(["Artwork", artTiles]);
+    return subs;
+  }
+  function texTiles(){
+    return TEX.map(function(t){ return tileEl("tex", t[1], { img: texURL(t[0]) }, { tex: t[0], name: t[1] }); });
+  }
+  function lightTiles(){
+    return LIGHTS.map(function(L){
+      return tileEl("light", L[1], { img: lightURL(L[0], L[2].color, L[2].flame) }, { light: L[0], name: L[1] });
+    });
+  }
+
+  /* ================= tree (lazy, Maps/Monsters pattern) ================= */
+  var lazyBodies = {}; /* key -> builder fn */
+  function nestEl(title, cls){
+    var wrap = document.createElement("div"); wrap.className = "nest mr-nest " + (cls || "");
+    var h = document.createElement("button"); h.type = "button"; h.className = "nest-head mr-folder-head";
+    h.setAttribute("aria-expanded", "false"); h.textContent = title;
+    var body = document.createElement("div"); body.className = "nest-body mr-body";
+    wrap.appendChild(h); wrap.appendChild(body);
+    return { wrap: wrap, body: body };
+  }
+  function subGrid(catKey, subs){
+    var grid = document.createElement("div"); grid.className = "ar-subgrid";
+    subs.forEach(function(s){
+      var n = nestEl(s[0] + " (" + s[1].length + ")", "ar-sub");
+      var key = catKey + ":" + s[0];
+      n.body._lazyKey = key;
+      lazyBodies[key] = (function(tiles){ return function(){ return gridOf(tiles); }; })(s[1]);
+      grid.appendChild(n.wrap);
+    });
+    return grid;
+  }
+  function buildTree(){
+    catsEl.innerHTML = "";
+    var PD = CAT("propDefs") || {};
+    var propCount = PROP_SUBS.reduce(function(a, s){ return a + s[1].filter(function(k){ return PD[k]; }).length; }, 0);
+    var SYMS0 = CAT("symbols") || [], ART0 = CAT("art") || [], COLORS0 = CAT("colors") || ["amber","red","blue","green","violet","grey"];
+    var artCount = ART0.filter(function(a){ var m = /(\d{4})\.webp/.exec(a[0]); return !(m && EXCLUDED[m[1]]); }).length;
+    var tokCount = SYMS0.length + COLORS0.length + 20 + artCount;
+    var cats = [
+      ["props", "Props", propCount, function(){ return subGrid("props", PROP_SUBS.map(function(s){ return [s[0], propTiles(s[1])]; })); }],
+      ["tokens", "Tokens & standees", tokCount, function(){ return subGrid("tokens", tokenTiles()); }],
+      ["textures", "Textures & floors", TEX.length, function(){ var n = nestEl("Floor textures (" + TEX.length + ")", "ar-sub"); n.body.appendChild(gridOf(texTiles())); var w = document.createElement("div"); w.className = "ar-subgrid one"; w.appendChild(n.wrap); n.body._lazyKey = null; return w; }],
+      ["lights", "Lights & effects", LIGHTS.length, function(){ var n = nestEl("Light sources (" + LIGHTS.length + ")", "ar-sub"); n.body.appendChild(gridOf(lightTiles())); var w = document.createElement("div"); w.className = "ar-subgrid one"; w.appendChild(n.wrap); return w; }],
+      ["uploads", "Uploads", 0, buildUploads]
+    ];
+    cats.forEach(function(c){
+      var n = nestEl(c[1] + (c[2] ? " (" + c[2] + ")" : ""), "ar-cat");
+      n.body._lazyKey = "cat:" + c[0];
+      lazyBodies["cat:" + c[0]] = c[3];
+      n.wrap.dataset.cat = c[0];
+      catsEl.appendChild(n.wrap);
+      if (c[0] === "uploads") uploadsHead = n.wrap.querySelector(".nest-head");
+    });
+    var total = propCount + tokCount + TEX.length + LIGHTS.length;
+    if (countEl) countEl.textContent = "— " + total + " assets";
+    return total;
+  }
+  var uploadsHead = null;
+  /* lazy build on first expansion — capture phase, like the shelves */
+  catsEl.addEventListener("click", function(e){
+    var h = e.target && e.target.closest ? e.target.closest(".nest-head") : null;
+    if (!h) return;
+    var body = h.parentElement && h.parentElement.querySelector(":scope > .nest-body");
+    if (!body || !body._lazyKey) return;
+    var key = body._lazyKey; body._lazyKey = null;
+    var fn = lazyBodies[key]; if (!fn) return;
+    var node = fn(); if (node) body.appendChild(node);
+  }, true);
+
+  /* ================= placement ================= */
+  function pushDraw(it, label){
+    try {
+      if (!window.vttDraw || !window.vttDraw.items) { say("The drawing layer isn't ready yet — give it a second and try again."); return; }
+      var items = window.vttDraw.items();
+      items.push(it);
+      window.vttDraw.reorder(it, 1).then(function(ok){
+        say(ok ? "\"" + label + "\" placed — a normal placed piece now: drag it, right-click it; props stand up in the 3D view." : "That didn't save — refreshed.");
+      });
+    } catch(e){ say("Placement failed: " + (e && e.message || e)); }
+  }
+  function placeToken(patch, p, label){
+    var tk = Object.assign({ id: newId(), name: "Token", x: p.x, y: p.y, size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" }, patch);
+    tokens.push(tk);
+    saveTokens().then(function(ok){
+      drawTokens();
+      say(ok ? "\"" + (label || tk.name) + "\" placed — drag it into place." : "That token didn't save — try again.");
+      if (!ok) loadTokens(true);
+    });
+  }
+  function steamDefault(){ try { return localStorage.getItem("apocArSteamDefault") !== "0"; } catch(e){ return true; } }
+  function placeTile(b, p){
+    var kind = b.dataset.kind;
+    if (kind === "prop") {
+      var PD = CAT("propDefs") || {}, d = PD[b.dataset.prop]; if (!d) return;
+      var sOn = steamDefault();
+      pushDraw({ type: "stamp", x: p.x, y: p.y, size: d.fw, rot: 0, sym: "", color: d.color === "gold" ? "amber" : d.color, layer: "shared", gm: false, prop: b.dataset.prop, fw: d.fw, fh: d.fh, steam: sOn ? 1 : 0, img: sOn && window.__arSteamURL ? (window.__arSteamURL(b.dataset.prop) || "") : "" }, propName(b.dataset.prop));
+    } else if (kind === "sym" || kind === "disc") {
+      var patch = { name: b.dataset.name || "Token", color: b.dataset.color || "amber" };
+      if (b.dataset.sym) patch.sym = b.dataset.sym;
+      var nm = document.getElementById("libName");
+      if (nm && nm.value.trim()) patch.name = nm.value.trim();
+      placeToken(patch, p, patch.name);
+    } else if (kind === "art") {
+      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 2, rot: 0, img: b.dataset.img, layer: "shared", gm: false, steam: steamDefault() ? 1 : 0, imgPlain: b.dataset.img }, b.dataset.name || "Artwork");
+    } else if (kind === "tex") {
+      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 3, rot: 0, img: texURL(b.dataset.tex), layer: "shared", gm: false, steam: steamDefault() ? 1 : 0, imgPlain: texURL(b.dataset.tex) }, (b.dataset.name || "Texture") + " patch");
+    } else if (kind === "light") {
+      if (!gmOn()) { say("Lights are GM material — switch GM view on to place one."); return; }
+      var preset = null; LIGHTS.forEach(function(L){ if (L[0] === b.dataset.light) preset = L[2]; });
+      if (!preset || !window.vttLights || !window.vttLights.state) { say("The lighting layer isn't ready yet."); return; }
+      var st = window.vttLights.state();
+      st.lights.push({ id: newId(), name: b.dataset.name || "Light", x: p.x, y: p.y, bright: preset.bright, dim: preset.dim, color: preset.color, flame: preset.flame });
+      window.vttLights.del({ id: "__ar_save__" }).then(function(ok){
+        say(ok ? "\"" + (b.dataset.name || "Light") + "\" placed — the table sees it; it is a real light in the 3D view too." : "That light didn't save — refreshed.");
+      });
+    } else if (kind === "up") {
+      placeToken({ name: b.dataset.name || "Asset", img: b.dataset.img }, p, b.dataset.name);
+    }
+  }
+  catsEl.addEventListener("click", function(e){
+    var del = e.target && e.target.closest ? e.target.closest(".ar-del") : null;
+    if (del) return; /* handled below */
+    var b = e.target && e.target.closest ? e.target.closest(".lib-item") : null;
+    if (!b || !catsEl.contains(b)) return;
+    placeTile(b, centre());
+  });
+  /* drag: delegated — tiles are lazy-built, so libDrag's bind-at-call
+     would miss them all. Mirrors libDrag: ghost follows the pointer,
+     drop point in map %, the click after a real drag is swallowed; a
+     plain click still falls through to click-to-centre above. */
+  function dropPoint(cx, cy){
+    var mapEl = document.getElementById("apocMap");
+    if (!mapEl) return { x: 50, y: 50 };
+    var r = mapEl.getBoundingClientRect();
+    if (document.fullscreenElement === mapEl && r.width > 0) {
+      return { x: Math.max(2, Math.min(98, (cx - r.left) / r.width * 100)), y: Math.max(2, Math.min(98, (cy - r.top) / r.height * 100)) };
+    }
+    var x = (cx - (window.innerWidth - r.width) / 2 - r.left) / r.width * 100;
+    var y = (cy - (window.innerHeight - r.height) / 2 - r.top) / r.height * 100;
+    return { x: Math.max(2, Math.min(98, x)), y: Math.max(2, Math.min(98, y)) };
+  }
+  catsEl.addEventListener("pointerdown", function(e){
+    var t = e.target && e.target.closest ? e.target.closest(".ar-tile") : null;
+    if (!t || (e.button !== undefined && e.button > 0)) return;
+    e.preventDefault(); /* no native image drag — the map's file-drop zone would eat it and switch maps */
+    var sx = e.clientX, sy = e.clientY, ghost = null, moved = false;
+    function mv(ev){
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) {
+        moved = true;
+        ghost = t.cloneNode(true);
+        ghost.className = (ghost.className || "") + " drag-ghost";
+        ghost.style.width = t.offsetWidth + "px";
+        document.body.appendChild(ghost);
+      }
+      if (ghost) { ghost.style.left = ev.clientX + "px"; ghost.style.top = ev.clientY + "px"; }
+    }
+    function up(ev){
+      window.removeEventListener("pointermove", mv, true);
+      window.removeEventListener("pointerup", up, true);
+      if (ghost) ghost.remove();
+      if (moved) {
+        var swallow = function(ev2){ ev2.stopPropagation(); ev2.preventDefault(); window.removeEventListener("click", swallow, true); };
+        window.addEventListener("click", swallow, true);
+        setTimeout(function(){ window.removeEventListener("click", swallow, true); }, 400);
+        placeTile(t, dropPoint(ev.clientX, ev.clientY));
+      }
+    }
+    window.addEventListener("pointermove", mv, true);
+    window.addEventListener("pointerup", up, true);
+  });
+
+  /* ================= uploads (shared) ================= */
+  var uploads = [], uploadsLoaded = false;
+  function pub(path){ return PUB + path; }
+  function saveUploads(){
+    return db.from(SETTINGS_TABLE).upsert({ key: "vtt_assets", value: { assets: uploads }, updated_at: new Date().toISOString() }, { onConflict: "key" }).then(function(r){ return !r.error; });
+  }
+  function loadUploads(){
+    return db.from(SETTINGS_TABLE).select("value").eq("key", "vtt_assets").maybeSingle().then(function(res){
+      uploads = (res.data && res.data.value && Array.isArray(res.data.value.assets)) ? res.data.value.assets : [];
+      uploadsLoaded = true;
+      renderUploads();
+    }).catch(function(){ uploadsLoaded = true; renderUploads(); });
+  }
+  var upGridEl = null, upFormWrap = null;
+  function renderUploads(){
+    if (uploadsHead) uploadsHead.textContent = "Uploads (" + uploads.length + ")";
+    if (!upGridEl) return;
+    upGridEl.innerHTML = "";
+    if (!uploads.length) {
+      var p = document.createElement("p"); p.className = "muted small";
+      p.textContent = "Nothing uploaded yet — drop image files below (GM view) and the whole table gets them.";
+      upGridEl.appendChild(p); return;
+    }
+    uploads.forEach(function(a){
+      var t = tileEl("up", a.name, { img: pub(a.path) }, { img: pub(a.path), name: a.name });
+      t.dataset.aid = a.id;
+      var del = document.createElement("span");
+      del.className = "ar-del"; del.textContent = "✕"; del.title = "Remove \"" + a.name + "\" from the repository (GM)";
+      t.appendChild(del);
+      upGridEl.appendChild(t);
+    });
+  }
+  async function addFiles(files){
+    if (!gmOn()) { say("Adding assets is GM work — switch GM view on first."); return; }
+    var list = Array.prototype.slice.call(files || []);
+    for (var i = 0; i < list.length; i++) {
+      var file = list[i];
+      if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type)) { say("Skipped \"" + file.name + "\" — images only (png, jpg, webp, gif)."); continue; }
+      var name = (file.name || "Asset").replace(/\.[a-z0-9]+$/i, "").slice(0, 60) || "Asset";
+      var id = "asset-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 99999);
+      var ext = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
+      var path = "vtt-assets/" + id + "." + ext;
+      say("Uploading \"" + name + "\"…");
+      var up = await db.storage.from("cody-artwork").upload(path, file, { contentType: file.type, upsert: false });
+      if (up.error) { say("The upload didn't go through for \"" + name + "\" — nothing was added."); continue; }
+      uploads.push({ id: id, name: name, path: path });
+      var ok = await saveUploads();
+      renderUploads();
+      say(ok ? "\"" + name + "\" added — the whole table sees it in Uploads now." : "\"" + name + "\" uploaded but the registry save didn't go through — it may not list for everybody yet.");
+    }
+  }
+  function buildUploads(){
+    var wrap = document.createElement("div");
+    var n = nestEl("Shared uploads", "ar-sub");
+    n.wrap.querySelector(".nest-head").textContent = "Shared uploads";
+    upGridEl = document.createElement("div"); upGridEl.className = "lib-grid";
+    n.body.appendChild(upGridEl);
+    wrap.appendChild(n.wrap);
+    var form = document.createElement("div");
+    form.className = "ar-add";
+    form.innerHTML = "<div class=\"ar-drop\" id=\"assetDrop\">Drop image files here to add them — or <label class=\"ar-filebtn\">browse<input type=\"file\" id=\"assetFile\" accept=\"image/png,image/jpeg,image/webp,image/gif\" multiple hidden></label></div>"
+      + "<p class=\"muted small\" style=\"margin:6px 0 0\">Added assets are shared: they upload once and the whole table sees them. Adding is GM work — the drop box works while GM view is on.</p>";
+    wrap.appendChild(form);
+    upFormWrap = form;
+    var drop = form.querySelector("#assetDrop");
+    ["dragenter", "dragover"].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add("ar-dragon"); }); });
+    ["dragleave", "drop"].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove("ar-dragon"); }); });
+    drop.addEventListener("drop", function(e){ var f = e.dataTransfer && e.dataTransfer.files; if (f && f.length) addFiles(f); });
+    form.querySelector("#assetFile").addEventListener("change", function(e){ if (e.target.files && e.target.files.length) addFiles(e.target.files); e.target.value = ""; });
+    if (!uploadsLoaded) loadUploads(); else renderUploads();
+    return wrap;
+  }
+  catsEl.addEventListener("click", function(e){
+    var del = e.target && e.target.closest ? e.target.closest(".ar-del") : null;
+    if (!del) return;
+    e.stopPropagation();
+    if (!gmOn()) { say("Removing assets is GM work — switch GM view on first."); return; }
+    var tile = del.closest(".lib-item");
+    var a = null; uploads.forEach(function(x){ if (tile && x.id === tile.dataset.aid) a = x; });
+    if (!a) return;
+    if (!confirm("Remove \"" + a.name + "\" from the repository for everybody?")) return;
+    uploads = uploads.filter(function(x){ return x.id !== a.id; });
+    db.storage.from("cody-artwork").remove([a.path]).catch(function(){});
+    saveUploads().then(function(ok){ renderUploads(); say(ok ? "\"" + a.name + "\" removed from the repository." : "Removed here, but the registry save didn't go through."); });
+  });
+
+  /* ================= 3D surfacing + init ================= */
+  var tdBtn = document.getElementById("tdAssetsBtn");
+  if (tdBtn) tdBtn.addEventListener("click", function(){
+    var al = document.getElementById("artLibrary");
+    if (al && !al.classList.contains("open")) { al.classList.add("open"); var ah = al.querySelector(":scope > .nest-head"); if (ah) ah.setAttribute("aria-expanded", "true"); }
+    if (!nest.classList.contains("open")) { nest.classList.add("open"); var nh = nest.querySelector(":scope > .nest-head"); if (nh) nh.setAttribute("aria-expanded", "true"); }
+    nest.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
+  buildTree();
+  /* first open of the shelf loads the shared uploads registry */
+  nest.querySelector(":scope > .nest-head").addEventListener("click", function(){ if (!uploadsLoaded) loadUploads(); });
+})();
+</script>
+<script>
+/* APOC-V188 ADD-ONS (Shaun, voice call 2026-11-07 ~19:10-19:13), folded
+   into the Assets repository build:
+   1) Placed assets are fully manipulable: the draw system's Select/move
+      tool already moves stamps; this block adds an asset Edit mode with
+      resize + rotate + per-asset steampunk toggle. A LOCK MAP toggle
+      freezes the map's pan at its current position (zoom untouched).
+   2) Pinch zoom in the 3D view now obeys the same Pinch checkbox as 2D
+      (default OFF): wheel/gesture zoom over the 3D canvas is blocked
+      while the switch is off.
+   3) Double-click a door or window toggles it open/closed — same
+      lightState segment, same save path as the door tool and the
+      right-click menu (vttLights.toggleDoor). 2D and 3D.
+   4) Multi-story scenarios: a repository map can head a group of
+      levels (Story 1, Story 2, ...). A level is a maps-registry entry
+      sharing the ground floor's image (same footprint); per-map state
+      keys give every level its own walls/doors, tokens, assets and
+      lighting for free, and switching rides the mapSelect change path,
+      so the shared active-map state (both TV screens) follows the
+      active level. Stairs are placeable assets (Props > Stairs &
+      vertical). 3D shows the active level (the 3D scene is one map
+      plane — stories do not stack inside it yet).
+   5) Steampunk is an OPTION on every asset, default ON: repository
+      tiles present the steampunk-framed art (brass, gears, rivets);
+      the choice persists on the placed piece (it.steam) and can be
+      flipped per piece in Edit mode; a chip in the shelf sets the
+      default for newly placed assets. */
+(function(){
+  "use strict";
+  function $(id){ return document.getElementById(id); }
+  function G(name){ try { return eval(name); } catch(e){ return undefined; } }
+  function gmOn(){ try { if (typeof effectiveGm === "function") return !!effectiveGm(); } catch(e){} var b = $("gmBtn"); return !!(b && b.getAttribute("aria-pressed") === "true"); }
+  function sayAr(msg){ var s = $("assetStatus"); if (s) s.textContent = msg; }
+  function pinchOn(){ var chk = $("zoomPinchChk"); if (chk) return !!chk.checked; try { return localStorage.getItem("apocVttPinchZoomV1") === "1"; } catch(e){ return false; } }
+  var BR = window.__apocAssets || {};
+  function shelf(){ return window.__apocShelf || null; }
+  function curMapId(){ var ms = $("mapSelect"); if (ms && ms.value) return ms.value; var sh = shelf(); return sh ? sh.current() : "faerun"; }
+  function keyFor(kind, mapId){ return mapId === "faerun" ? "vtt_" + kind : "vtt_" + kind + "_" + mapId; }
+
+  /* ================= LOCK MAP ================= */
+  var LOCK_KEY = "apocVttMapLockV1";
+  function lockOn(){ try { return localStorage.getItem(LOCK_KEY) === "1"; } catch(e){ return false; } }
+  var lockBtn = document.createElement("button");
+  lockBtn.type = "button"; lockBtn.className = "btn"; lockBtn.id = "arLockBtn";
+  lockBtn.title = "Lock the map where it sits: no dragging or panning until you unlock it. Zoom still works.";
+  var lockBadge = document.createElement("div");
+  lockBadge.id = "arLockBadge"; lockBadge.textContent = "🔒 MAP LOCKED"; lockBadge.hidden = true;
+  function applyLock(){
+    var on = lockOn(), m = window.map;
+    if (m && m.dragging) { if (on && m.dragging.enabled()) m.dragging.disable(); if (!on && !m.dragging.enabled()) m.dragging.enable(); }
+    lockBtn.setAttribute("aria-pressed", String(on));
+    lockBtn.textContent = on ? "🔒 Map locked" : "Lock map";
+    lockBadge.hidden = !on;
+  }
+  lockBtn.addEventListener("click", function(){
+    try { localStorage.setItem(LOCK_KEY, lockOn() ? "0" : "1"); } catch(e){}
+    applyLock();
+    sayAr(lockOn() ? "Map locked here — it can't be dragged or panned until you unlock it. Zoom still works." : "Map unlocked — dragging and panning are back.");
+  });
+  (function mountLock(){
+    var gm = $("gmBtn");
+    if (gm && gm.parentElement) gm.parentElement.insertBefore(lockBtn, gm.nextSibling);
+    else { var bar = document.querySelector(".ctl-bar") || document.querySelector(".map-tools"); if (bar) bar.appendChild(lockBtn); }
+    var mapEl = $("apocMap");
+    if (mapEl && mapEl.parentElement) { mapEl.parentElement.appendChild(lockBadge); }
+    applyLock();
+    setInterval(applyLock, 2500);
+  })();
+
+  /* ================= 3D PINCH GATE ================= */
+  (function gate3D(){
+    var host = $("tdCanvas"); if (!host || host._arGate) return; host._arGate = 1;
+    host.addEventListener("wheel", function(e){ if (!pinchOn()) { e.preventDefault(); e.stopPropagation(); } }, { passive: false, capture: true });
+    ["gesturestart", "gesturechange"].forEach(function(t){
+      host.addEventListener(t, function(e){ if (!pinchOn()) { e.preventDefault(); e.stopPropagation(); } }, { passive: false, capture: true });
+    });
+  })();
+
+  /* ================= DOORS / WINDOWS BY DOUBLE-CLICK ================= */
+  function nearestSeg(p, kinds){
+    if (!window.vttLights || !window.vttLights.state) return null;
+    var walls = window.vttLights.state().walls || [], best = null, bd = 2.4;
+    for (var i = 0; i < walls.length; i++) {
+      var w = walls[i];
+      if (kinds.indexOf(w.kind) < 0) continue;
+      var ax = w.a[0], ay = w.a[1], dx = w.b[0] - ax, dy = w.b[1] - ay;
+      var L2 = dx * dx + dy * dy || 0.0001;
+      var t = Math.max(0, Math.min(1, ((p.x - ax) * dx + (p.y - ay) * dy) / L2));
+      var d = Math.hypot(p.x - (ax + dx * t), p.y - (ay + dy * t));
+      if (d < bd) { bd = d; best = w; }
+    }
+    return best;
+  }
+  function toggleSeg(w){
+    if (!w || !window.vttLights || !window.vttLights.toggleDoor) return false;
+    if (window.map && window.map.doubleClickZoom && window.map.doubleClickZoom.enabled()) {
+      window.map.doubleClickZoom.disable();
+      setTimeout(function(){ try { if (window.__apocPinchApply) window.__apocPinchApply(); } catch(e){} }, 380);
+    }
+    window.vttLights.toggleDoor(w).then(function(ok){
+      sayAr(ok ? (w.kind === "door" ? "Door " : "Window ") + (w.open ? "opened." : "closed.") : "That change didn't save — refreshed.");
+    });
+    return true;
+  }
+  if (window.map && window.map.on) window.map.on("dblclick", function(e){
+    if (document.body.classList.contains("displaying")) return;
+    var p = window.toXY(e.latlng);
+    toggleSeg(nearestSeg(p, ["door", "window"]));
+  });
+  function tdGroundPct(e){
+    var TD = window.__apoc3d, sh = shelf();
+    if (!TD || !TD.camera || !window.THREE || !sh) return null;
+    var host = $("tdCanvas"); var cvs = host && host.querySelector("canvas"); if (!cvs) return null;
+    var def = sh.def(sh.current()); if (!def || !def.cell) return null;
+    var r = cvs.getBoundingClientRect();
+    var nd = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    var ray = new THREE.Raycaster(); ray.setFromCamera(nd, TD.camera);
+    var v = new THREE.Vector3();
+    if (!ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), v)) return null;
+    var fw = def.w, fh = def.h, rot = TD.rot || 0;
+    if (rot % 2 === 1) { var t = fw; fw = fh; fh = t; }
+    var fx = v.x / (fw / def.cell) * 100, fz = v.z / (fh / def.cell) * 100;
+    if (rot === 1) return { x: fz, y: 100 - fx };
+    if (rot === 2) return { x: 100 - fx, y: 100 - fz };
+    if (rot === 3) return { x: 100 - fz, y: fx };
+    return { x: fx, y: fz };
+  }
+  document.addEventListener("dblclick", function(e){
+    var host = $("tdCanvas");
+    if (!host || host.hidden || document.body.classList.contains("displaying")) return;
+    if (!e.target || !host.contains(e.target)) return;
+    var p = tdGroundPct(e); if (!p) return;
+    toggleSeg(nearestSeg(p, ["door", "window"]));
+  });
+
+  /* ================= STEAMPUNK FRAMING ================= */
+  function gear(g, cx, cy, r, teeth, color){
+    g.fillStyle = color;
+    for (var i = 0; i < teeth; i++) {
+      var a = i / teeth * Math.PI * 2;
+      g.save(); g.translate(cx, cy); g.rotate(a); g.fillRect(r * 0.82, -r * 0.16, r * 0.42, r * 0.32); g.restore();
+    }
+    g.beginPath(); g.arc(cx, cy, r * 0.92, 0, 7); g.fill();
+    g.fillStyle = "rgba(20,14,6,.9)"; g.beginPath(); g.arc(cx, cy, r * 0.4, 0, 7); g.fill();
+    g.fillStyle = color; g.beginPath(); g.arc(cx, cy, r * 0.18, 0, 7); g.fill();
+  }
+  function frameImage(src, cb){
+    var img = new Image();
+    img.onload = function(){
+      try {
+        var w = Math.max(96, img.naturalWidth || 144), h = Math.max(96, img.naturalHeight || 144);
+        var cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+        var g = cv.getContext("2d");
+        g.drawImage(img, 0, 0, w, h);
+        var bw = Math.max(5, Math.round(Math.min(w, h) * 0.055));
+        var grad = g.createLinearGradient(0, 0, w, h);
+        grad.addColorStop(0, "#8a6a34"); grad.addColorStop(.5, "#d8b25a"); grad.addColorStop(1, "#6e5326");
+        g.strokeStyle = grad; g.lineWidth = bw;
+        g.strokeRect(bw / 2, bw / 2, w - bw, h - bw);
+        g.strokeStyle = "rgba(30,20,8,.85)"; g.lineWidth = 1.6;
+        g.strokeRect(bw + 1.5, bw + 1.5, w - 2 * bw - 3, h - 2 * bw - 3);
+        g.fillStyle = "#e8c877";
+        var rv = Math.max(2, bw * 0.24), inset = bw * 0.52;
+        [[inset, inset], [w - inset, inset], [inset, h - inset], [w - inset, h - inset], [w / 2, inset], [w / 2, h - inset], [inset, h / 2], [w - inset, h / 2]].forEach(function(pt){
+          g.beginPath(); g.arc(pt[0], pt[1], rv, 0, 7); g.fill();
+          g.fillStyle = "rgba(60,40,10,.8)"; g.beginPath(); g.arc(pt[0], pt[1], rv * 0.4, 0, 7); g.fill(); g.fillStyle = "#e8c877";
+        });
+        var gr = Math.min(w, h) * 0.13;
+        gear(g, gr + bw * 0.4, gr + bw * 0.4, gr, 8, "#c9a24d");
+        gear(g, w - gr - bw * 0.4, h - gr - bw * 0.4, gr * 0.8, 7, "#a37f36");
+        cb(cv.toDataURL("image/png"));
+      } catch(e){ cb(null); }
+    };
+    img.onerror = function(){ cb(null); };
+    img.src = src;
+  }
+  var steamPropCache = {};
+  window.__arSteamURL = function(key){ return steamPropCache[key] || null; };
+  (function precomputeSteam(){
+    var PD = null, tries = 0;
+    (function wait(){
+      tries++;
+      try { PD = typeof BR.propDefs === "function" ? BR.propDefs() : null; } catch(e){}
+      if (!PD || typeof BR.propArtURL !== "function") { if (tries < 40) setTimeout(wait, 500); return; }
+      Object.keys(PD).forEach(function(k){
+        try {
+          var u = BR.propArtURL(k, 0).url;
+          frameImage(u, function(framed){ if (framed) steamPropCache[k] = framed; });
+        } catch(e){}
+      });
+    })();
+  })();
+  /* frame steam-flagged image stamps (art / textures) shortly after they land */
+  setInterval(function(){
+    if (!window.vttDraw || !window.vttDraw.items) return;
+    window.vttDraw.items().forEach(function(it){
+      if (it.type === "stamp" && it.steam && !it.prop && it.img && !it._steamDone) {
+        it._steamDone = 1;
+        if (!it.imgPlain) it.imgPlain = it.img;
+        frameImage(it.img, function(framed){
+          if (framed) { it.img = framed; window.vttDraw.reorder(it, 1); }
+        });
+      }
+    });
+  }, 1200);
+  /* shelf chip: the default for newly placed assets */
+  (function steamChip(){
+    var body = document.querySelector("#assetsNest .nest-body");
+    if (!body) return;
+    var chip = document.createElement("p");
+    chip.className = "muted small";
+    chip.style.margin = "0 0 8px";
+    var on = true; try { on = localStorage.getItem("apocArSteamDefault") !== "0"; } catch(e){}
+    chip.innerHTML = "Steampunk style for new assets: <button type=\"button\" class=\"btn ar-mini\" id=\"arSteamChip\" aria-pressed=\"" + on + "\">" + (on ? "ON" : "OFF") + "</button> <span class=\"muted\">(brass &amp; gears framing; flip any placed piece in Edit mode)</span>";
+    var anchor = body.querySelector("p");
+    if (anchor && anchor.nextSibling) body.insertBefore(chip, anchor.nextSibling); else body.appendChild(chip);
+    chip.querySelector("#arSteamChip").addEventListener("click", function(){
+      var now = true; try { now = localStorage.getItem("apocArSteamDefault") !== "0"; } catch(e){}
+      try { localStorage.setItem("apocArSteamDefault", now ? "0" : "1"); } catch(e){}
+      this.setAttribute("aria-pressed", String(!now)); this.textContent = !now ? "ON" : "OFF";
+      sayAr("Steampunk style for newly placed assets is " + (!now ? "ON." : "OFF."));
+    });
+  })();
+
+  /* ================= EDIT PLACED ASSETS ================= */
+  var editOn = false, sel = null, dragState = null;
+  var editBar = document.createElement("div");
+  editBar.id = "arEditBar";
+  editBar.innerHTML =
+    "<button type=\"button\" class=\"btn\" id=\"arEditBtn\" aria-pressed=\"false\">✥ Edit placed assets</button>" +
+    "<span id=\"arEditPanel\" hidden>" +
+    " <span id=\"arSelName\" class=\"small\"></span>" +
+    " <button type=\"button\" class=\"btn ar-mini\" id=\"arRotL\" title=\"Rotate −15°\">⟲ 15°</button>" +
+    " <button type=\"button\" class=\"btn ar-mini\" id=\"arRotR\" title=\"Rotate +15°\">⟳ 15°</button>" +
+    " <button type=\"button\" class=\"btn ar-mini\" id=\"arSizeDn\" title=\"Smaller\">− size</button>" +
+    " <button type=\"button\" class=\"btn ar-mini\" id=\"arSizeUp\" title=\"Bigger\">+ size</button>" +
+    " <button type=\"button\" class=\"btn ar-mini\" id=\"arSteamBtn\">Steampunk</button>" +
+    "</span>" +
+    "<div class=\"muted small\" id=\"arEditHint\" hidden>Click a placed prop / picture / texture on the map to select it; drag it to move it. The Draw tool's Select / move, right-click options and layers work on these pieces too.</div>";
+  (function mountEdit(){
+    var body = document.querySelector("#assetsNest .nest-body");
+    if (body) body.appendChild(editBar);
+  })();
+  function saveItem(it){ if (window.vttDraw && window.vttDraw.reorder) return window.vttDraw.reorder(it, 1); return Promise.resolve(false); }
+  function selLabel(){
+    var n = $("arSelName"); if (!n) return;
+    if (!sel) { n.textContent = "Nothing selected."; return; }
+    n.textContent = (sel.prop ? sel.prop : (sel.name || "Asset")) + " — size " + (Math.round((sel.size || 2) * 10) / 10) + ", rot " + (sel.rot || 0) + "°, steampunk " + (sel.steam ? "on" : "off") + ".";
+    var sb = $("arSteamBtn"); if (sb) sb.setAttribute("aria-pressed", String(!!sel.steam));
+  }
+  function hitStamp(p){
+    if (!window.vttDraw || !window.vttDraw.items) return null;
+    var items = window.vttDraw.items();
+    for (var i = items.length - 1; i >= 0; i--) {
+      var it = items[i];
+      if (it.type !== "stamp") continue;
+      var r = Math.max(it.size || 2, 1.6) * 0.72 + 0.7;
+      if (Math.hypot(p.x - it.x, p.y - it.y) < r) return it;
+    }
+    return null;
+  }
+  function setEdit(on){
+    editOn = on;
+    $("arEditBtn").setAttribute("aria-pressed", String(on));
+    $("arEditPanel").hidden = !on;
+    $("arEditHint").hidden = !on;
+    if (!on) { sel = null; dragState = null; }
+    selLabel();
+  }
+  $("arEditBtn").addEventListener("click", function(){ setEdit(!editOn); });
+  $("arRotL").addEventListener("click", function(){ if (!sel) return; sel.rot = ((sel.rot || 0) - 15 + 360) % 360; saveItem(sel).then(function(){ selLabel(); }); });
+  $("arRotR").addEventListener("click", function(){ if (!sel) return; sel.rot = ((sel.rot || 0) + 15) % 360; saveItem(sel).then(function(){ selLabel(); }); });
+  function resize(f){
+    if (!sel) return;
+    var ratio = (sel.fh || sel.size || 2) / (sel.fw || sel.size || 2);
+    sel.size = Math.max(0.5, Math.min(14, (sel.size || 2) * f));
+    if (sel.prop) { sel.fw = sel.size; sel.fh = Math.max(0.3, sel.size * ratio); }
+    saveItem(sel).then(function(){ selLabel(); });
+  }
+  $("arSizeDn").addEventListener("click", function(){ resize(1 / 1.2); });
+  $("arSizeUp").addEventListener("click", function(){ resize(1.2); });
+  $("arSteamBtn").addEventListener("click", function(){
+    if (!sel) return;
+    sel.steam = sel.steam ? 0 : 1;
+    if (sel.prop) {
+      sel.img = sel.steam ? (window.__arSteamURL(sel.prop) || sel.img || "") : "";
+      if (!sel.steam) delete sel.img;
+    } else if (sel.imgPlain || sel.img) {
+      if (sel.steam) { if (!sel.imgPlain) sel.imgPlain = sel.img; sel._steamDone = 0; }
+      else if (sel.imgPlain) { sel.img = sel.imgPlain; sel._steamDone = 1; }
+    }
+    saveItem(sel).then(function(ok){ selLabel(); sayAr(ok ? "Steampunk " + (sel.steam ? "on" : "off") + " for that piece — saved for everybody." : "That didn't save — refreshed."); });
+  });
+  if (window.map && window.map.on) {
+    window.map.on("mousedown", function(e){
+      if (!editOn || document.body.classList.contains("displaying")) return;
+      var p = window.toXY(e.latlng);
+      var hit = hitStamp(p);
+      if (hit) {
+        sel = hit; selLabel();
+        dragState = { it: hit, moved: false };
+        if (window.map.dragging) window.map.dragging.disable();
+      } else { sel = null; selLabel(); }
+    });
+    window.map.on("mousemove", function(e){
+      if (!dragState) return;
+      var p = window.toXY(e.latlng);
+      dragState.it.x = Math.max(0, Math.min(100, p.x));
+      dragState.it.y = Math.max(0, Math.min(100, p.y));
+      dragState.moved = true;
+    });
+    window.map.on("mouseup", function(){
+      if (!dragState) return;
+      var it = dragState.it, moved = dragState.moved; dragState = null;
+      if (!lockOn() && window.map.dragging) window.map.dragging.enable();
+      if (moved) saveItem(it).then(function(ok){ sayAr(ok ? "Moved — saved for everybody." : "That move didn't save — refreshed."); });
+    });
+  }
+
+  /* ================= STAIRS (Props subcategory) ================= */
+  function stairURL(kind){
+    var cv = document.createElement("canvas"); cv.width = 144; cv.height = 144;
+    var g = cv.getContext("2d");
+    g.fillStyle = "#191b1f"; g.fillRect(0, 0, 144, 144);
+    var brass = "#c9a24d", iron = "#3c4149", light = "#565d68";
+    function tread(x, y, w){ g.fillStyle = iron; g.fillRect(x, y, w, 9); g.fillStyle = light; g.fillRect(x, y, w, 3); g.fillStyle = brass; g.fillRect(x, y + 7, w, 2); }
+    if (kind === "stairs-up" || kind === "stairs-down") {
+      var flip = kind === "stairs-down";
+      for (var i = 0; i < 5; i++) { var yy = flip ? 22 + i * 22 : 104 - i * 22; tread(16 + i * 4, yy, 112 - i * 8); }
+      g.strokeStyle = brass; g.lineWidth = 4; g.beginPath();
+      if (flip) { g.moveTo(14, 14); g.lineTo(130, 122); } else { g.moveTo(14, 122); g.lineTo(130, 14); }
+      g.stroke();
+      g.fillStyle = "#e8c877";
+      g.beginPath();
+      if (flip) { g.moveTo(112, 108); g.lineTo(132, 110); g.lineTo(120, 126); } else { g.moveTo(112, 28); g.lineTo(132, 26); g.lineTo(120, 10); }
+      g.closePath(); g.fill();
+    } else if (kind === "ladder") {
+      g.fillStyle = iron; g.fillRect(48, 12, 8, 120); g.fillRect(88, 12, 8, 120);
+      g.fillStyle = brass; for (var r2 = 0; r2 < 5; r2++) g.fillRect(48, 24 + r2 * 24, 48, 6);
+    } else { /* hatch */
+      g.fillStyle = iron; g.fillRect(24, 44, 96, 56);
+      g.strokeStyle = brass; g.lineWidth = 4; g.strokeRect(24, 44, 96, 56);
+      gear(g, 72, 72, 15, 8, "#c9a24d");
+    }
+    return cv.toDataURL("image/png");
+  }
+  var STAIRS = [["stairs-up", "Stairs up"], ["stairs-down", "Stairs down"], ["ladder", "Ladder"], ["hatch", "Iron hatch"]];
+  function placeStamp(it, label){
+    if (!window.vttDraw || !window.vttDraw.items) { sayAr("The drawing layer isn't ready yet."); return; }
+    window.vttDraw.items().push(it);
+    window.vttDraw.reorder(it, 1).then(function(ok){ sayAr(ok ? "\"" + label + "\" placed." : "That didn't save — refreshed."); });
+  }
+  function centrePct(){ var c = window.toXY(window.map.getCenter()); return { x: c.x, y: c.y }; }
+  var catsEl2 = $("assetCats");
+  if (catsEl2) {
+    catsEl2.addEventListener("click", function(e){
+      var h = e.target && e.target.closest ? e.target.closest(".ar-cat[data-cat=\"props\"] > .nest-head") : null;
+      if (!h) return;
+      var body = h.parentElement.querySelector(":scope > .nest-body");
+      setTimeout(function(){
+        if (!body || body.querySelector(".ar-sub-stairs")) return;
+        var grid = body.querySelector(".ar-subgrid"); if (!grid) return;
+        var wrap = document.createElement("div"); wrap.className = "nest mr-nest ar-sub ar-sub-stairs";
+        var head = document.createElement("button"); head.type = "button"; head.className = "nest-head mr-folder-head"; head.setAttribute("aria-expanded", "false"); head.textContent = "Stairs & vertical (" + STAIRS.length + ")";
+        var bd = document.createElement("div"); bd.className = "nest-body mr-body";
+        var gr = document.createElement("div"); gr.className = "lib-grid";
+        STAIRS.forEach(function(s){
+          var b = document.createElement("button"); b.type = "button"; b.className = "lib-item ar-tile";
+          b.dataset.kind = "stairs"; b.dataset.img = stairURL(s[0]); b.dataset.name = s[1];
+          b.title = s[1] + " — drag onto the map, or tap to place at the centre";
+          var im = document.createElement("img"); im.src = b.dataset.img; im.alt = s[1]; im.draggable = false; b.appendChild(im);
+          var cap = document.createElement("span"); cap.className = "lib-cap"; cap.textContent = s[1]; b.appendChild(cap);
+          gr.appendChild(b);
+        });
+        bd.appendChild(gr); wrap.appendChild(head); wrap.appendChild(bd); grid.appendChild(wrap);
+      }, 60);
+    }, true);
+    /* stairs tiles: own click + drag (part2's placeTile doesn't know this kind) */
+    catsEl2.addEventListener("click", function(e){
+      var b = e.target && e.target.closest ? e.target.closest(".ar-tile[data-kind=\"stairs\"]") : null;
+      if (!b) return;
+      e.stopPropagation();
+      var p = centrePct();
+      placeStamp({ type: "stamp", x: p.x, y: p.y, size: 2, rot: 0, img: b.dataset.img, layer: "shared", gm: false, steam: 1, name: b.dataset.name }, b.dataset.name);
+    }, true);
+    catsEl2.addEventListener("pointerdown", function(e){
+      var b = e.target && e.target.closest ? e.target.closest(".ar-tile[data-kind=\"stairs\"]") : null;
+      if (!b || (e.button !== undefined && e.button > 0)) return;
+      e.stopPropagation(); e.preventDefault();
+      var sx = e.clientX, sy = e.clientY, ghost = null, moved = false;
+      function mv(ev){
+        if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) {
+          moved = true;
+          ghost = b.cloneNode(true); ghost.className = (ghost.className || "") + " drag-ghost"; ghost.style.width = b.offsetWidth + "px";
+          document.body.appendChild(ghost);
+        }
+        if (ghost) { ghost.style.left = ev.clientX + "px"; ghost.style.top = ev.clientY + "px"; }
+      }
+      function up(ev){
+        window.removeEventListener("pointermove", mv, true);
+        window.removeEventListener("pointerup", up, true);
+        if (ghost) ghost.remove();
+        if (moved) {
+          var mapEl = $("apocMap"); var r = mapEl.getBoundingClientRect();
+          var px = Math.max(2, Math.min(98, (ev.clientX - r.left) / r.width * 100)), py = Math.max(2, Math.min(98, (ev.clientY - r.top) / r.height * 100));
+          placeStamp({ type: "stamp", x: px, y: py, size: 2, rot: 0, img: b.dataset.img, layer: "shared", gm: false, steam: 1, name: b.dataset.name }, b.dataset.name);
+        }
+      }
+      window.addEventListener("pointermove", mv, true);
+      window.addEventListener("pointerup", up, true);
+    }, true);
+  }
+
+  /* ================= LEVELS (multi-story scenarios) ================= */
+  var LV_KEY = "vtt_levels";
+  var lvState = { groups: [] };
+  function lvDb(){ var d = G("db"); return d || null; }
+  function lvTable(){ var t = G("SETTINGS_TABLE"); return t || "site_settings"; }
+  function loadLevels(){
+    var d = lvDb(); if (!d) return Promise.resolve();
+    return d.from(lvTable()).select("value").eq("key", LV_KEY).maybeSingle().then(function(res){
+      if (res.data && res.data.value && Array.isArray(res.data.value.groups)) lvState = res.data.value;
+      renderLevels();
+    }).catch(function(){});
+  }
+  function saveLevels(){
+    var d = lvDb(); if (!d) return Promise.resolve(false);
+    return d.from(lvTable()).upsert({ key: LV_KEY, value: lvState, updated_at: new Date().toISOString() }, { onConflict: "key" }).then(function(r){ return !r.error; });
+  }
+  function groupOf(mapId){ for (var i = 0; i < lvState.groups.length; i++) if (lvState.groups[i].mapIds.indexOf(mapId) >= 0) return lvState.groups[i]; return null; }
+  var lvBar = document.createElement("div");
+  lvBar.id = "arLevels"; lvBar.className = "ar-levels"; lvBar.hidden = true;
+  (function mountLevels(){
+    var ms = $("mapSelect");
+    if (ms) { var host = ms.closest(".field") || ms.parentElement; if (host && host.parentElement) host.parentElement.insertBefore(lvBar, host.nextSibling); }
+    loadLevels();
+    setInterval(function(){ renderLevels(); }, 4000);
+    setInterval(loadLevels, 45000);
+  })();
+  var lvSig = "";
+  function renderLevels(){
+    var cur = curMapId(), sh = shelf();
+    var grp = groupOf(cur);
+    var isDrop = cur.indexOf("drop-") === 0;
+    var sig = cur + "|" + (grp ? grp.mapIds.join(",") : "-") + "|" + (sh ? lvState.groups.length : 0);
+    if (sig === lvSig && !lvBar.hidden) return;
+    lvSig = sig;
+    if (!grp && !isDrop) { lvBar.hidden = true; return; }
+    lvBar.hidden = false;
+    lvBar.innerHTML = "";
+    var label = document.createElement("span"); label.className = "ar-lvl-label"; label.textContent = grp ? grp.name + " — stories:" : "Stories:";
+    lvBar.appendChild(label);
+    if (!grp) {
+      var nb = document.createElement("button"); nb.type = "button"; nb.className = "btn ar-mini"; nb.textContent = "＋ Make this a multi-story scenario";
+      nb.addEventListener("click", function(){
+        var def = sh && sh.def(cur);
+        lvState.groups.push({ id: "grp-" + Date.now().toString(36), name: (def && def.name) || "Scenario", mapIds: [cur] });
+        saveLevels().then(function(ok){ lvSig = ""; renderLevels(); sayAr(ok ? "Scenario started — add Story 2 with ＋ Story." : "That didn't save."); });
+      });
+      lvBar.appendChild(nb);
+      return;
+    }
+    grp.mapIds.forEach(function(id, idx){
+      var b = document.createElement("button"); b.type = "button"; b.className = "btn ar-mini ar-lvl-btn";
+      var ready = !!(sh && sh.def(id));
+      b.textContent = "Story " + (idx + 1) + (ready ? "" : " (loading…)");
+      b.setAttribute("aria-pressed", String(id === cur));
+      b.disabled = !ready || id === cur;
+      b.addEventListener("click", function(){
+        var ms = $("mapSelect"); if (!ms) return;
+        ms.value = id; ms.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      lvBar.appendChild(b);
+    });
+    var add = document.createElement("button"); add.type = "button"; add.className = "btn ar-mini"; add.textContent = "＋ Story (copy of current)";
+    add.title = "New level on the same footprint: same map picture, this story's walls/doors/tokens/lighting copied — edit from there.";
+    add.addEventListener("click", function(){ addStory(grp, cur); });
+    lvBar.appendChild(add);
+    if (grp.mapIds.length > 1) {
+      var rm = document.createElement("button"); rm.type = "button"; rm.className = "btn ar-mini"; rm.textContent = "Remove this story";
+      rm.addEventListener("click", function(){ removeStory(grp, cur); });
+      lvBar.appendChild(rm);
+    }
+  }
+  function addStory(grp, srcId){
+    if (!gmOn()) { sayAr("Adding a story is GM work — switch GM view on first."); return; }
+    var sh = shelf(); if (!sh) { sayAr("The maps shelf isn't ready yet."); return; }
+    var recs = sh.recs() || [];
+    var srcRec = null; recs.forEach(function(r){ if (r.id === srcId) srcRec = r; });
+    if (!srcRec || !srcRec.path) { sayAr("Stories need a repository map (dropped or generated) as the ground floor."); return; }
+    var d = lvDb(); if (!d) { sayAr("Not connected yet — try again in a second."); return; }
+    var id = "drop-" + Date.now().toString(36) + Math.floor(Math.random() * 999);
+    var rec = { id: id, name: grp.name + " — Story " + (grp.mapIds.length + 1), w: srcRec.w, h: srcRec.h, cell: srcRec.cell, path: srcRec.path };
+    var kinds = ["draw", "tokens", "light", "fog", "settings"];
+    var copies = kinds.map(function(kind){
+      return d.from(lvTable()).select("value").eq("key", keyFor(kind, srcId)).maybeSingle().then(function(res){
+        if (res.data && res.data.value) return d.from(lvTable()).upsert({ key: keyFor(kind, id), value: res.data.value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+        return null;
+      }).catch(function(){});
+    });
+    Promise.all(copies).then(function(){
+      sh.setRecs(recs.concat([rec]));
+      return sh.saveRegistry();
+    }).then(function(){
+      grp.mapIds.push(id);
+      return saveLevels();
+    }).then(function(){
+      lvSig = ""; renderLevels();
+      sayAr("Story " + grp.mapIds.length + " added on the same footprint — it appears in the switcher as soon as the registry loads it (seconds).");
+      (function waitReg(n){
+        if (sh.def(id)) { lvSig = ""; renderLevels(); return; }
+        if (n < 150) setTimeout(function(){ waitReg(n + 1); }, 500);
+      })(0);
+    });
+  }
+  function removeStory(grp, id){
+    if (!gmOn()) { sayAr("Removing a story is GM work — switch GM view on first."); return; }
+    if (!confirm("Remove this story for everybody? Its walls, tokens, assets and lighting go with it.")) return;
+    var sh = shelf(), d = lvDb();
+    grp.mapIds = grp.mapIds.filter(function(x){ return x !== id; });
+    if (grp.mapIds.length <= 1) lvState.groups = lvState.groups.filter(function(g){ return g !== grp; });
+    var jobs = [];
+    if (sh) { sh.setRecs((sh.recs() || []).filter(function(r){ return r.id !== id; })); jobs.push(sh.saveRegistry()); if (sh.delDef) sh.delDef(id); }
+    var ms = $("mapSelect"); if (ms) { var opt = ms.querySelector("option[value=\"" + id + "\"]"); if (opt) opt.remove(); }
+    if (d) ["draw", "tokens", "light", "fog", "settings"].forEach(function(kind){ jobs.push(d.from(lvTable()).delete().eq("key", keyFor(kind, id))); });
+    jobs.push(saveLevels());
+    Promise.all(jobs).then(function(){
+      lvSig = ""; renderLevels();
+      if (curMapId() === id && grp.mapIds.length) {
+        var ms2 = $("mapSelect"); if (ms2) { ms2.value = grp.mapIds[0]; ms2.dispatchEvent(new Event("change", { bubbles: true })); }
+      }
+      sayAr("Story removed.");
+    });
+  }
+})();
+</script>
 </body>
 </html>
