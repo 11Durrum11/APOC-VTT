@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1352";
+        var BUILD_STAMP = "2026-11-07-1657";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8248,5 +8248,263 @@ function floorConnected(L, cols, rows){
   syncLabel();
 })();
 </script>
+
+<style id="APOC-V175">
+/* v1.75 — readability pass on the v1.74 map dropdown: bigger, clearer
+   names (black on white), and a deterministic preview size. */
+#mapDdPanel .mapdd-item{font-size:1.06rem;padding:8px 10px;line-height:1.35;color:#000;font-weight:500}
+#mapDdPanel{background:#ffffff;border-color:#94a3b8}
+#mapDdBtn{font-size:.98rem}
+#mapPreview img{max-width:min(600px,92vw);max-height:min(600px,86vh)}
+/* Generic two-column dropdowns (converted long native selects) */
+.apoc-dd-btn{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  background:#ffffff;color:#000;border:1px solid #94a3b8;border-radius:8px;
+  padding:7px 10px;font-size:.98rem;cursor:pointer;text-align:left}
+.apoc-dd-btn .apoc-dd-caret{flex:none;color:#334155}
+#apocDdPanel{position:fixed;z-index:4500;background:#ffffff;color:#000;border:1px solid #94a3b8;
+  border-radius:10px;box-shadow:0 18px 50px rgba(0,0,0,.55);padding:6px;display:none;
+  overflow-y:auto;overscroll-behavior:contain}
+#apocDdPanel.open{display:block}
+#apocDdPanel .apoc-dd-cols{display:grid;grid-auto-flow:column;column-gap:4px}
+#apocDdPanel .apoc-dd-item{display:block;width:100%;text-align:left;background:transparent;border:0;
+  color:#000;font-size:1.06rem;font-weight:500;line-height:1.35;padding:8px 10px;border-radius:6px;
+  cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#apocDdPanel .apoc-dd-item:hover{background:#e2e8f0}
+#apocDdPanel .apoc-dd-item[aria-selected="true"]{background:#dbeafe}
+/* Shared hover preview for list/tile pickers (repo rows, library tiles) */
+#apocHoverPreview{position:fixed;z-index:4600;display:none;pointer-events:none;background:#0b0e14;
+  border:1px solid #64748b;border-radius:10px;padding:6px;box-shadow:0 18px 50px rgba(0,0,0,.6)}
+#apocHoverPreview.open{display:block}
+#apocHoverPreview img{display:block;max-width:min(600px,92vw);max-height:min(600px,86vh);border-radius:6px}
+#apocHoverPreview .hp-name{color:#f1f5f9;font-size:.9rem;padding:4px 2px 0;max-width:600px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Readability bumps for list UIs that stay single-column */
+.mr-name{font-size:1rem}
+.lib-cap{font-size:.85rem;line-height:1.25}
+</style>
+
+<script>
+/* APOC-V175: (1) long native selects of the named-list kind become
+   two-column black-on-white dropdowns with big readable text (v1.75);
+   (2) one shared hover preview (long side up to 600px) for the pickers
+   whose items have images: maps repository rows and every .lib-item
+   tile (tokens, monsters, symbols, discs, art, stamps). Hover only —
+   nothing here loads, selects or writes shared state. */
+(function(){
+  "use strict";
+  /* ---------- shared hover preview ---------- */
+  var pv = document.createElement("div");
+  pv.id = "apocHoverPreview";
+  pv.innerHTML = '<img alt=""><div class="hp-name"></div>';
+  document.body.appendChild(pv);
+  var pvImg = pv.querySelector("img"), pvName = pv.querySelector(".hp-name");
+  var hideTimer = null, curSrc = "";
+  function place(x, y){
+    var w = pv.offsetWidth || 320, h = pv.offsetHeight || 240;
+    var lx = Math.min(x + 28, window.innerWidth - w - 8);
+    if (lx < 8) lx = Math.max(8, x - w - 20);
+    var ly = Math.min(Math.max(8, y - 30), window.innerHeight - h - 8);
+    pv.style.left = lx + "px"; pv.style.top = Math.max(8, ly) + "px";
+  }
+  function show(src, name, x, y){
+    if (!src) return;
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    if (src !== curSrc) { curSrc = src; pvImg.src = src; }
+    pvName.textContent = name || "";
+    pv.classList.add("open");
+    place(x, y);
+  }
+  function hideSoon(){
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(function(){ pv.classList.remove("open"); curSrc = ""; }, 220);
+  }
+  function srcFor(el){
+    if (el.dataset && el.dataset.img) return el.dataset.img;
+    var img = el.querySelector ? el.querySelector("img") : null;
+    return img ? (img.currentSrc || img.src) : "";
+  }
+  document.addEventListener("mouseover", function(e){
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var row = t.closest(".mr-item");
+    if (row && row.dataset.mapId && window.__apocShelf && window.__apocShelf.def) {
+      var def = window.__apocShelf.def(row.dataset.mapId);
+      if (def && def.img) { show(def.img, def.name || "", e.clientX, e.clientY); return; }
+    }
+    var tile = t.closest(".lib-item");
+    if (tile) {
+      var s = srcFor(tile);
+      var nm = tile.dataset.name || (tile.querySelector(".lib-cap") ? tile.querySelector(".lib-cap").textContent : "");
+      if (s) { show(s, nm, e.clientX, e.clientY); return; }
+    }
+    if (pv.classList.contains("open")) hideSoon();
+  });
+  document.addEventListener("mouseout", function(e){
+    var t = e.target;
+    if (t && t.closest && (t.closest(".mr-item") || t.closest(".lib-item"))) hideSoon();
+  });
+  document.addEventListener("pointerdown", function(){ pv.classList.remove("open"); curSrc = ""; }, true);
+
+  /* ---------- generic two-column dropdowns for long selects ---------- */
+  var panel = document.createElement("div");
+  panel.id = "apocDdPanel";
+  panel.innerHTML = '<div class="apoc-dd-cols"></div>';
+  document.body.appendChild(panel);
+  var cols = panel.querySelector(".apoc-dd-cols");
+  var openSel = null, openBtn = null;
+  function closePanel(){ panel.classList.remove("open"); openSel = null; openBtn = null; }
+  function syncLabel(sel, btn){
+    var o = sel.options[sel.selectedIndex];
+    btn.querySelector(".apoc-dd-label").textContent = o ? o.textContent : "";
+  }
+  function fillPanel(sel){
+    cols.innerHTML = "";
+    var n = sel.options.length;
+    cols.style.gridTemplateRows = "repeat(" + Math.ceil(n / 2) + ", auto)";
+    Array.prototype.forEach.call(sel.options, function(o){
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "apoc-dd-item"; b.textContent = o.textContent;
+      b.setAttribute("aria-selected", o.value === sel.value ? "true" : "false");
+      b.addEventListener("click", function(){
+        sel.value = o.value;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+        if (openBtn) syncLabel(sel, openBtn);
+        closePanel();
+      });
+      cols.appendChild(b);
+    });
+  }
+  function openPanel(sel, btn){
+    fillPanel(sel);
+    panel.classList.add("open");
+    openSel = sel; openBtn = btn;
+    var r = btn.getBoundingClientRect();
+    var w = Math.max(r.width, 460);
+    panel.style.width = Math.min(w, window.innerWidth - 16) + "px";
+    panel.style.maxHeight = Math.min(window.innerHeight * 0.55, 520) + "px";
+    var left = Math.min(r.left, window.innerWidth - w - 8);
+    panel.style.left = Math.max(8, left) + "px";
+    var below = r.bottom + 6, ph = panel.offsetHeight || 300;
+    panel.style.top = (below + ph > window.innerHeight - 8 && r.top - ph - 6 > 8)
+      ? (r.top - ph - 6) + "px" : below + "px";
+  }
+  function convert(id){
+    var sel = document.getElementById(id);
+    if (!sel || sel.dataset.apocDd) return;
+    if (sel.options.length <= 10) return;
+    sel.dataset.apocDd = "1";
+    var btn = document.createElement("button");
+    btn.type = "button"; btn.className = "apoc-dd-btn";
+    btn.innerHTML = '<span class="apoc-dd-label"></span><span class="apoc-dd-caret">▾</span>';
+    sel.parentNode.insertBefore(btn, sel.nextSibling);
+    sel.style.display = "none";
+    syncLabel(sel, btn);
+    sel.addEventListener("change", function(){ syncLabel(sel, btn); });
+    btn.addEventListener("click", function(e){
+      e.stopPropagation();
+      if (openSel === sel) closePanel(); else openPanel(sel, btn);
+    });
+  }
+  ["genType", "lightPreset", "ashTerrain", "drawTool"].forEach(convert);
+  document.addEventListener("pointerdown", function(e){
+    if (openSel && !panel.contains(e.target) && e.target !== openBtn && !openBtn.contains(e.target)) closePanel();
+  }, true);
+  document.addEventListener("keydown", function(e){ if (e.key === "Escape") closePanel(); });
+})();
+</script>
+
+<style id="APOC-V176">
+/* v1.76 (Shaun, voice call 2026-11-07) — subcategory footprints halved,
+   three abreast; collapsed Library button halved; map box to the top. */
+/* 1) Art Library subcategories: 3-column grid in the opened library body
+   (docked overlay + floated variants alike). */
+.map-repo:not(.per-float) .artlib.open > .nest-body,
+.map-repo.per-float .artlib.open > .nest-body{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-items:start}
+.map-repo .artlib.open > .nest-body > *{min-width:0;margin:0}
+.map-repo .artlib.open > .nest-body > .lib-panel:has(> .nest.open){grid-column:1/-1}
+.map-repo .artlib.open > .nest-body > .nest.open{grid-column:1/-1}
+#artLibrary .lib-panel .nest-head{min-height:22px;padding:4px 6px;font-size:.85rem;line-height:1.15;white-space:normal}
+#monsterNest > .nest-head{min-height:22px;padding:4px 6px;font-size:.85rem;line-height:1.15;white-space:normal}
+/* 2) Monsters types + Maps folders: 3-column grid, halved heads;
+   an opened folder/type still spans the full row and expands fully. */
+.mr-list, #libMonsters{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;align-items:start}
+.mr-nest{margin:0;min-width:0}
+.mr-nest.open{grid-column:1/-1}
+.mr-folder-head{min-height:20px;padding:3px 6px;font-size:.8rem;line-height:1.15;white-space:normal}
+#monsterLibNote{grid-column:1/-1}
+/* 3) Collapsed Art Library button halved (expanded library unchanged). */
+#artLibrary:not(.open) > .artlib-head{min-height:22px;padding:5px 8px;font-size:.95rem}
+/* 4) Map box to the very top; control row nudged up. */
+.stage-row{margin-top:0}
+#mapPanel{margin-top:0;padding-top:0}
+.vtt-head{margin-top:0;margin-bottom:2px}
+.ctl-row{margin-top:4px}
+</style>
+
+<script>
+/* v1.76: Push to TV + Ambience live in a cluster beside GM view, in
+   .map-tools, in the order GM view | Push to TV | Ambience. The older
+   header-move script relocates Push/Ambience into #headBtns; this
+   script re-asserts the cluster until it is stable. Moves only —
+   listeners and behaviour are untouched. */
+(function(){
+  "use strict";
+  var started = Date.now(), stableSince = 0, stopped = false, busy = false;
+  function assertCluster(){
+    var gm = document.getElementById("gmBtn");
+    var push = document.getElementById("pushTvBtn");
+    var amb = document.getElementById("ambBtn");
+    if (!gm || !push || !amb || !gm.parentNode) return false;
+    var parent = gm.parentNode;
+    if (gm.nextSibling !== push) parent.insertBefore(push, gm.nextSibling);
+    if (push.nextSibling !== amb) parent.insertBefore(amb, push.nextSibling);
+    var hb = document.getElementById("headBtns");
+    return gm.nextSibling === push && push.nextSibling === amb && (!hb || hb.childElementCount === 0);
+  }
+  function tick(){
+    if (stopped) return true;
+    var ok = false;
+    try { ok = assertCluster(); } catch (e) {}
+    if (ok) { if (!stableSince) stableSince = Date.now(); }
+    else stableSince = 0;
+    if ((stableSince && Date.now() - stableSince >= 2000) || Date.now() - started >= 10000) { stop(); return true; }
+    return false;
+  }
+  var timer = setInterval(tick, 250);
+  var mo = null;
+  function stop(){
+    stopped = true;
+    clearInterval(timer);
+    if (mo) { try { mo.disconnect(); } catch (e) {} mo = null; }
+  }
+  function watch(){
+    var hb = document.getElementById("headBtns");
+    var gm = document.getElementById("gmBtn");
+    if (!hb && !(gm && gm.parentNode)) return;
+    mo = new MutationObserver(function(){
+      if (busy || stopped) return;
+      busy = true;
+      try { tick(); } catch (e) {}
+      busy = false;
+    });
+    if (hb) mo.observe(hb, { childList: true });
+    if (gm && gm.parentNode) mo.observe(gm.parentNode, { childList: true });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ tick(); watch(); });
+  else { tick(); watch(); }
+  tick();
+})();
+</script>
+
+<style id="APOC-V176-TOK">
+/* v1.76 augment: the Tokens panel's own three subcategory nests
+   (Symbols / Tokens / Artwork) also sit three abreast; the panel spans
+   the library grid's full row so its three heads get real width, and an
+   opened nest inside it spans the full row and expands fully. */
+#artLibrary #tokenLib:not([hidden]){grid-column:1/-1;display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-items:start}
+#artLibrary #tokenLib > .nest{min-width:0;margin:0}
+#artLibrary #tokenLib > .nest.open{grid-column:1/-1}
+</style>
+
 </body>
 </html>
