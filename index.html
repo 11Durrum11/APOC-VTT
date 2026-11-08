@@ -721,6 +721,12 @@ body.map-expanded .stage-row{display:contents}
             <button type="button" class="btn primary" id="tdBackBtn">Back to 2D</button>
             <button type="button" class="btn" id="tdAssetsBtn">Assets</button>
             <label class="td-zoom" title="3D zoom — always works, like the 2D slider. The Pinch checkbox governs only gestures (wheel + two-finger pinch)." style="display:flex;align-items:center;gap:6px;font-size:.78rem;font-weight:700;letter-spacing:.04em;color:#cfd3da">Zoom <input type="range" id="tdZoomSlider" min="0" max="100" step="1" value="50" aria-label="3D zoom" style="width:110px;accent-color:#1e40af"></label>
+            <span class="td-views" role="group" aria-label="3D camera view" style="display:flex;align-items:center;gap:4px;font-size:.78rem;font-weight:700;letter-spacing:.04em;color:#cfd3da">View
+              <button type="button" class="btn td-view-btn" data-tdview="orbit" aria-pressed="true">Orbit</button>
+              <button type="button" class="btn td-view-btn" data-tdview="top" aria-pressed="false">Top-down</button>
+              <button type="button" class="btn td-view-btn" data-tdview="iso" aria-pressed="false">Isometric</button>
+              <button type="button" class="btn td-view-btn" data-tdview="fp" aria-pressed="false">First-person</button>
+            </span>
             <span class="td-hint" id="tdStatus"></span>
           </div>
         </div>
@@ -6331,6 +6337,7 @@ function floorConnected(L, cols, rows){
      elements (walls, doors, props, tokens, lights) stand up. */
   const TD = { active: false, renderer: null, scene: null, camera: null, root: null, rot: 0,
     tokenObjs: {}, texCache: {}, cam: { az: 0.85, el: 0.92, dist: 34, tx: 10, tz: 7 },
+    view: "orbit", fp: { x: 0, z: 0, yaw: 0, pitch: 0 },
     savedView: null, sig: "", poll: 0, drag: null, keys: {}, following: false, counts: {}, localSetAt: 0, genData: null };
   window.__apoc3d = TD;
   const TD_CAPS = { walls: 600, props: 400, tokens: 200, pointLights: 8 };
@@ -6815,6 +6822,19 @@ function floorConnected(L, cols, rows){
   }
   window.addEventListener("resize", tdResize);
   function tdUpdateCamera(){
+    /* v1.92: FIRST-PERSON — eye-level camera ~5 ft over the ACTIVE
+       story's floor. The active story is the main build at y=0 (the
+       v1.90 stacks offset the OTHER stories around it by story
+       height), so the eye stands at 5 ft in world units (1 unit =
+       1 square = feetPerSquare ft). TD.fp is driven by the APOC-V192
+       block (drag-look in tdBindControls + the WASD walk loop). */
+    if (TD.view === "fp") {
+      const eye = 5 / (feetPerSquare || 5);
+      const cp = Math.cos(TD.fp.pitch);
+      TD.camera.position.set(TD.fp.x, eye, TD.fp.z);
+      TD.camera.lookAt(TD.fp.x + Math.sin(TD.fp.yaw) * cp, eye + Math.sin(TD.fp.pitch), TD.fp.z - Math.cos(TD.fp.yaw) * cp);
+      return;
+    }
     const c = TD.cam;
     const cx = c.tx + c.dist * Math.cos(c.el) * Math.cos(c.az);
     const cz = c.tz + c.dist * Math.cos(c.el) * Math.sin(c.az);
@@ -6846,7 +6866,7 @@ function floorConnected(L, cols, rows){
       el.setPointerCapture(e.pointerId);
       ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
       moved = 0;
-      if (!isProjecting() && ptrs.size === 1) {
+      if (!isProjecting() && ptrs.size === 1 && TD.view !== "fp") { /* v1.92: in first-person a press is a look, never a token grab */
         const hit = pickToken(e);
         if (hit) {
           const tk = tokens.find(t => t.id === hit.userData.tkId);
@@ -6874,6 +6894,23 @@ function floorConnected(L, cols, rows){
         const dNow = Math.hypot(q1.x - q2.x, q1.y - q2.y);
         if (TD.pinchD > 0 && dNow > 0) TD.cam.dist = Math.max(4, Math.min(160, TD.cam.dist * (TD.pinchD / dNow)));
         TD.pinchD = dNow;
+        return;
+      }
+      if (TD.view === "fp") {
+        /* v1.92: first-person drag = look around (token dragging is
+           off in this view — see the pointerdown guard). */
+        TD.fp.yaw -= dx * 0.0042;
+        TD.fp.pitch = Math.max(-1.35, Math.min(1.35, TD.fp.pitch - dy * 0.0042));
+        return;
+      }
+      if (TD.view === "top" || TD.view === "iso") {
+        /* v1.92: the presets hold their angle — a plain drag PANS
+           (same math as the shift-drag below) instead of orbiting
+           away from the preset. Token dragging still works: TD.drag
+           was handled above. */
+        const s = TD.cam.dist / 220;
+        const sin = Math.sin(TD.cam.az), cos = Math.cos(TD.cam.az);
+        TD.cam.tx -= (dx * cos - dy * sin) * s * 0.4; TD.cam.tz -= (dx * sin + dy * cos) * s * 0.4;
         return;
       }
       if (e.shiftKey || e.buttons === 4 || e.buttons === 2) {
@@ -6951,7 +6988,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2056";
+        var BUILD_STAMP = "2026-11-07-2212";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -12016,6 +12053,170 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     building = true;
     Promise.resolve().then(buildStacks).catch(function(){}).then(function(){ building = false; });
   }, 900);
+})();
+</script>
+<style>
+.td-view-btn[aria-pressed="true"]{background:#1e40af!important;border-color:#2f62d6!important;color:#fff!important}
+</style>
+<script>
+/* APOC-V192 — 3D CAMERA VIEWS (Shaun, voice call 2026-11-07 ~22:08):
+   beside the classic free ORBIT, the 3D view gets three real views —
+   TOP-DOWN (camera directly overhead, north-up, whole map framed),
+   ISOMETRIC (45° azimuth / 35.264° elevation on a true ORTHOGRAPHIC
+   camera) and FIRST-PERSON (eye level ~5 ft on the active story's
+   floor, drag to look, WASD / arrow keys to walk). The main TD script
+   branches on TD.view (tdUpdateCamera + tdBindControls); this block
+   owns the switcher, the ortho camera swap, per-mode framing and the
+   walk loop. Camera state is THIS DEVICE ONLY — TD fields plus a
+   localStorage record of the chosen view; switching views never
+   touches the shared store (this block makes no db calls at all).
+   Zoom doctrine, unchanged: the 3D zoom slider ALWAYS works — it
+   drives camera distance in Orbit / Top-down / Isometric, and in
+   First-person it sets the WALK SPEED (TD.cam.dist is the stored
+   value either way, so the slider, its 400 ms sync and the wheel all
+   stay coherent). Gestures stay governed by the Pinch checkbox in
+   the orbit-family views, exactly as v1.89/v1.90 built them; the
+   two-finger pinch in the presets still drives TD.cam.dist. */
+(function(){
+  "use strict";
+  function G(name){ try { return eval(name); } catch(e){ return undefined; } }
+  function $(id){ return document.getElementById(id); }
+  var TD = window.__apoc3d; if (!TD) return;
+  var LS = "apocVtt3dView", mode = "orbit";
+  try { mode = localStorage.getItem(LS) || "orbit"; } catch(e){}
+  if (["orbit", "top", "iso", "fp"].indexOf(mode) < 0) mode = "orbit";
+  TD.view = mode;
+  var isoCam = null, lastFrustum = "", wasActive = false;
+  var HINTS = {
+    orbit: "View: Orbit — drag to circle the map, shift-drag to pan, slider zooms.",
+    top: "View: Top-down — directly overhead, north up. Drag to pan, slider zooms.",
+    iso: "View: Isometric — fixed 45° / 35.3° angle. Drag to pan, slider zooms.",
+    fp: "View: First-person — drag to look, W A S D or arrow keys to walk (Shift = faster). The zoom slider sets walk speed here."
+  };
+  function frameUnits(){
+    var MW = G("MW") || 0, MH = G("MH") || 0, CELL = G("CELL") || 60, fw = MW, fh = MH;
+    if (TD.rot % 2 === 1) { fw = MH; fh = MW; }
+    return [fw / CELL, fh / CELL];
+  }
+  function fitDist(){
+    var d = frameUnits(), aspect = 1.6;
+    try { var w = $("tdWrap"); if (w && w.clientHeight) aspect = w.clientWidth / w.clientHeight; } catch(e){}
+    var t = 0.4245; /* tan(23°) — half the 46° perspective fov */
+    var need = Math.max(d[1] / (2 * t), d[0] / (2 * t * aspect));
+    return Math.max(4, Math.min(160, need * 1.06));
+  }
+  function fpSpawn(){
+    var d = frameUnits(), cx = d[0] / 2, cz = d[1] / 2, sx = cx, sz = cz;
+    try {
+      for (var k in TD.tokenObjs) { var o = TD.tokenObjs[k]; if (o && o.position) { sx = o.position.x; sz = o.position.z; break; } }
+    } catch(e){}
+    TD.fp.x = sx; TD.fp.z = sz;
+    TD.fp.yaw = (Math.abs(cx - sx) < 0.01 && Math.abs(cz - sz) < 0.01) ? 0 : Math.atan2(cx - sx, -(cz - sz));
+    TD.fp.pitch = 0;
+  }
+  function syncIsoFrustum(force){
+    if (!isoCam || TD.camera !== isoCam) return;
+    var w = 0, h = 0;
+    try { var el = TD.renderer && TD.renderer.domElement; if (el) { w = el.clientWidth; h = el.clientHeight; } } catch(e){}
+    if (!w || !h) return;
+    var viewH = Math.max(2, TD.cam.dist * 0.85); /* persp at dist d frames ~0.85*d world units tall — iso matches that framing */
+    var key = w + "x" + h + "x" + viewH.toFixed(2);
+    if (!force && key === lastFrustum) return;
+    lastFrustum = key;
+    var a = w / h;
+    isoCam.left = -viewH * a / 2; isoCam.right = viewH * a / 2;
+    isoCam.top = viewH / 2; isoCam.bottom = -viewH / 2;
+    isoCam.updateProjectionMatrix();
+  }
+  function ensureCamera(){
+    if (!window.THREE || !TD.camera) return;
+    if (mode === "iso") {
+      if (!isoCam) isoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1000, 2000);
+      if (TD.camera !== isoCam) { TD.camera = isoCam; lastFrustum = ""; }
+      syncIsoFrustum(false);
+    } else {
+      if (isoCam && TD.camera === isoCam) {
+        var a = 1.6;
+        try { var w = $("tdWrap"); if (w && w.clientHeight) a = w.clientWidth / w.clientHeight; } catch(e){}
+        TD.camera = new THREE.PerspectiveCamera(46, a, 0.1, 600);
+      }
+      if (TD.camera && TD.camera.isPerspectiveCamera) {
+        var want = (mode === "fp") ? 66 : 46; /* first-person gets a wider, eye-like fov */
+        if (TD.camera.fov !== want) { TD.camera.fov = want; TD.camera.updateProjectionMatrix(); }
+      }
+    }
+  }
+  var btns = [];
+  function syncButtons(){
+    btns.forEach(function(b){ b.setAttribute("aria-pressed", String(b.getAttribute("data-tdview") === mode)); });
+  }
+  function setView(m, silent){
+    mode = m; TD.view = m;
+    try { localStorage.setItem(LS, m); } catch(e){}
+    if (m === "top") {
+      /* directly overhead, north-up: the camera parks a hair SOUTH of
+         the target (az = 90°) at el 89.94° — a hair off true vertical
+         so lookAt stays stable — so the map's top edge (image north,
+         -z in the 3D frame) reads at the top of the screen. */
+      var d = frameUnits();
+      TD.cam.tx = d[0] / 2; TD.cam.tz = d[1] / 2;
+      TD.cam.az = Math.PI / 2; TD.cam.el = 1.5699;
+      TD.cam.dist = fitDist();
+    } else if (m === "iso") {
+      TD.cam.az = Math.PI / 4; TD.cam.el = Math.atan(1 / Math.SQRT2); /* 35.264° — the isometric elevation */
+      TD.cam.dist = Math.max(10, Math.min(120, fitDist()));
+    } else if (m === "fp") {
+      fpSpawn();
+    }
+    ensureCamera();
+    syncButtons();
+    if (!silent) { var st = $("tdStatus"); if (st) st.textContent = HINTS[m]; }
+  }
+  btns = Array.prototype.slice.call(document.querySelectorAll(".td-view-btn"));
+  btns.forEach(function(b){
+    b.addEventListener("click", function(){
+      if (document.body.classList.contains("displaying")) return; /* the bar is hidden on TV copies anyway */
+      setView(b.getAttribute("data-tdview"));
+    });
+  });
+  syncButtons();
+  /* walk loop — WASD / arrows while first-person is the live view */
+  var keys = {}, lastT = 0;
+  function typing(e){ var t = e.target; return !!(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)); }
+  document.addEventListener("keydown", function(e){
+    if (typing(e)) return;
+    keys[e.code] = true;
+    if (mode === "fp" && TD.active && /^Arrow/.test(e.code)) e.preventDefault();
+  });
+  document.addEventListener("keyup", function(e){ keys[e.code] = false; });
+  window.addEventListener("blur", function(){ keys = {}; });
+  function walk(t){
+    requestAnimationFrame(walk);
+    var dt = Math.min(0.05, lastT ? (t - lastT) / 1000 : 0); lastT = t;
+    if (!TD.active || mode !== "fp" || !dt) return;
+    var f = 0, r = 0;
+    if (keys.KeyW || keys.ArrowUp) f += 1;
+    if (keys.KeyS || keys.ArrowDown) f -= 1;
+    if (keys.KeyD || keys.ArrowRight) r += 1;
+    if (keys.KeyA || keys.ArrowLeft) r -= 1;
+    if (!f && !r) return;
+    var sp = Math.max(4, Math.min(160, TD.cam.dist)) / 5; /* the zoom slider's value = walk speed, 0.8..32 units/sec */
+    if (keys.ShiftLeft || keys.ShiftRight) sp *= 2.5;
+    var sy = Math.sin(TD.fp.yaw), cy = Math.cos(TD.fp.yaw);
+    var vx = sy * f + cy * r, vz = -cy * f + sy * r, L = Math.hypot(vx, vz) || 1;
+    TD.fp.x += vx / L * sp * dt;
+    TD.fp.z += vz / L * sp * dt;
+    var d = frameUnits();
+    TD.fp.x = Math.max(0.3, Math.min(Math.max(0.3, d[0] - 0.3), TD.fp.x));
+    TD.fp.z = Math.max(0.3, Math.min(Math.max(0.3, d[1] - 0.3), TD.fp.z));
+  }
+  requestAnimationFrame(walk);
+  /* keep the camera honest across 3D enter/exit + scene rebuilds */
+  setInterval(function(){
+    if (TD.active && !wasActive) { wasActive = true; setView(mode, true); }
+    if (!TD.active) { wasActive = false; return; }
+    ensureCamera();
+  }, 200);
 })();
 </script>
 </body>
