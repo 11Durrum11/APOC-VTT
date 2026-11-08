@@ -7286,7 +7286,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1224";
+        var BUILD_STAMP = "2026-11-08-1225";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7529,14 +7529,17 @@ function floorConnected(L, cols, rows){
   function pub(path){ return "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/" + path; }
   /* Visuals vs Maps split (Shaun, Maps-chat call 2026-11-08 ~00:46):
      "Visuals" = the pictures — first-person views, artwork,
-     non-playable images; "Maps" = playable map surfaces. Read off
-     the entry itself (source path / parent collection / view name),
-     never a stored flag, so renames and re-files re-classify
-     themselves. A rec carrying a Roll20 filing is a page Shaun filed
+     non-playable images; "Maps" = playable map surfaces. The stored
+     `cat` field on the entry now governs when present (the registry
+     carries it on every entry); the entry itself (source path /
+     parent collection / view name) is read only as a fallback for
+     unclassed records. A rec carrying a Roll20 filing is a page Shaun filed
      as a map, so it stays a Map; everything else defaults to Map. */
   function isVisualRec(r){
     if (!r || typeof r !== "object") return false;
     if (r.r20 && typeof r.r20 === "object") return false;
+    if (r.cat === "Visuals") return true;
+    if (r.cat === "Maps") return false;
     var s = (r.src || ""), p = (r._parent || ""), n = (r.name || "").trim().toLowerCase();
     if (/(^|\/)first person views(\/|$)/i.test(s)) return true;
     if (p === "descripter pics" || /(^|\/)descripter pics(\/|$)/i.test(s)) return true;
