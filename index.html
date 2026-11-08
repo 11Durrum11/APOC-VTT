@@ -7291,7 +7291,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1316";
+        var BUILD_STAMP = "2026-11-08-1456";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -14766,7 +14766,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
 #tokenForm .status-row>button{flex:0 0 auto;white-space:nowrap}
 #tokenForm .map-actions:has(#tokenDelete[hidden]){display:none}
 .ctl-set{max-height:calc(100dvh - 8px)}
-.mr-list{max-height:none}
+.map-repo .mr-list{max-height:none}
 .nest-body{max-height:calc(100dvh - 24px)}
 body select option,body select optgroup{background:#101216;color:#f5f5f5}
 @media (min-width:821px){
@@ -14797,5 +14797,17 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
   window.addEventListener("resize", sizeOpen);
 })();
 </script>
+
+<style id="APOC-V227">
+/* v2.27 — Art Library head fit: the head button is 94px wide in the 112px
+   panel but its content (grip + "Art Library" + caret) measured
+   scrollWidth 99-107, clipped/overflowing. Head only, desktop only:
+   smaller font, tighter horizontal padding and gap until the label fits.
+   Grip glyph and head behaviour unchanged; nest heads, panel width and
+   the max-width:820px phone drawer rules are untouched. */
+@media (min-width:821px){
+  #artLibrary > .nest-head.artlib-head{font-size:.78rem;padding:4px 5px!important;gap:5px}
+}
+</style>
 </body>
 </html>
