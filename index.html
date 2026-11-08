@@ -159,7 +159,7 @@ body.map-fs .expand-exit-wrap{display:block}
   .ctl-row { margin: 8px 0 2px; } /* v1.68: row nudged up a tad (was 10px 0 4px) */
   .ctl-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .ctl-bar > #gmBtn { margin-left: 0; }
-  .ctl-bar > #gmStatus { flex-basis: 100%; margin: 0; }
+  .ctl-bar > #gmStatus, .ctl-bar > #genStatus { flex-basis: 100%; margin: 0; }
   .ctl-tab { font: inherit; font-size: 0.95rem; padding: 9px 16px; border-radius: 10px; border: 1px solid #6b5a33; background: #241d12; color: #f3e2b3; cursor: pointer; }
   .ctl-tab[aria-expanded="true"] { background: #6b5a33; color: #fff7e0; }
   .ctl-tab .ctl-caret { opacity: 0.75; font-size: 0.8em; margin-left: 5px; }
@@ -7286,7 +7286,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1205";
+        var BUILD_STAMP = "2026-11-08-1220";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8486,13 +8486,41 @@ function floorConnected(L, cols, rows){
   var LABELS = { map: "Map", markers: "Markers", tools: "Tools", fog: "Fog", lighting: "Lighting", draw: "Draw", layers: "Layers", generate: "Generate", dice: "Dice" };
   var tabs = {}, sets = {};
   ORDER.forEach(function (name) {
+    var s = mk("div", "ctl-set"); s.id = "set-" + name; s.hidden = true;
+    row.appendChild(s); sets[name] = s;
+    if (name === "generate") {
+      /* v2.18 (Shaun, same call ~10:15, explicit): the Generate set is a
+         single-action dropdown too — the header IS the Generate Map
+         button. #genBtn is moved (not cloned; its handler reads the
+         option selects and runs the whole flow) into the bar where the
+         Generate tab was, and its status line rides beside it like
+         #gmStatus does. The set survives tab-less below, still home to
+         the options nest (Place/Size/Floor/Notes + Re-roll) and the
+         templates library, and still opens contextually when the
+         templates library unhides (Draw > Template). */
+      var gb = $("genBtn"), gs = $("genStatus");
+      if (gb) { gb.classList.add("ctl-tab"); bar.appendChild(gb); tabs[name] = gb; }
+      if (gs) bar.appendChild(gs);
+      return;
+    }
+    if (name === "markers") {
+      /* v2.18 (Shaun, voice call 2026-11-08 ~10:11): the Markers set held
+         exactly ONE player-facing action, so the dropdown is flattened —
+         Add Marker itself sits in the bar where the Markers tab was
+         (moved, not cloned: its own handler arms placement as before),
+         Add Place rides beside it under its existing GM/map gating, and
+         the set below survives only as the home of the editing forms,
+         which the MutationObserver still opens it for. */
+      var amb = $("addMarkerBtn"), apb = $("addPlaceBtn");
+      if (amb) { amb.classList.add("ctl-tab"); bar.appendChild(amb); tabs[name] = amb; }
+      if (apb) { apb.classList.add("ctl-tab"); bar.appendChild(apb); }
+      return;
+    }
     var b = mk("button", "ctl-tab", LABELS[name]);
     b.type = "button"; b.id = name + "Tab";
     b.setAttribute("aria-expanded", "false");
     var caret = mk("span", "ctl-caret", "▾"); b.appendChild(caret);
     bar.appendChild(b); tabs[name] = b;
-    var s = mk("div", "ctl-set"); s.id = "set-" + name; s.hidden = true;
-    row.appendChild(s); sets[name] = s;
     b.addEventListener("click", function () { openSet(sets[name].hidden ? name : null); });
   });
   /* v1.67: GM view button + its status line take the end of the bar,
@@ -8521,8 +8549,9 @@ function floorConnected(L, cols, rows){
    fieldOf($("gridToggle")), fieldOf($("gridType")), fieldOf($("scaleFeet"))].forEach(function (el) {
     if (el) sets.map.appendChild(el);
   });
-  /* Markers — Add marker, Add place (GM), the two editing forms. */
-  [$("addMarkerBtn"), $("addPlaceBtn"), $("markerForm"), $("placeForm")].forEach(function (el) {
+  /* Markers — the two editing forms only; Add marker / Add place sit
+     directly in the bar now (v2.18 flatten, above). */
+  [$("markerForm"), $("placeForm")].forEach(function (el) {
     if (el) sets.markers.appendChild(el);
   });
   /* Tools — Ruler, Ping, Add token, the token editor. */
