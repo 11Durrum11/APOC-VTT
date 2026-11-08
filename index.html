@@ -6889,7 +6889,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1906";
+        var BUILD_STAMP = "2026-11-07-1908";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10177,9 +10177,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (!lib || !am) return;
     if (!lib.classList.contains("open")) { if (lib.style.marginBottom) lib.style.marginBottom = ""; return; }
     var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
-    var target = mr.bottom;
-    var row = document.getElementById("ctlRow") || document.querySelector(".ctl-row");
-    if (row) { var rb = row.getBoundingClientRect(); if (rb.height > 0 && rb.bottom > target) target = rb.bottom; }
+    var target = mr.bottom; /* v1.87: the anchor is the MAP bottom edge (Shaun: "the bottom of the map edge"); the v1.83 row-bottom extension painted the opened Library over the button row */
     if (window.innerHeight) target = Math.min(target, window.innerHeight - 4);
     var h = Math.round(target - lr.top);
     var ext = Math.round(target - mr.bottom);
@@ -10370,6 +10368,109 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   var settleN = 0;
   var settleTimer = setInterval(function(){ deOverlap(); if (++settleN >= 15) clearInterval(settleTimer); }, 800);
   window.addEventListener("resize", function(){ setTimeout(deOverlap, 550); });
+})();
+</script>
+
+
+<style id="APOC-V187">
+/* v1.85 — while the Art Library is open inside a floated repo, the
+   64vh float cap lifts; the APOC-V187 script sets the float box's
+   height itself so the box bottom lands on the map's bottom edge. */
+.map-repo.lib187-open{max-height:none!important}
+</style>
+
+<script>
+/* APOC-V187 (Shaun, voice call 2026-11-07 ~18:40-18:42) — the opened
+   Art Library reaches the map's bottom edge on HIS device state, and
+   the floated Library stays off the button row.
+   What the earlier builds missed: the extension grows only the inner
+   #artLibrary. On Shaun's device the repo is a saved FLOAT whose
+   visible box is height-capped — his saved treatment height on the
+   repo (and the .per-float 64vh cap + overflow:auto) — so the box
+   stayed 300px tall (bottom 730) while the inner element measured
+   at the target: "doesn't extend all the way down but float over
+   the buttons."
+   (A) OPEN ANCHOR (floated repo): on open, the float keeps his saved
+   left/width, re-anchors its top up if the map bottom is too close,
+   and its height is set so the BOX bottom lands on the map bottom;
+   the 64vh cap lifts while open. On close, his exact pre-open
+   top/height are restored; his saved float record is NOT rewritten
+   by opening. (The docked state is already correct via fitLib.)
+   (B) ROW GUARD (closed floated repo): a closed floated Library
+   whose box overlaps the .ctl-row is lifted clear of the row, and
+   its float record's y is set to the applied value — clamped, never
+   deleted — so it stays clear across reloads. (The zoom bar's row
+   guard is v1.83's deOverlap; the opened Library cannot overlap the
+   row once its bottom is the map bottom.) */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var PERKEY = "apocVttPerimeterV2";
+  function rect(el){ return el ? el.getBoundingClientRect() : null; }
+  function hits(a, b){ return !!(a && b && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0 && Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0); }
+
+  var snap = null;
+  function anchorLib(){
+    var lib = document.getElementById("artLibrary");
+    var am = document.getElementById("apocMap");
+    var repo = document.querySelector(".map-repo");
+    if (!lib || !am || !repo) return;
+    var floated = repo.classList.contains("per-float");
+    if (!lib.classList.contains("open")) {
+      if (snap) {
+        if (floated) { repo.style.top = snap.top; repo.style.height = snap.height; }
+        repo.classList.remove("lib187-open"); snap = null;
+      }
+      return;
+    }
+    if (!floated || repo.classList.contains("per-dragging")) return;
+    var mr = rect(am); if (!mr || mr.height < 50) return;
+    var B = mr.bottom;
+    if (!snap) snap = { top: repo.style.top, height: repo.style.height };
+    var rr = rect(repo);
+    var top = rr.top;
+    if (B - top < 220) {
+      var panel = document.getElementById("mapPanel");
+      var pTop = panel ? rect(panel).top : 0;
+      top = Math.max(pTop + 2, B - 220);
+    }
+    var dTop = Math.round(top - rr.top);
+    if (dTop) repo.style.top = (repo.offsetTop + dTop) + "px";
+    repo.classList.add("lib187-open");
+    var want = Math.round(B - top);
+    var rr2 = rect(repo);
+    if (Math.abs(rr2.height - want) > 1) repo.style.height = want + "px";
+  }
+
+  function guardRepo(){
+    var repo = document.querySelector(".map-repo");
+    var lib = document.getElementById("artLibrary");
+    if (!repo || !repo.classList.contains("per-float")) return;
+    if (repo.classList.contains("per-dragging")) return;
+    if (lib && lib.classList.contains("open")) return;
+    if (snap) return;
+    var rr = rect(repo), rw = rect(document.querySelector(".ctl-row"));
+    if (!hits(rr, rw)) return;
+    var delta = Math.round(rr.bottom - rw.top) + 2;
+    if (delta <= 0) return;
+    var nt = Math.max(0, repo.offsetTop - delta);
+    repo.style.top = nt + "px";
+    try {
+      var st = JSON.parse(localStorage.getItem(PERKEY) || "{}");
+      if (st.repo && st.repo.float) { st.repo.float.y = nt; localStorage.setItem(PERKEY, JSON.stringify(st)); }
+    } catch(e){}
+  }
+  function guards(){ guardRepo(); anchorLib(); }
+
+  document.addEventListener("click", function(){ setTimeout(guards, 80); setTimeout(guards, 450); setTimeout(guards, 1200); }, true);
+  window.addEventListener("pointerup", function(){ setTimeout(guards, 150); }, true);
+  window.addEventListener("resize", function(){ setTimeout(guards, 350); });
+  [2400, 3600, 5200].forEach(function(ms){ setTimeout(guards, ms); });
+  setInterval(function(){
+    var lib = document.getElementById("artLibrary");
+    if (lib && lib.classList.contains("open")) anchorLib();
+    guardRepo();
+  }, 1200);
 })();
 </script>
 
