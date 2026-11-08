@@ -7009,7 +7009,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2338";
+        var BUILD_STAMP = "2026-11-07-2352";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9786,7 +9786,7 @@ function floorConnected(L, cols, rows){
     var rp196 = document.querySelector(".map-repo");
     if (rp196 && rp196.classList.contains("per-float")) return; /* APOC-V196: floated — the screen-bottom fill owns the wrapper height; this map-bottom anchor fighting it was the S5 flicker */
     var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
-    var h = Math.round(mr.bottom - lr.top);
+    var h = Math.round((window.innerHeight - 2) - lr.top); /* APOC-V198: screen bottom, not map bottom */
     if (h > 120 && Math.abs((lr.height) - h) > 1) lib.style.height = h + "px";
   }
 
@@ -10302,8 +10302,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (rp196b && rp196b.classList.contains("per-float")) { if (lib.style.marginBottom) lib.style.marginBottom = ""; return; } /* APOC-V196: floated repo is out of flow — the row-chase margin mechanism and the map-bottom anchor do not apply; the screen-bottom fill owns the wrapper height */
     if (!lib.classList.contains("open")) { if (lib.style.marginBottom) lib.style.marginBottom = ""; return; }
     var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
-    var target = mr.bottom; /* v1.87: the anchor is the MAP bottom edge (Shaun: "the bottom of the map edge"); the v1.83 row-bottom extension painted the opened Library over the button row */
-    if (window.innerHeight) target = Math.min(target, window.innerHeight - 4);
+    var target = window.innerHeight - 2; /* APOC-V198: screen bottom (Shaun standing order), superseding the v1.87 map-bottom anchor */
     var h = Math.round(target - lr.top);
     var ext = Math.round(target - mr.bottom);
     if (h > 120 && Math.abs(lr.height - h) > 1) lib.style.height = h + "px";
@@ -11156,7 +11155,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     } else if (kind === "art") {
       pushDraw({ type: "stamp", x: p.x, y: p.y, size: 2, rot: 0, img: b.dataset.img, ...arLayerPatch(), steam: steamDefault() ? 1 : 0, imgPlain: b.dataset.img }, b.dataset.name || "Artwork");
     } else if (kind === "tex") {
-      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 3, rot: 0, img: texURL(b.dataset.tex), ...arLayerPatch(), steam: steamDefault() ? 1 : 0, imgPlain: texURL(b.dataset.tex) }, (b.dataset.name || "Texture") + " patch");
+      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 3, rot: 0, img: texURL(b.dataset.tex), ...arLayerPatch(), steam: 0, tex: b.dataset.tex, imgPlain: texURL(b.dataset.tex) }, (b.dataset.name || "Texture") + " patch"); /* APOC-V198: a floor texture is not a picture — never steam-framed */
     } else if (kind === "light") {
       if (!gmOn()) { say("Lights are GM material — switch GM view on to place one."); return; }
       var preset = null; LIGHTS.forEach(function(L){ if (L[0] === b.dataset.light) preset = L[2]; });
@@ -11529,7 +11528,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   setInterval(function(){
     if (!window.vttDraw || !window.vttDraw.items) return;
     window.vttDraw.items().forEach(function(it){
-      if (it.type === "stamp" && it.steam && !it.prop && it.img && !it._steamDone) {
+      if (it.type === "stamp" && it.steam && !it.prop && !it.tex && it.img && !it._steamDone) { /* APOC-V198: textures excluded */
         it._steamDone = 1;
         if (!it.imgPlain) it.imgPlain = it.img;
         frameImage(it.img, function(framed){
@@ -12407,5 +12406,68 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
    always on) — not an activatable tab like the other three layers. */
 .layer-chip-map{cursor:default;opacity:.85}
 </style>
+
+<style id="APOC-V198">
+/* APOC-V198 (Shaun, 2026-11-07 ~23:43 — "my tile assets aren't
+   moving; look at the map, that's not how that's supposed to be"):
+   the DOCKED library's open body was an 880px flyout panel parked
+   over the map (base sheet: right:calc(100% + 8px); width:min(880px,
+   74vw); z-index:3100), stretched to full height by the V196 tick —
+   it ate every click on the map centre, where click-to-centre drops
+   tiles. Confine the body to the dock box; the APOC-V198 script
+   pins the DOCK wrapper to the screen bottom instead (the standing
+   "opens all the way down" order), contents scroll inside. */
+.map-repo:not(.per-float) .artlib.open{display:flex;flex-direction:column}
+.map-repo:not(.per-float) .artlib.open > .nest-body{
+  position:static !important; left:auto !important; right:auto !important;
+  top:auto !important; bottom:auto !important; width:auto !important;
+  max-height:none !important; height:auto !important; flex:1 1 auto; min-height:0;
+  display:block !important;
+  overflow-y:auto; overflow-x:hidden; box-shadow:none; z-index:auto;
+}
+</style>
+<script>
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  /* --- dock pin: wrapper to the screen bottom while open --- */
+  var wasOpen = false;
+  function tick(){
+    var repo = document.querySelector(".map-repo");
+    var lib = document.getElementById("artLibrary");
+    if (!repo || !lib) return;
+    var body = lib.querySelector(":scope > .nest-body");
+    var open = lib.classList.contains("open");
+    if (!open) {
+      if (wasOpen) { lib.style.height = ""; if (body) { body.style.height = ""; } wasOpen = false; }
+      return;
+    }
+    wasOpen = true;
+    if (repo.classList.contains("per-float")) return; /* floated: v1.87/v1.96 own the box */
+    var lr = lib.getBoundingClientRect();
+    if (lr.height < 10) return;
+    var want = Math.round(window.innerHeight - lr.top);
+    if (want > 80 && Math.abs(lr.height - want) > 1) lib.style.height = want + "px";
+    if (body) { body.style.height = ""; body.style.maxHeight = ""; } /* flex owns the body height; clear any px the V196 tick set */
+  }
+  document.addEventListener("click", function(){ setTimeout(tick, 60); setTimeout(tick, 300); }, true);
+  window.addEventListener("resize", function(){ setTimeout(tick, 200); });
+  setInterval(tick, 200);
+  /* --- un-frame already-saved texture stamps (they were placed
+     before V198 with steam:1 and the interval framed them). Only
+     texture stamps carry a data-URL imgPlain; art uses file paths,
+     props carry .prop. Runs until none match. --- */
+  setInterval(function(){
+    if (!window.vttDraw || !window.vttDraw.items) return;
+    window.vttDraw.items().forEach(function(it){
+      if (it.type === "stamp" && !it.prop && !it.tex && it.steam && it.imgPlain &&
+          String(it.imgPlain).indexOf("data:image/") === 0 && it.img && it.img !== it.imgPlain) {
+        it.img = it.imgPlain; it.steam = 0; it.tex = "legacy"; delete it._steamDone;
+        window.vttDraw.reorder(it, 1);
+      }
+    });
+  }, 1500);
+})();
+</script>
 </body>
 </html>
