@@ -751,6 +751,17 @@ body.map-expanded .stage-row{display:contents}
         <div class="nest artlib" id="artLibrary">
           <button type="button" class="nest-head artlib-head" aria-expanded="false">Art Library</button>
           <div class="nest-body">
+                                    <div class="nest" id="mapsNest">
+                <button type="button" class="nest-head" aria-expanded="false"><span>Maps <span class="muted small" id="mapRepoCount"></span></span></button>
+                <div class="nest-body">
+                  <div class="field">
+                    <label for="mapRepoSearch">Search maps</label>
+                    <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
+                  </div>
+                  <div class="mr-list" id="mapRepoList"></div>
+                  <p class="muted small" id="mapRepoStatus"></p>
+                </div>
+            </div>
                         <div class="nest" id="npcNest">
               <button type="button" class="nest-head" aria-expanded="false"><span>NPCs <span class="muted small" id="npcCount"></span></span></button>
               <div class="nest-body">
@@ -769,17 +780,6 @@ body.map-expanded .stage-row{display:contents}
                 <div id="libNpcs"><p class="muted small" id="npcLibNote"></p></div>
                 <div class="monster-detail" id="npcDetail" hidden></div>
               </div>
-            </div>
-            <div class="nest" id="mapsNest">
-                <button type="button" class="nest-head" aria-expanded="false"><span>Maps <span class="muted small" id="mapRepoCount"></span></span></button>
-                <div class="nest-body">
-                  <div class="field">
-                    <label for="mapRepoSearch">Search maps</label>
-                    <input id="mapRepoSearch" type="text" autocomplete="off" placeholder="Search the collection…">
-                  </div>
-                  <div class="mr-list" id="mapRepoList"></div>
-                  <p class="muted small" id="mapRepoStatus"></p>
-                </div>
             </div>
             <div class="nest" id="assetsNest">
               <button type="button" class="nest-head" aria-expanded="false"><span>Assets <span class="muted small" id="assetCount"></span></span></button>
@@ -7142,7 +7142,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0236";
+        var BUILD_STAMP = "2026-11-08-0248";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -7400,8 +7400,26 @@ function floorConnected(L, cols, rows){
     if (n === "front") return true;
     return false;
   }
+  /* APOC-V205 (Shaun, 2026-11-08 ~02:06): the Overland / Non-overland
+     designation. A playable map is Overland when the evidence — its
+     source folder, its Roll20 folder/subfolder, or its title — says
+     world / travel / regional scale; every other playable map is
+     Non-overland. Grouping only: nothing renamed, nothing re-hosted. */
+  function isOverlandRec(r){
+    if (!r || typeof r !== "object") return false;
+    if (r.id === "faerun") return true;
+    var hay = ((r.folder || "") + " " + (r.name || "") + (r.r20 && typeof r.r20 === "object" ? " " + (r.r20.f || "") + " " + (r.r20.s || "") : "")).toLowerCase();
+    return /overland|overworld|\bworld\b|continent|regional|\bregion\b|wilderness|kingdom|empire|atlas|badlands|frontier|\bcoast\b|faerun|faerûn|sphere cosmotalogy|cosmolog/.test(hay);
+  }
   window.__apocMapKind = {
     isVisualRec: isVisualRec,
+    isOverlandRec: isOverlandRec,
+    isOverlandId: function(id){
+      if (id === "faerun") return true;
+      var recs = (window.__apocShelf && window.__apocShelf.recs()) || [];
+      for (var i = 0; i < recs.length; i++) if (recs[i].id === id) return isOverlandRec(recs[i]);
+      return false;
+    },
     isVisualId: function(id){
       var recs = (window.__apocShelf && window.__apocShelf.recs()) || [];
       for (var i = 0; i < recs.length; i++) if (recs[i].id === id) return isVisualRec(recs[i]);
@@ -7583,12 +7601,19 @@ function floorConnected(L, cols, rows){
     var visShown = 0;
     var mapsBox = document.createElement("div");
     var visBox = document.createElement("div");
-    var bNest = groupNest("Built-in maps", !!f); var bCount = 0;
+    /* APOC-V205: the Maps top group splits into Overland / Non-overland
+       sub-groups; folder nests file under their group. */
+    var overBox = document.createElement("div");
+    var nonBox = document.createElement("div");
+    var overShown = 0, nonShown = 0;
+    var bOver = groupNest("Built-in maps", !!f), bNon = groupNest("Built-in maps", !!f), bOverN = 0, bNonN = 0;
     BUILTINS.forEach(function(b){
       if (!match(b.name)) return;
-      bNest.body.appendChild(itemRow({ id: b.id, name: b.name, thumbUrl: b.thumb, w: b.w, h: b.h, note: "built-in" })); bCount++;
+      var row = itemRow({ id: b.id, name: b.name, thumbUrl: b.thumb, w: b.w, h: b.h, note: "built-in" });
+      if (isOverlandRec(b)) { bOver.body.appendChild(row); bOverN++; } else { bNon.body.appendChild(row); bNonN++; }
     });
-    if (bCount) { mapsBox.appendChild(bNest.wrap); shown += bCount; }
+    if (bOverN) { overBox.appendChild(bOver.wrap); shown += bOverN; overShown += bOverN; }
+    if (bNonN) { nonBox.appendChild(bNon.wrap); shown += bNonN; nonShown += bNonN; }
     /* v1.65: partition — recs with an r20 assignment file into the
        Roll20 tree (folders in Roll20 order, subfolders nested, page
        order kept; Roll20's unfiled pages as a Top level group); the
@@ -7620,10 +7645,13 @@ function floorConnected(L, cols, rows){
          once in each, holding its own kind. */
       var mRows = [], vRows = [];
       rows.forEach(function(r){ (isVisualRec(r) ? vRows : mRows).push(r); });
-      if (mRows.length) emitGroup(mapsBox, key + "|m", title, mRows, false);
+      var oRows = [], nRows = [];
+      mRows.forEach(function(r){ (isOverlandRec(r) ? oRows : nRows).push(r); });
+      if (oRows.length) emitGroup(overBox, key + "|mo", title, oRows, false, "o");
+      if (nRows.length) emitGroup(nonBox, key + "|mn", title, nRows, false, "n");
       if (vRows.length) emitGroup(visBox, key + "|v", title, vRows, true);
     }
-    function emitGroup(box, key, title, rows, isVis){
+    function emitGroup(box, key, title, rows, isVis, cls){
       liveGroups[key] = true;
       var gn = groupNest(title + " (" + rows.length + ")", !!f);
       if (f) {
@@ -7640,52 +7668,78 @@ function floorConnected(L, cols, rows){
       }
       box.appendChild(gn.wrap);
       if (isVis) visShown += rows.length; else shown += rows.length;
+      if (cls === "o") overShown += rows.length; else if (cls === "n") nonShown += rows.length;
       return gn;
     }
     function emitR20Folder(F){
       var slot = r20ByF[F.name];
       var directAll = slot.direct.slice().sort(byR20);
       var subsAll = F.subs.map(function(s){ return { name: s, all: slot.subs[s].slice().sort(byR20) }; });
-      if (f) {
-        var direct = directAll.filter(function(r){ return match(r.name || r.id); });
-        var subs = subsAll.map(function(sd){ return { name: sd.name, items: sd.all.filter(function(r){ return match(r.name || r.id); }) }; });
-        var tot = direct.length + subs.reduce(function(n, sd){ return n + sd.items.length; }, 0);
-        if (!tot) return;
-        liveGroups["r20:" + F.name] = true;
-        var gn = groupNest(F.name + " (" + tot + ")", true);
-        subs.forEach(function(sd){
-          if (!sd.items.length) return;
-          var sn = groupNest(sd.name + " (" + sd.items.length + ")", true);
-          sn.body.appendChild(buildGroupRows(sd.items));
-          gn.body.appendChild(sn.wrap);
-          shown += sd.items.length;
-        });
-        if (direct.length) { gn.body.appendChild(buildGroupRows(direct)); shown += direct.length; }
-        mapsBox.appendChild(gn.wrap);
-        return;
+      /* APOC-V205: the folder's rows split by designation — its nest
+         appears under Overland and/or Non-overland, holding only that
+         group's rows (lazy build per group, as before). A folder with
+         no rows at all keeps its empty nest under Non-overland. */
+      var totGrand = directAll.length + subsAll.reduce(function(n, sd){ return n + sd.all.length; }, 0);
+      function part(cls){
+        var pick = function(r){ return (cls === "o") === isOverlandRec(r); };
+        if (f) {
+          var d = directAll.filter(function(r){ return match(r.name || r.id) && pick(r); });
+          var ss = subsAll.map(function(sd){ return { name: sd.name, items: sd.all.filter(function(r){ return match(r.name || r.id) && pick(r); }) }; });
+          return { direct: d, subs: ss, tot: d.length + ss.reduce(function(n, sd){ return n + sd.items.length; }, 0) };
+        }
+        var dA = directAll.filter(pick);
+        var ssA = subsAll.map(function(sd){ return { name: sd.name, all: sd.all.filter(pick) }; });
+        return { direct: dA, subs: ssA, tot: dA.length + ssA.reduce(function(n, sd){ return n + sd.all.length; }, 0) };
       }
-      var totAll = directAll.length + subsAll.reduce(function(n, sd){ return n + sd.all.length; }, 0);
-      var key = "r20:" + F.name;
-      liveGroups[key] = true;
-      var gn2 = groupNest(F.name + " (" + totAll + ")", false);
-      var isig = directAll.map(function(r){ return r.id; }).join(",") + "|" + subsAll.map(function(sd){ return sd.name + ":" + sd.all.map(function(r){ return r.id; }).join(","); }).join("|");
-      var st = groupState[key];
-      if (st && st.built && st.sig === isig) {
-        gn2.body.appendChild(st.content);
-      } else {
-        groupState[key] = { sig: isig, built: false, items: null, content: null, build: function(){
-          var box = document.createElement("div");
-          subsAll.forEach(function(sd){
-            var sn = groupNest(sd.name + " (" + sd.all.length + ")", false);
-            sn.body.appendChild(buildGroupRows(sd.all));
-            box.appendChild(sn.wrap);
+      [["o", overBox], ["n", nonBox]].forEach(function(pair){
+        var cls = pair[0], box = pair[1];
+        var P = part(cls);
+        if (f) {
+          if (!P.tot) return;
+          liveGroups["r20:" + F.name + "|" + cls] = true;
+          var gn = groupNest(F.name + " (" + P.tot + ")", true);
+          P.subs.forEach(function(sd){
+            if (!sd.items.length) return;
+            var sn = groupNest(sd.name + " (" + sd.items.length + ")", true);
+            sn.body.appendChild(buildGroupRows(sd.items));
+            gn.body.appendChild(sn.wrap);
+            shown += sd.items.length;
           });
-          if (directAll.length) box.appendChild(buildGroupRows(directAll));
-          return box;
-        } };
-        gn2.body._lazy = key;
-      }
-      mapsBox.appendChild(gn2.wrap);
+          if (P.direct.length) { gn.body.appendChild(buildGroupRows(P.direct)); shown += P.direct.length; }
+          if (cls === "o") overShown += P.tot; else nonShown += P.tot;
+          box.appendChild(gn.wrap);
+          return;
+        }
+        if (!P.tot) {
+          if (cls === "n" && !totGrand) {
+            liveGroups["r20:" + F.name] = true;
+            box.appendChild(groupNest(F.name + " (0)", false).wrap);
+          }
+          return;
+        }
+        var key = "r20:" + F.name + "|" + cls;
+        liveGroups[key] = true;
+        var gn2 = groupNest(F.name + " (" + P.tot + ")", false);
+        var isig = P.direct.map(function(r){ return r.id; }).join(",") + "|" + P.subs.map(function(sd){ return sd.name + ":" + sd.all.map(function(r){ return r.id; }).join(","); }).join("|");
+        var st = groupState[key];
+        if (st && st.built && st.sig === isig) {
+          gn2.body.appendChild(st.content);
+        } else {
+          groupState[key] = { sig: isig, built: false, items: null, content: null, build: function(){
+            var bx = document.createElement("div");
+            P.subs.forEach(function(sd){
+              var sn = groupNest(sd.name + " (" + sd.all.length + ")", false);
+              sn.body.appendChild(buildGroupRows(sd.all));
+              bx.appendChild(sn.wrap);
+            });
+            if (P.direct.length) bx.appendChild(buildGroupRows(P.direct));
+            return bx;
+          } };
+          gn2.body._lazy = key;
+        }
+        if (cls === "o") overShown += P.tot; else nonShown += P.tot;
+        box.appendChild(gn2.wrap);
+      });
     }
     R20_TREE.forEach(emitR20Folder);
     var topItems = r20TopAll.slice().sort(byR20).filter(function(r){ return match(r.name || r.id); });
@@ -7707,6 +7761,8 @@ function floorConnected(L, cols, rows){
     Object.keys(rowEls).forEach(function(id){
       rowEls[id].classList.toggle("mr-current", window.__apocShelf && id === window.__apocShelf.current());
     });
+    if (overBox.childNodes.length) { var og = groupNest("Overland (" + overShown + ")", !!f); og.body.appendChild(overBox); mapsBox.appendChild(og.wrap); }
+    if (nonBox.childNodes.length) { var ng = groupNest("Non-overland (" + nonShown + ")", !!f); ng.body.appendChild(nonBox); mapsBox.appendChild(ng.wrap); }
     if (mapsBox.childNodes.length) { var cm = groupNest("Maps (" + shown + ")", !!f); cm.body.appendChild(mapsBox); listEl.appendChild(cm.wrap); }
     if (visBox.childNodes.length) { var cv = groupNest("Visuals (" + visShown + ")", !!f); cv.body.appendChild(visBox); listEl.appendChild(cv.wrap); }
     if (!shown && !visShown) listEl.innerHTML = "<p class=\"muted small\">No maps match.</p>";
@@ -8493,7 +8549,7 @@ function floorConnected(L, cols, rows){
   /* v1.71: the Art Library grip says what it now does, and a
      double-click on it sends the library home to the bottom strip. */
   if (byId.repo) {
-    byId.repo.grip.title = "Drag to float the Art Library — it stays where you leave it. Double-click to send it back to the right-side dock.";
+    byId.repo.grip.title = "Drag the Art Library anywhere — it stays where you leave it, even half off the side. Double-click to reset it to the right side.";
     byId.repo.grip.addEventListener("dblclick", function(){
       var state = load();
       delete state.repo;
@@ -8546,16 +8602,24 @@ function floorConnected(L, cols, rows){
     var pr = panel.getBoundingClientRect();
     el.classList.remove("per-parked", "per-h", "per-v", "per-float");
     el.style.left = el.style.right = el.style.top = el.style.bottom = el.style.width = "";
-    if (!park || !mq.matches || !park.float) return;
-    var w = Math.min(Math.max(220, park.float.w || 340), Math.max(220, pr.width - 12));
-    var x = Math.max(0, Math.min(Math.round(park.float.x) || 0, Math.max(0, pr.width - w - 4)));
+    if (!mq.matches) return;
+    if (!park || !park.float) {
+      /* APOC-V205 (Shaun, 2026-11-08 ~02:04 — "Can you not dock the art
+         library"): no saved float — the Library still opens as a FREE
+         FLOAT, where it sits in the flow, at the squeezed 184px width.
+         A saved float (his own drag) always wins over this default. */
+      var erD = el.getBoundingClientRect();
+      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 184 } };
+    }
+    var w = park.float.w ? Math.min(Math.max(120, park.float.w), Math.max(120, pr.width - 12)) : 184;
+    var x = Math.max(-Math.round(w * 0.6), Math.min(Math.round(park.float.x) || 0, Math.round(pr.width - w * 0.4)));
     var y = Math.max(0, Math.round(park.float.y) || 0);
     el.classList.add("per-float");
     el.style.width = w + "px";
     /* Heal by the element's own height too: the float must land fully
        inside the panel, not just with its top clamped. */
     var h = el.offsetHeight || 120;
-    y = Math.min(y, Math.max(0, pr.height - h - 4));
+    y = Math.min(y, Math.max(0, pr.height - 48));
     el.style.left = x + "px";
     el.style.top = y + "px";
   }
@@ -8645,7 +8709,7 @@ function floorConnected(L, cols, rows){
              No nearest-edge snap: where he leaves it is where it stays. */
           var pr0 = panel.getBoundingClientRect();
           state[d.id] = { float: {
-            x: Math.max(0, Math.round(er0.left - pr0.left)),
+            x: Math.round(er0.left - pr0.left),
             y: Math.max(0, Math.round(er0.top - pr0.top)),
             w: Math.round(er0.width)
           } };
@@ -9548,7 +9612,19 @@ function floorConnected(L, cols, rows){
     if (vOpts.length && mOpts.length) {
       var h1 = document.createElement("div"); h1.className = "mapdd-grouphead"; h1.textContent = "Maps — playable";
       var h2 = document.createElement("div"); h2.className = "mapdd-grouphead"; h2.textContent = "Visuals — pictures";
-      panel.appendChild(h1); panel.appendChild(makeGrid(mOpts));
+      panel.appendChild(h1);
+      /* APOC-V205: the Overland / Non-overland designation, the same
+         split as the repository — sub-headers inside Maps — playable. */
+      var oOpts = [], nOpts = [];
+      mOpts.forEach(function(o){ (kind && kind.isOverlandId && kind.isOverlandId(o.value) ? oOpts : nOpts).push(o); });
+      if (oOpts.length && nOpts.length) {
+        var s1 = document.createElement("div"); s1.className = "mapdd-grouphead mapdd-subhead"; s1.textContent = "Overland";
+        var s2 = document.createElement("div"); s2.className = "mapdd-grouphead mapdd-subhead"; s2.textContent = "Non-overland";
+        panel.appendChild(s1); panel.appendChild(makeGrid(oOpts));
+        panel.appendChild(s2); panel.appendChild(makeGrid(nOpts));
+      } else {
+        panel.appendChild(makeGrid(mOpts));
+      }
       panel.appendChild(h2); panel.appendChild(makeGrid(vOpts));
     } else {
       panel.appendChild(makeGrid(opts));
@@ -10782,14 +10858,20 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var pr = pn.getBoundingClientRect();
     el.classList.remove("per-parked", "per-h", "per-v", "per-float");
     el.style.left = el.style.right = el.style.top = el.style.bottom = el.style.width = "";
-    if (!park || !park.float || !mqOk()) return;
-    var w = Math.min(Math.max(220, park.float.w || 340), Math.max(220, pr.width - 12));
-    var x = Math.max(0, Math.min(Math.round(park.float.x) || 0, Math.max(0, pr.width - w - 4)));
+    if (!mqOk()) return;
+    if (!park || !park.float) {
+      /* APOC-V205: no saved float — default free float at its in-flow
+         spot, squeezed 184px width (see applyRepoPark). */
+      var erD = el.getBoundingClientRect();
+      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 184 } };
+    }
+    var w = park.float.w ? Math.min(Math.max(120, park.float.w), Math.max(120, pr.width - 12)) : 184;
+    var x = Math.max(-Math.round(w * 0.6), Math.min(Math.round(park.float.x) || 0, Math.round(pr.width - w * 0.4)));
     var y = Math.max(0, Math.round(park.float.y) || 0);
     el.classList.add("per-float");
     el.style.width = w + "px";
     var h = el.offsetHeight || 120;
-    y = Math.min(y, Math.max(0, pr.height - h - 4));
+    y = Math.min(y, Math.max(0, pr.height - 48));
     el.style.left = x + "px";
     el.style.top = y + "px";
   }
@@ -10852,7 +10934,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     el.classList.remove("per-dragging");
     el.style.width = "";
     var state = loadJ(PKEY), pr = pn.getBoundingClientRect();
-    state.repo = { float: { x: Math.max(0, Math.round(er.left - pr.left)), y: Math.max(0, Math.round(er.top - pr.top)), w: Math.round(er.width) } };
+    state.repo = { float: { x: Math.round(er.left - pr.left), y: Math.max(0, Math.round(er.top - pr.top)), w: Math.round(er.width) } };
     saveJ(PKEY, state);
     applyFloat(el, pn, state.repo);
     setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
@@ -13446,5 +13528,23 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 })();
 </script>
 
+
+<style id="APOC-V205">
+/* APOC-V205 (Shaun, 2026-11-08 ~02:03-02:06) —
+   (1) CORRECTION to APOC-V204: the Art Library sub-buttons STAY in the
+   right-hand stack (the stack is restored over V204's left anchor);
+   their footprints stay halved (the V204 metrics below, restated);
+   the TEXT inside each sub-button is left-aligned.
+   (2) The map dropdown's designation sub-headers (Overland /
+   Non-overland, inside Maps — playable). */
+@media (min-width:821px){
+  #artLibrary .nest-head{margin-left:auto !important}
+  #artLibrary .nest-body .nest-body .nest-head,
+  #artLibrary .lib-panel > .nest > .nest-head,
+  #artLibrary .nest-body .nest-body .mr-folder-head{
+    min-height:11px;padding:2px 5px;font-size:.8rem;line-height:1.15;text-align:left}
+}
+#mapDdPanel .mapdd-subhead{font-size:.72rem;padding:5px 8px 1px 18px;color:#59637a;text-transform:none;letter-spacing:.02em}
+</style>
 </body>
 </html>
