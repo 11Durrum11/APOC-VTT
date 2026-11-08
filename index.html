@@ -791,6 +791,24 @@ body.map-expanded .stage-row{display:contents}
                 <div class="monster-detail" id="npcDetail" hidden></div>
               </div>
             </div>
+            <!-- APOC-V2xx (Shaun, 2026-11-08 ~09:45): Monsters moved OUT
+                 under the Art Library header — top cluster is now Maps | NPCs |
+                 Monsters. Pure DOM move; ids, handlers, GM gate unchanged. -->
+            <div class="nest" id="monsterNest">
+              <button type="button" class="nest-head" aria-expanded="false"><span>Monsters <span class="muted small" id="monsterCount"></span></span></button>
+              <div class="nest-body">
+                <div class="field" style="max-width:280px">
+                  <label for="monsterSort">Sort monsters</label>
+                  <select id="monsterSort">
+                    <option value="alpha">Alphabetical</option>
+                    <option value="crAsc">CR low → high</option>
+                    <option value="crDesc">CR high → low</option>
+                  </select>
+                </div>
+                <div id="libMonsters"><p class="muted small" id="monsterLibNote"></p></div>
+                <div class="monster-detail" id="monsterDetail" hidden></div>
+              </div>
+            </div>
             <div class="nest" id="assetsNest">
               <button type="button" class="nest-head" aria-expanded="false"><span>Assets <span class="muted small" id="assetCount"></span></span></button>
               <div class="nest-body">
@@ -817,21 +835,6 @@ body.map-expanded .stage-row{display:contents}
               <div class="nest">
                 <button type="button" class="nest-head" aria-expanded="false">Artwork — Saint James &amp; Cody's gallery</button>
                 <div class="nest-body"><div class="lib-grid" id="libArt"></div></div>
-              </div>
-            </div>
-            <div class="nest" id="monsterNest">
-              <button type="button" class="nest-head" aria-expanded="false"><span>Monsters <span class="muted small" id="monsterCount"></span></span></button>
-              <div class="nest-body">
-                <div class="field" style="max-width:280px">
-                  <label for="monsterSort">Sort monsters</label>
-                  <select id="monsterSort">
-                    <option value="alpha">Alphabetical</option>
-                    <option value="crAsc">CR low → high</option>
-                    <option value="crDesc">CR high → low</option>
-                  </select>
-                </div>
-                <div id="libMonsters"><p class="muted small" id="monsterLibNote"></p></div>
-                <div class="monster-detail" id="monsterDetail" hidden></div>
               </div>
             </div>
             <div class="lib-panel" id="stampLib" hidden>
@@ -7286,7 +7289,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1225";
+        var BUILD_STAMP = "2026-11-08-1228";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -14350,5 +14353,55 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   #repoTab{top:42svh}
 }
 </style>
+
+<style id="APOC-V2XX-DC">
+/* APOC-V2xx-DC (Shaun, voice call in the VTT chat 2026-11-08 ~09:45,
+   add-on seconds later): "Then double column the buttons inside the
+   art library." APOC-V200 had forced every Library button grid to ONE
+   across (!important, shrink-wrapped heads hugging the right). Now the
+   button grids — the section cluster under the header, the Maps folder
+   heads, the monster type heads, the NPC group heads, the Assets
+   subcategory heads, the Tokens panel heads — arrange TWO ACROSS in
+   the 112px panel, minimum footprints kept. A button whose label
+   cannot fit its half column (measured by the companion script: the
+   head's content overflows its box) gets .dc-wide and its row spans
+   the full width instead of clipping. Opened sections/groups still
+   span the full row (the V176/V187 rule). Desktop-scoped like
+   APOC-V200/V204/V208: the phone drawer is untouched. The V208 drag
+   reorder works on DOM order and is grid-agnostic — unaffected. */
+@media (min-width:821px){
+  .map-repo .artlib.open > .nest-body{grid-template-columns:repeat(2,1fr) !important}
+  #mapPanel #artLibrary #tokenLib:not([hidden]){grid-template-columns:repeat(2,1fr) !important}
+  #mapPanel .mr-list, #mapPanel #libMonsters{grid-template-columns:repeat(2,1fr) !important}
+  #mapPanel #libNpcs{grid-template-columns:repeat(2,1fr) !important}
+  .ar-subgrid{grid-template-columns:repeat(2,1fr)}
+  #artLibrary .dc-wide{grid-column:1/-1 !important}
+}
+</style>
+<script>
+/* APOC-V2xx-DC companion: mark (never un-mark) any Library grid item
+   whose head content overflows its half column — its row then spans
+   the full width per the .dc-wide rule above. Runs after renders and
+   on library mutations (groups render lazily); desktop only. */
+(function(){
+  if (!window.matchMedia || !matchMedia("(min-width:821px)").matches) return;
+  var lib = document.getElementById("artLibrary");
+  if (!lib) return;
+  function scan(){
+    var heads = lib.querySelectorAll(".nest-head, .mr-folder-head");
+    for (var i = 0; i < heads.length; i++){
+      var h = heads[i], item = h.parentElement;
+      if (!item || item.classList.contains("dc-wide")) continue;
+      if (h.scrollWidth > h.clientWidth + 1) item.classList.add("dc-wide");
+    }
+  }
+  var t = null;
+  function queued(){ if (t) return; t = setTimeout(function(){ t = null; scan(); }, 150); }
+  new MutationObserver(queued).observe(lib, { childList: true, subtree: true });
+  document.addEventListener("click", function(e){ if (lib.contains(e.target)) queued(); }, true);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", queued);
+  else queued();
+})();
+</script>
 </body>
 </html>
