@@ -6988,7 +6988,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2217";
+        var BUILD_STAMP = "2026-11-07-2223";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -11887,16 +11887,37 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   function keyFor(kind, id){ return id === "faerun" ? "vtt_" + kind : "vtt_" + kind + "_" + id; }
   var lastRootRef = null, lastSig = "", building = false, levelsCache = null, levelsAt = 0;
   function storyH(){ var fps = G("feetPerSquare") || 5; return 10 / fps; } /* world units per story: walls stand 10 ft */
+  function frameUnits(){
+    /* v1.94: MW/MH/CELL live inside the main script's IIFE closure —
+       eval cannot reach them from this script, so the v1.90 sizing
+       below computed every stacked position from undefined and got
+       NaN (floors, walls, props, stairs all built at NaN, invisible).
+       Same fix as v1.93: the 3D ground plane's geometry IS the frame
+       — tdBuildStatic builds it at exactly Wu x Hu world units,
+       already in the rotated frame; the darkness overlay plane shares
+       those dims, so take the largest root-child plane. */
+    var TD = window.__apoc3d, Wu = 0, Hu = 0;
+    try {
+      if (TD && TD.root) TD.root.children.forEach(function(m){
+        var p = m && m.geometry && m.geometry.type === "PlaneGeometry" ? m.geometry.parameters : null;
+        if (p && p.width > Wu) { Wu = p.width; Hu = p.height; }
+      });
+    } catch(e){}
+    if (!Wu && TD) { Wu = (TD.cam.tx || 10) * 2; Hu = (TD.cam.tz || 7) * 2; }
+    return [Wu, Hu];
+  }
   function worldXY(xPct, yPct){
     var TD = window.__apoc3d;
-    var MW = G("MW"), MH = G("MH"), CELL = G("CELL");
-    var fw = MW, fh = MH, fx = xPct, fy = yPct;
+    var fu = frameUnits(), fw = fu[0], fh = fu[1], fx = xPct, fy = yPct;
     if (TD && TD.rot) {
-      var rp = G("rotPct");
-      if (typeof rp === "function") { var f = rp(xPct, yPct); fx = f.x; fy = f.y; }
-      if (TD.rot % 2 === 1) { fw = MH; fh = MW; }
+      /* the closure's rotPct (natural % -> frame %), inlined — the
+         ground-plane dims above are already in this rotated frame */
+      var r = ((TD.rot % 4) + 4) % 4;
+      if (r === 1) { fx = 100 - yPct; fy = xPct; }
+      else if (r === 2) { fx = 100 - xPct; fy = 100 - yPct; }
+      else if (r === 3) { fx = yPct; fy = 100 - xPct; }
     }
-    return [fx / 100 * fw / CELL, fy / 100 * fh / CELL];
+    return [fx / 100 * fw, fy / 100 * fh];
   }
   async function fetchVal(key){
     var d = G("db"); if (!d) return null;
@@ -12010,8 +12031,13 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     root.userData.levelIds = grp.mapIds.slice();
     TD.root.add(root);
     var H = storyH();
-    /* stairs on the ACTIVE story link upward from the main floor */
-    var drawCur = G("drawItems") || [];
+    /* stairs on the ACTIVE story link upward from the main floor.
+       v1.94: drawItems is closure-bound too (the read always came back
+       undefined, so the active story never got its link mesh) — read
+       the active story's own draw row from the shared store instead,
+       exactly like every other story above. */
+    var drawCurVal = await fetchVal(keyFor("draw", cur));
+    var drawCur = (drawCurVal && Array.isArray(drawCurVal.items)) ? drawCurVal.items : [];
     var activeLinks = new THREE.Group();
     buildStairs(activeLinks, drawCur, a < grp.mapIds.length - 1);
     if (activeLinks.children.length) root.add(activeLinks);
@@ -12026,8 +12052,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
         var light = vals[0] || {}, draw = vals[1] || {};
         var items = Array.isArray(draw.items) ? draw.items : [];
         var def = shelf.def(id);
-        var MW = G("MW"), MH = G("MH"), CELL = G("CELL");
-        var fw = (TD.rot % 2 === 1 ? MH : MW) / CELL, fh = (TD.rot % 2 === 1 ? MW : MH) / CELL;
+        var fu = frameUnits(), fw = fu[0], fh = fu[1]; /* v1.94: ground-plane frame (was MW/MH/CELL via eval — unreachable, NaN) */
         function addFloor(tex){
           if (!root.parent) return;
           var mat = tex ? new THREE.MeshBasicMaterial({ map: tex, transparent: ghost, opacity: ghost ? .25 : 1, depthWrite: !ghost })
