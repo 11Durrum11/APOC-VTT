@@ -6988,7 +6988,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2212";
+        var BUILD_STAMP = "2026-11-07-2217";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -12094,9 +12094,21 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     fp: "View: First-person — drag to look, W A S D or arrow keys to walk (Shift = faster). The zoom slider sets walk speed here."
   };
   function frameUnits(){
-    var MW = G("MW") || 0, MH = G("MH") || 0, CELL = G("CELL") || 60, fw = MW, fh = MH;
-    if (TD.rot % 2 === 1) { fw = MH; fh = MW; }
-    return [fw / CELL, fh / CELL];
+    /* v1.93: MW/MH/CELL live inside the main script's IIFE closure —
+       eval cannot reach them from this script (v1.92's version of this
+       function always saw [0,0]). The 3D ground plane's geometry IS
+       the frame: tdBuildStatic builds it at exactly Wu x Hu world
+       units, already in the rotated frame. The darkness overlay plane
+       shares those dims; take the largest root-child plane. */
+    var Wu = 0, Hu = 0;
+    try {
+      if (TD.root) TD.root.children.forEach(function(m){
+        var p = m && m.geometry && m.geometry.type === "PlaneGeometry" ? m.geometry.parameters : null;
+        if (p && p.width > Wu) { Wu = p.width; Hu = p.height; }
+      });
+    } catch(e){}
+    if (!Wu) { Wu = (TD.cam.tx || 10) * 2; Hu = (TD.cam.tz || 7) * 2; }
+    return [Wu, Hu];
   }
   function fitDist(){
     var d = frameUnits(), aspect = 1.6;
