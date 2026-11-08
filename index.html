@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1853";
+        var BUILD_STAMP = "2026-11-07-1856";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9424,6 +9424,273 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
    the whole page and never takes a click — controls stay on top. */
 body::before{pointer-events:none}
 </style>
+
+
+<style id="APOC-V183">
+/* v1.83 (Shaun, voice call 2026-11-07 ~18:40-18:44) — two pre-treatment
+   drags were collateral damage of the v1.81 DM gate: the Art Library
+   grip (its press is stopPropagation()ed by the v1.81 capture-phase
+   guard before the perimeter drag handler on the grip can run) and
+   the zoom bar grip (same guard, and the v1.81 sheet display:nones
+   .zb-grip outright). Both drags predate the treatment and were
+   never DM-gated. These two grips render in the normal view again;
+   every other treatment grip/handle stays DM-gated as shipped. */
+body:not(.vtt-dm-edit) #artLibrary .artlib-head .per-grip{display:inline-flex!important;align-items:center;background:none;border:none;padding:0 5px 0 0;margin:0;font-size:.95rem;min-height:0;cursor:grab}
+body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
+#artLibrary .artlib-head .per-grip:active{cursor:grabbing}
+</style>
+
+<script>
+/* APOC-V183 — Art Library + zoom bar grab fixes and the Library's
+   full-length open (Shaun, voice call 2026-11-07 ~18:40-18:44).
+   ROOT CAUSE (both grabs): APOC-V181 registers a CAPTURE-phase
+   pointerdown guard on document whose selector list includes
+   .per-grip and .zb-grip; it stopPropagation()s the press, so the
+   drag handlers bound on the grips themselves (perimeter system /
+   zoom-bar script) never fire unless DM edit is armed+unlocked.
+   The v1.81 sheet also display:nones .zb-grip in the normal view.
+   FIX SHAPE: this block listens on WINDOW in capture phase — one
+   step above the guard in the propagation path — and runs the two
+   drags itself for those two grips only, replicating each system's
+   own semantics (perimeter float save for the Library; offset
+   clamps + apocVttZoomBarV1 save for the zoom bar). If a piece is
+   locked in the free-pieces record the press is left alone.
+   Everything is per-device localStorage: zero shared writes.
+   (2) FULL LENGTH: v1.80's fitLib stops the open Library at the
+   map's bottom edge; Shaun wants it to run further down, FLOATING
+   OVER the button row below the map. fitLib182 re-asserts the
+   height after fitLib's own passes: open Library bottom == the
+   button row's bottom, capped at the viewport bottom; contents
+   keep scrolling inside the box.
+   (3) ROW CLEAR ON LOAD: if the saved zoom-bar position sits on
+   the button row, the bar blocks the buttons under it (Shaun: it
+   covered the second button and the button would not take its
+   click). deOverlap() nudges the bar straight up — keeping its
+   horizontal spot — until its bottom clears the row's topmost
+   buttons by 4px, and persists the nudged spot. It runs during
+   the load settle, after window resizes, and after the bar's own
+   drag ends on the row. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1", ZKEY = "apocVttZoomBarV1";
+  function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
+  function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  function mqOk(){ return window.matchMedia("(min-width: 821px)").matches; }
+  function panel(){ return document.getElementById("mapPanel"); }
+  function repo(){ return document.querySelector(".map-repo"); }
+  function libGrip(){ var r = repo(); return r ? r.querySelector(".per-grip") : null; }
+
+  /* ================= (2) Library full-length fit =================
+     The Library sits in the panel's flow: simply growing its height
+     pushes the button row DOWN the page, so the row runs away from
+     the box (the two fit passes chase each other and never settle).
+     The extension is therefore margin-neutralized: the box grows by
+     (row bottom - map bottom) while an equal negative bottom margin
+     cancels the growth in the flow — the row keeps its natural
+     position and the box paints OVER it (the aside rides at
+     z-index 3000). Measure -> apply is stable across passes. */
+  function fitLib182(){
+    var lib = document.getElementById("artLibrary");
+    var am = document.getElementById("apocMap");
+    if (!lib || !am) return;
+    if (!lib.classList.contains("open")) { if (lib.style.marginBottom) lib.style.marginBottom = ""; return; }
+    var lr = lib.getBoundingClientRect(), mr = am.getBoundingClientRect();
+    var target = mr.bottom;
+    var row = document.getElementById("ctlRow") || document.querySelector(".ctl-row");
+    if (row) { var rb = row.getBoundingClientRect(); if (rb.height > 0 && rb.bottom > target) target = rb.bottom; }
+    if (window.innerHeight) target = Math.min(target, window.innerHeight - 4);
+    var h = Math.round(target - lr.top);
+    var ext = Math.round(target - mr.bottom);
+    if (h > 120 && Math.abs(lr.height - h) > 1) lib.style.height = h + "px";
+    var want = ext > 0 ? (-ext) + "px" : "";
+    if (lib.style.marginBottom !== want) lib.style.marginBottom = want;
+  }
+  document.addEventListener("click", function(){ setTimeout(fitLib182, 1200); setTimeout(fitLib182, 2100); }, true);
+  window.addEventListener("resize", function(){ setTimeout(fitLib182, 450); });
+  setInterval(function(){ var lib = document.getElementById("artLibrary"); if (lib && lib.classList.contains("open")) fitLib182(); }, 600);
+
+  /* ================= (1a) Art Library grip drag ================= */
+  function applyFloat(el, pn, park){
+    var pr = pn.getBoundingClientRect();
+    el.classList.remove("per-parked", "per-h", "per-v", "per-float");
+    el.style.left = el.style.right = el.style.top = el.style.bottom = el.style.width = "";
+    if (!park || !park.float || !mqOk()) return;
+    var w = Math.min(Math.max(220, park.float.w || 340), Math.max(220, pr.width - 12));
+    var x = Math.max(0, Math.min(Math.round(park.float.x) || 0, Math.max(0, pr.width - w - 4)));
+    var y = Math.max(0, Math.round(park.float.y) || 0);
+    el.classList.add("per-float");
+    el.style.width = w + "px";
+    var h = el.offsetHeight || 120;
+    y = Math.min(y, Math.max(0, pr.height - h - 4));
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+  }
+  var libDrag = null, libDragMovedEnd = 0, lastGripPress = null;
+  function sendLibHome(el){
+    var state = loadJ(PKEY); delete state.repo; saveJ(PKEY, state);
+    el.classList.remove("per-parked", "per-h", "per-v", "per-float");
+    el.style.left = el.style.right = el.style.top = el.style.bottom = el.style.width = "";
+    setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+  }
+  window.addEventListener("pointerdown", function(e){
+    if (libDrag || e.button > 0 || !mqOk()) return;
+    var g = libGrip(); if (!g) return;
+    if (e.target !== g && !g.contains(e.target)) return;
+    var fp = loadJ(FKEY); if (fp["per-repo"] && fp["per-repo"].lock) return;
+    var el = repo(), pn = panel(); if (!el || !pn) return;
+    /* Double-press on the grip = send the Library home. Detected
+       here, not via the dblclick event: a press on the grip is
+       preventDefault()ed and pointer-captured (the drag below),
+       and Chrome then never generates a dblclick for it (measured
+       in the harness: two real presses, zero dblclick events) —
+       the same suppression is why the perimeter system's own
+       grip dblclick handler has been unreachable since v1.80.
+       Skipped while DM edit is on (head double-click = edit). */
+    var now = Date.now();
+    if (lastGripPress && now - lastGripPress.t < 450 && Math.abs(e.clientX - lastGripPress.x) < 6 && Math.abs(e.clientY - lastGripPress.y) < 6 && !document.body.classList.contains("vtt-dm-edit")) {
+      lastGripPress = null;
+      e.preventDefault(); e.stopPropagation();
+      sendLibHome(el);
+      return;
+    }
+    lastGripPress = { t: now, x: e.clientX, y: e.clientY };
+    e.preventDefault(); e.stopPropagation();
+    var r = el.getBoundingClientRect();
+    libDrag = { el: el, dx: e.clientX - r.left, dy: e.clientY - r.top, sx: e.clientX, sy: e.clientY, moved: false,
+      saved: { left: el.style.left, top: el.style.top, width: el.style.width, right: el.style.right, bottom: el.style.bottom, cls: el.className } };
+    el.classList.add("per-dragging");
+    el.style.width = Math.min(r.width, 720) + "px";
+    el.style.left = r.left + "px"; el.style.top = r.top + "px";
+    el.style.right = el.style.bottom = "";
+    try { g.setPointerCapture(e.pointerId); } catch(err){}
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!libDrag) return;
+    if (Math.abs(e.clientX - libDrag.sx) + Math.abs(e.clientY - libDrag.sy) > 3) libDrag.moved = true;
+    libDrag.el.style.left = (e.clientX - libDrag.dx) + "px";
+    libDrag.el.style.top = (e.clientY - libDrag.dy) + "px";
+  }, true);
+  function endLibDrag(){
+    if (!libDrag) return;
+    var d = libDrag; libDrag = null;
+    var el = d.el, pn = panel();
+    if (!d.moved || !pn) {
+      el.style.left = d.saved.left; el.style.top = d.saved.top; el.style.width = d.saved.width;
+      el.style.right = d.saved.right; el.style.bottom = d.saved.bottom; el.className = d.saved.cls;
+      return;
+    }
+    libDragMovedEnd = Date.now();
+    var er = el.getBoundingClientRect(); /* measure while still .per-dragging (position:fixed) */
+    el.classList.remove("per-dragging");
+    el.style.width = "";
+    var state = loadJ(PKEY), pr = pn.getBoundingClientRect();
+    state.repo = { float: { x: Math.max(0, Math.round(er.left - pr.left)), y: Math.max(0, Math.round(er.top - pr.top)), w: Math.round(er.width) } };
+    saveJ(PKEY, state);
+    applyFloat(el, pn, state.repo);
+    setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+  }
+  window.addEventListener("pointerup", endLibDrag, true);
+  window.addEventListener("pointercancel", endLibDrag, true);
+  /* a real drag must not also deliver a click to the head button */
+  window.addEventListener("click", function(e){
+    if (Date.now() - libDragMovedEnd >= 400) return;
+    var head = document.querySelector("#artLibrary .artlib-head");
+    if (head && (e.target === head || head.contains(e.target))) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
+  /* Double-click on the grip sends the Library home — RESTORED.
+     The perimeter system's own dblclick handler is bound on the
+     grip element, but a press on the grip is preventDefault()ed
+     and pointer-captured by the drag (the perimeter's in v1.71-80,
+     this block's now), and Chrome then never generates a dblclick
+     event for it — measured in the harness: two real presses on
+     the grip produced two click events and ZERO dblclick events.
+     The gesture is therefore detected as a double-press inside
+     the pointerdown handler above (sendLibHome). This window
+     dblclick listener stays as a backstop for any browser that
+     does generate the event; it does exactly the same thing and
+     is idempotent. Skipped while DM edit is on — there a head
+     double-click means "edit the label". */
+  window.addEventListener("dblclick", function(e){
+    if (document.body.classList.contains("vtt-dm-edit")) return;
+    var g = libGrip(); if (!g) return;
+    var r = g.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+    var el = repo(); if (!el) return;
+    sendLibHome(el);
+  }, true);
+
+  /* ================= (1b) zoom bar grip drag + (3) row de-overlap ================= */
+  var zbDrag = null;
+  function zbBlocked(){
+    return !mqOk() || !!document.fullscreenElement ||
+      document.body.classList.contains("displaying") ||
+      document.body.classList.contains("map-expanded") ||
+      document.body.classList.contains("map-fs");
+  }
+  function zbMax(bar){
+    var el = document.getElementById("apocMap");
+    var side = el && el.parentElement;
+    if (!side) return { l: 0, t: 0 };
+    var st = side.parentElement;
+    return { l: Math.max(0, (st ? st.clientWidth : side.clientWidth) - bar.offsetWidth),
+             t: Math.max(0, side.clientHeight + 44 - bar.offsetHeight) };
+  }
+  window.addEventListener("pointerdown", function(e){
+    if (zbDrag || e.button > 0) return;
+    var gripEl = document.getElementById("zoomBarGrip");
+    var bar = document.getElementById("zoomBar");
+    if (!gripEl || !bar || bar.hidden || zbBlocked()) return;
+    if (e.target !== gripEl && !gripEl.contains(e.target)) return;
+    var fp = loadJ(FKEY); if (fp["zoombar"] && fp["zoombar"].lock) return;
+    e.preventDefault(); e.stopPropagation();
+    zbDrag = { sx: e.clientX, sy: e.clientY, sl: bar.offsetLeft, st: bar.offsetTop };
+    try { gripEl.setPointerCapture(e.pointerId); } catch(err){}
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!zbDrag) return;
+    var bar = document.getElementById("zoomBar"); if (!bar) return;
+    var mx = zbMax(bar);
+    bar.style.left = Math.min(Math.max(0, zbDrag.sl + e.clientX - zbDrag.sx), mx.l) + "px";
+    bar.style.top = Math.min(Math.max(0, zbDrag.st + e.clientY - zbDrag.sy), mx.t) + "px";
+  }, true);
+  function endZbDrag(){
+    if (!zbDrag) return;
+    zbDrag = null;
+    var bar = document.getElementById("zoomBar"); if (!bar) return;
+    saveJ(ZKEY, { l: bar.offsetLeft, t: bar.offsetTop });
+    setTimeout(deOverlap, 120);
+  }
+  window.addEventListener("pointerup", endZbDrag, true);
+  window.addEventListener("pointercancel", endZbDrag, true);
+
+  function deOverlap(){
+    if (zbDrag) return;
+    var bar = document.getElementById("zoomBar");
+    var row = document.getElementById("ctlRow") || document.querySelector(".ctl-row");
+    if (!bar || !row || bar.hidden) return;
+    var br = bar.getBoundingClientRect();
+    if (!br.width) return;
+    var minTop = Infinity, hit = false;
+    row.querySelectorAll("button").forEach(function(b){
+      var r = b.getBoundingClientRect();
+      if (!r.width) return;
+      if (r.top < minTop) minTop = r.top;
+      if (br.left < r.right - 2 && br.right > r.left + 2 && br.top < r.bottom - 2 && br.bottom > r.top + 2) hit = true;
+    });
+    if (!hit || !isFinite(minTop)) return;
+    var shift = Math.round(br.bottom - (minTop - 4));
+    if (shift <= 0) return;
+    var newT = Math.max(0, bar.offsetTop - shift);
+    if (newT === bar.offsetTop) return;
+    bar.style.top = newT + "px";
+    saveJ(ZKEY, { l: bar.offsetLeft, t: newT });
+  }
+  var settleN = 0;
+  var settleTimer = setInterval(function(){ deOverlap(); if (++settleN >= 15) clearInterval(settleTimer); }, 800);
+  window.addEventListener("resize", function(){ setTimeout(deOverlap, 550); });
+})();
+</script>
 
 </body>
 </html>
