@@ -708,6 +708,16 @@ body.map-expanded .stage-row{display:contents}
 #mapPreview img{display:block;max-width:min(600px,44vw);max-height:60vh;border-radius:6px;background:#111}
 #mapPreview .mp-name{color:#f3e2b3;font-size:.85rem;font-weight:700;padding:6px 2px 0;max-width:600px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
+<style id="APOC-V211-HOLD">
+/* APOC-V211 (Shaun, 2026-11-08 ~03:20): no first-map flash — the map
+   panes stay invisible until the saved/current map is the one on the
+   overlay (release logic in the APOC-V211 block at the end of
+   the body).
+   Only the Leaflet panes wait; buttons, Library and layout paint
+   normally, and a hard cap in the release script guarantees the
+   stage never hangs blank. */
+#apocMap.apoc-hold211 .leaflet-pane{opacity:0!important}
+</style>
 </head>
 <body data-scene="bastion-streets">
 <script>/* v1.07: Push to TV — a ?display copy of this page is the map-only TV view; flag it before first paint so no controls ever flash. */ if (new URLSearchParams(location.search).has("display")) document.body.classList.add("displaying");</script>
@@ -722,7 +732,7 @@ body.map-expanded .stage-row{display:contents}
   <section class="panel" id="mapPanel" aria-label="The VTT — Maps">
       <div class="map-stage">
       <div class="map-side">
-        <div id="apocMap" class="apoc-map" aria-label="Editable shared map of Faerûn"></div>
+        <div id="apocMap" class="apoc-map apoc-hold211" aria-label="Editable shared map of Faerûn"></div>
         <div id="tdWrap" hidden>
           <div id="tdCanvas"></div>
           <div class="td-ui">
@@ -7142,7 +7152,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0315";
+        var BUILD_STAMP = "2026-11-08-0331";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -13732,6 +13742,257 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (applying || drag || moTimer) return;
     moTimer = setTimeout(function(){ moTimer = null; applyAll(); }, 120);
   }).observe(lib, { childList: true, subtree: true });
+})();
+</script>
+
+
+<style id="APOC-V211">
+/* APOC-V211: the Art Library grip is ALWAYS shown and pressable.
+   APOC-V181 hides every .per-grip unless DM edit is unlocked, which
+   left the Library with no drag handle in the default state (Shaun,
+   2026-11-08 ~03:20: "my library is off to the side, I can't grab
+   it"). Scoped to the Library only; every other piece keeps the
+   treatment gate exactly as shipped. */
+body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-items:center;justify-content:center;min-width:24px;min-height:24px;padding:0 5px;cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;line-height:1;border-radius:6px}
+/* The always-reachable Library recovery pill (desktop control copy
+   only; the script never creates it on display copies). */
+#apocVttLibHome211{position:fixed;top:40px;right:8px;z-index:4500;font:inherit;font-size:.72rem;line-height:1;padding:5px 9px;border-radius:999px;border:1px solid hsl(222 18% 32%);background:rgba(10,12,16,.82);color:#cfd8ea;cursor:pointer;opacity:.78;box-shadow:0 4px 14px rgba(0,0,0,.45)}
+#apocVttLibHome211:hover{opacity:1;background:rgba(20,26,38,.95)}
+@media (max-width:820px){#apocVttLibHome211{display:none}}
+</style>
+<script>
+/* ================= APOC-V211 (Shaun, voice call 2026-11-08 ~03:20) =================
+   Two live-reported defects:
+   (1) FIRST-MAP FLASH: the engine paints the built-in Faerun overlay
+       at first paint and swaps to the saved active map when the
+       shared read lands (~1s of the wrong map). The #apocMap div now
+       ships with .apoc-hold211 (see the APOC-V211-HOLD style in
+       <head>): every Leaflet pane is invisible until THIS script
+       releases the hold — when the overlay no longer shows the
+       Faerun bitmap (the saved map has been applied), or when a
+       parallel read of the active-map key resolves to the default /
+       no record (the default IS the answer), with a grace for a
+       non-default switch still landing, and a hard cap so the stage
+       can never hang blank. Nothing else waits: buttons, the
+       Library and the layout all load and work under the hold.
+   (2) LIBRARY PARKED, CANNOT GRAB: (i) the grip dots are the
+       panel's first ~30px, so the v2.08 panel-relative clamp can
+       leave them off-screen (max left park) or outside the VIEWPORT
+       (below-fold / wide-panel parks) — a settle/resize guard below
+       pulls the saved float back ONLY until the grip is fully
+       inside the viewport, and never touches a reachable panel;
+       (ii) in the default edit-locked state APOC-V181 hides the
+       grip and swallows grip presses, and a treatment-locked repo
+       piece (apocVttFreeLayoutV1 per-repo.lock) makes APOC-V183's
+       grip drag stand down while APOC-V180's guard blocks the
+       perimeter's — the APOC-V211 style above keeps the Library
+       grip visible, and the takeover drag below covers the locked
+       case with the same panel-relative save APOC-V183 uses (the
+       lock still governs resize handles and text editing);
+       (iii) a fixed "Library" pill (top corner) always resets the
+       Library to a default on-screen position, clickable no matter
+       where the panel is parked. Per-device localStorage only;
+       zero shared-state writes. Display copies: part (1) only. */
+(function(){
+  "use strict";
+  var qs = new URLSearchParams(location.search);
+  var isDisplay = !!qs.get("display");
+
+  /* ---------------- (1) first-map flash hold ---------------- */
+  var mapEl = document.getElementById("apocMap");
+  if (mapEl) {
+    var released = false, t0 = Date.now(), iv = null;
+    var readDone = false, readAt = 0, readId = null;
+    function overlayImg(){
+      var panes = mapEl.querySelectorAll(".leaflet-pane");
+      for (var i = 0; i < panes.length; i++) {
+        if (panes[i].style.zIndex === "205") {
+          var im = panes[i].querySelector("img.leaflet-image-layer");
+          if (im) return im;
+        }
+      }
+      return mapEl.querySelector("img.leaflet-image-layer");
+    }
+    function release(){
+      if (released) return;
+      released = true;
+      mapEl.classList.remove("apoc-hold211");
+      if (iv) { clearInterval(iv); iv = null; }
+    }
+    try {
+      if (typeof db !== "undefined" && db && typeof SETTINGS_TABLE !== "undefined") {
+        var akey = qs.get("display") === "2" ? "vtt_active_2" : "vtt_active";
+        db.from(SETTINGS_TABLE).select("value").eq("key", akey).maybeSingle().then(function(res){
+          readDone = true; readAt = Date.now();
+          var v = res && res.data && res.data.value;
+          readId = (v && v.mapId) || null;
+        }, function(){ readDone = true; readAt = Date.now(); });
+      } else { readDone = true; readAt = Date.now(); }
+    } catch(e) { readDone = true; readAt = Date.now(); }
+    iv = setInterval(function(){
+      var im = overlayImg();
+      if (im && im.src && im.src.indexOf("faerun-3e.webp") < 0) { release(); return; }
+      if (readDone && readId && readId !== "faerun" && Date.now() - readAt > 2500) { release(); return; }
+      if (readDone && (!readId || readId === "faerun") && Date.now() - readAt > 350) { release(); return; }
+      if (Date.now() - t0 > 6000) { release(); return; }
+    }, 120);
+    mapEl.addEventListener("pointerdown", function(){ release(); }, { once: true });
+  }
+
+  if (isDisplay) return;
+
+  /* ---------------- (2) Library rescue ---------------- */
+  var MQ = window.matchMedia("(min-width: 821px)");
+  var PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1";
+  function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
+  function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  function repoEl(){ return document.querySelector(".map-repo"); }
+  function panelEl(){ return document.getElementById("mapPanel"); }
+  function gripEl(){ var r = repoEl(); return r ? r.querySelector(".per-grip") : null; }
+  function repoLocked(){ var fp = loadJ(FKEY); return !!(fp["per-repo"] && fp["per-repo"].lock); }
+
+  /* (2iii) the recovery pill */
+  var pill = document.createElement("button");
+  pill.type = "button";
+  pill.id = "apocVttLibHome211";
+  pill.textContent = "\u2302 Library";
+  pill.title = "Bring the Art Library back on screen (reset its position)";
+  pill.addEventListener("click", function(){
+    var el = repoEl(), pn = panelEl(); if (!el || !pn) return;
+    var pr = pn.getBoundingClientRect();
+    var w = Math.round(el.getBoundingClientRect().width) || 184;
+    if (w < 120) w = 184;
+    var x = Math.max(0, Math.round(pr.width - w - 12)), y = 10;
+    var st = loadJ(PKEY);
+    st.repo = { float: { x: x, y: y, w: w } };
+    saveJ(PKEY, st);
+    el.classList.remove("per-dragging");
+    el.classList.add("per-float");
+    el.style.left = x + "px"; el.style.top = y + "px"; el.style.width = w + "px";
+    setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+  });
+  document.body.appendChild(pill);
+
+  /* (2i) grip-reachability guard: pull the saved float back ONLY
+     until the grip is fully inside the viewport. Runs at settle
+     times, on resize, and on a slow interval (the codebase's own
+     guard pattern); skips mid-drag, unrendered and phone states. */
+  var myDrag = null;
+  function gripRect(){
+    var el = repoEl(); if (!el) return null;
+    var rr = el.getBoundingClientRect();
+    if (!rr.width) return null; /* not rendered — nothing to rescue */
+    var g = gripEl();
+    var gr = g ? g.getBoundingClientRect() : null;
+    if (!gr || !gr.width) gr = { left: rr.left, right: rr.left + Math.min(rr.width, 200), top: rr.top, bottom: rr.top + 40 };
+    return { grip: gr, repo: rr };
+  }
+  function guard(){
+    if (!MQ.matches || myDrag) return;
+    var el = repoEl(), pn = panelEl(); if (!el || !pn) return;
+    if (el.classList.contains("per-dragging")) return;
+    var m = gripRect(); if (!m) return;
+    var gr = m.grip;
+    var dx = 0, dy = 0;
+    if (gr.left < 4) dx = Math.round(4 - gr.left);
+    else if (gr.right > window.innerWidth - 4) dx = Math.round(window.innerWidth - 4 - gr.right);
+    if (gr.top < 4) dy = Math.round(4 - gr.top);
+    else if (gr.bottom > window.innerHeight - 4) dy = Math.round(window.innerHeight - 4 - gr.bottom);
+    if (!dx && !dy) return;
+    var pr = pn.getBoundingClientRect();
+    var st = loadJ(PKEY), fl = st.repo && st.repo.float;
+    var curX = fl && typeof fl.x === "number" ? fl.x : Math.round(m.repo.left - pr.left);
+    var curY = fl && typeof fl.y === "number" ? fl.y : Math.round(m.repo.top - pr.top);
+    var curW = fl && fl.w ? fl.w : Math.round(m.repo.width);
+    var nx = Math.round(curX + dx), ny = Math.max(0, Math.round(curY + dy));
+    st.repo = { float: { x: nx, y: ny, w: curW } };
+    saveJ(PKEY, st);
+    window.dispatchEvent(new Event("resize"));
+    /* The perimeter clamp is panel-relative and can re-park the
+       panel outside a smaller viewport (wide-panel geometry): if
+       the grip is still out after the page's own apply, assert the
+       corrected spot inline and keep the record in agreement. */
+    setTimeout(function(){
+      if (myDrag || el.classList.contains("per-dragging")) return;
+      var m2 = gripRect(); if (!m2) return;
+      var g2 = m2.grip, ddx = 0, ddy = 0;
+      if (g2.left < 4) ddx = Math.round(4 - g2.left);
+      else if (g2.right > window.innerWidth - 4) ddx = Math.round(window.innerWidth - 4 - g2.right);
+      if (g2.top < 4) ddy = Math.round(4 - g2.top);
+      else if (g2.bottom > window.innerHeight - 4) ddy = Math.round(window.innerHeight - 4 - g2.bottom);
+      if (!ddx && !ddy) return;
+      var cl = parseFloat(el.style.left) || 0, ct = parseFloat(el.style.top) || 0;
+      el.style.left = Math.round(cl + ddx) + "px";
+      el.style.top = Math.max(0, Math.round(ct + ddy)) + "px";
+      var st2 = loadJ(PKEY);
+      if (st2.repo && st2.repo.float) {
+        st2.repo.float.x = Math.round((st2.repo.float.x || 0) + ddx);
+        st2.repo.float.y = Math.max(0, Math.round((st2.repo.float.y || 0) + ddy));
+        saveJ(PKEY, st2);
+      }
+    }, 200);
+  }
+  [1000, 2800, 5200].forEach(function(ms){ setTimeout(guard, ms); });
+  var rzT = 0;
+  window.addEventListener("resize", function(){ clearTimeout(rzT); rzT = setTimeout(guard, 450); });
+  setInterval(guard, 3000);
+
+  /* (2ii) takeover grip drag — ONLY for the treatment-locked case,
+     where APOC-V183's drag stands down and the V180/V181 guards
+     block the perimeter's. Registered on window capture like
+     APOC-V183's own; when the repo is not locked it stands down and
+     the shipped drag owns the press exactly as before. The save is
+     the same panel-relative float record APOC-V183 writes. */
+  var myMovedEnd = 0;
+  window.addEventListener("pointerdown", function(e){
+    if (myDrag || e.button > 0 || !MQ.matches) return;
+    var g = gripEl(); if (!g) return;
+    if (e.target !== g && !g.contains(e.target)) return;
+    if (!repoLocked()) return;
+    var el = repoEl(), pn = panelEl(); if (!el || !pn) return;
+    e.preventDefault(); e.stopPropagation();
+    var r = el.getBoundingClientRect();
+    myDrag = { el: el, dx: e.clientX - r.left, dy: e.clientY - r.top, sx: e.clientX, sy: e.clientY, moved: false,
+      saved: { left: el.style.left, top: el.style.top, width: el.style.width, right: el.style.right, bottom: el.style.bottom, cls: el.className } };
+    el.classList.add("per-dragging");
+    el.style.width = Math.min(r.width, 720) + "px";
+    el.style.left = r.left + "px"; el.style.top = r.top + "px";
+    el.style.right = el.style.bottom = "";
+    try { g.setPointerCapture(e.pointerId); } catch(err){}
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!myDrag) return;
+    if (Math.abs(e.clientX - myDrag.sx) + Math.abs(e.clientY - myDrag.sy) > 3) myDrag.moved = true;
+    myDrag.el.style.left = (e.clientX - myDrag.dx) + "px";
+    myDrag.el.style.top = (e.clientY - myDrag.dy) + "px";
+  }, true);
+  function endMyDrag(){
+    if (!myDrag) return;
+    var d = myDrag; myDrag = null;
+    var el = d.el, pn = panelEl();
+    if (!d.moved || !pn) {
+      el.style.left = d.saved.left; el.style.top = d.saved.top; el.style.width = d.saved.width;
+      el.style.right = d.saved.right; el.style.bottom = d.saved.bottom; el.className = d.saved.cls;
+      return;
+    }
+    myMovedEnd = Date.now();
+    var er = el.getBoundingClientRect();
+    el.classList.remove("per-dragging");
+    el.style.width = "";
+    var pr = pn.getBoundingClientRect();
+    var st = loadJ(PKEY);
+    st.repo = { float: { x: Math.round(er.left - pr.left), y: Math.max(0, Math.round(er.top - pr.top)), w: Math.round(er.width) } };
+    saveJ(PKEY, st);
+    window.dispatchEvent(new Event("resize"));
+    setTimeout(guard, 250);
+  }
+  window.addEventListener("pointerup", endMyDrag, true);
+  window.addEventListener("pointercancel", endMyDrag, true);
+  window.addEventListener("click", function(e){
+    if (Date.now() - myMovedEnd >= 400) return;
+    var head = document.querySelector("#artLibrary .artlib-head");
+    if (head && (e.target === head || head.contains(e.target))) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
 })();
 </script>
 
