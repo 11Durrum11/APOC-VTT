@@ -6131,7 +6131,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-1716";
+        var BUILD_STAMP = "2026-11-07-1727";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8695,6 +8695,81 @@ function floorConnected(L, cols, rows){
     addOpen();
     if (Date.now() - started > 12000) clearInterval(timer);
   }, 400);
+})();
+</script>
+
+
+<style id="APOC-V179">
+/* v1.79 (Shaun, voice call 2026-11-07 ~17:17) — (a) closed page: move
+   everything up a little, no scrollbar when all is shut; (b) opened
+   Art Library subcategories: rows pack tight at the top, no stagger,
+   no spread (the v1.76 grids kept their rows' base margins and the
+   default align-content, so heads sat uneven and rows could drift). */
+/* (a) reclaim bottom space */
+.page{padding-bottom:4px}
+#mapPanel{padding-bottom:6px}
+.ctl-row{margin-top:2px}
+/* (b) library + tokens + monsters/maps grids pack at the top */
+.map-repo .artlib.open > .nest-body{align-content:start;align-items:start;row-gap:6px}
+.map-repo .artlib.open > .nest-body > #mapRepo,
+.map-repo .artlib.open > .nest-body > #tokenLib,
+.map-repo .artlib.open > .nest-body > #monsterNest,
+.map-repo .artlib.open > .nest-body > #stampLib{margin:0}
+#artLibrary #tokenLib:not([hidden]){align-content:start;align-items:start;row-gap:6px}
+.mr-list, #libMonsters{align-content:start;align-items:start;row-gap:5px}
+.mr-list > .mr-nest, #libMonsters > .mr-nest{margin:0}
+.mr-nest.open > .mr-body{display:block}
+</style>
+
+<script>
+/* APOC-V179 fit guard (Shaun, 2026-11-07 ~17:17: "when everything is
+   closed down there's no scroll bar — move everything up a little").
+   Diagnosis on v1.77: a clean profile fits EXACTLY (scrollHeight ==
+   innerHeight, zero slack), and a saved manual map height
+   (apocVttMapSizeV1) overrides the fit whole — a tall record made the
+   closed page overflow by +88px at 1920x1080 and +454px at 1366x768.
+   This guard runs after the engine's own fit pass: in the fully
+   closed state only, if the page has less than 8px of slack it trims
+   the map window's height by the shortfall (floor 240px) and clamps
+   the manual record's h to match (w/l/t untouched, record kept).
+   Open panels, fullscreen, Expand and the TV displays are untouched. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var MANKEY = "apocVttMapSizeV1";
+  window.__v179 = { runs: 0, trimmed: 0 };
+  function closedState(){
+    if (document.fullscreenElement) return false;
+    if (document.querySelector(".artlib.open, .nest.open")) return false;
+    var pcs = document.querySelectorAll(".per-collapsible");
+    for (var i = 0; i < pcs.length; i++) if (!pcs[i].classList.contains("per-collapsed")) return false;
+    return true;
+  }
+  function guard(){
+    window.__v179.runs++;
+    if (!closedState()) return;
+    var de = document.documentElement, ih = window.innerHeight;
+    var slack = ih - de.scrollHeight;
+    if (slack >= 8) return;
+    var am = document.getElementById("apocMap"); if (!am) return;
+    var cur = am.getBoundingClientRect().height;
+    var nh = Math.max(240, Math.round(cur - (8 - slack)));
+    if (nh >= cur) return;
+    am.style.height = nh + "px";
+    window.__v179.trimmed += Math.round(cur - nh);
+    try { if (window.map && window.map.invalidateSize) window.map.invalidateSize(); } catch(e) {}
+    try {
+      var man = JSON.parse(localStorage.getItem(MANKEY) || "null");
+      if (man && typeof man.h === "number" && man.h > nh) { man.h = nh; localStorage.setItem(MANKEY, JSON.stringify(man)); }
+    } catch(e) {}
+  }
+  var t = null;
+  function schedule(ms){ clearTimeout(t); t = setTimeout(guard, ms || 400); }
+  window.addEventListener("resize", function(){ schedule(350); });
+  document.addEventListener("click", function(){ schedule(650); }, true);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ schedule(1800); setTimeout(guard, 4200); });
+  else { schedule(1800); setTimeout(guard, 4200); }
+  schedule(2600);
 })();
 </script>
 
