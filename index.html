@@ -1363,12 +1363,15 @@ setInterval(loadSharedEntries, 60000);
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
   const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false }); /* v1.72/v1.73: every Leaflet zoom path off at creation (touch pinch, wheel, double-click, box, keyboard). Zoom comes from the zoom bar slider; the bar's Pinch checkbox (default OFF, per-device) can switch touch pinch / wheel / double-tap back on, live (Shaun's correction, 2026-11-07 ~13:39) */
-  /* Shaun's fixed layer stack (2026-11-06), bottom to top:
-     1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground. Extensible in this
-     order — new table layers take the next z slot above Foreground.
+  /* Shaun's four layers (2026-11-07 ~23:22), bottom to top, automatic
+     on every map: 1 Map (the map image itself), 2 DM (GM-only content),
+     3 Player (tokens + player-visible placed content), 4 Foreground
+     (overhead overlays). The Light pane is NOT one of the four — dynamic
+     lighting is a system, rendered internally between Player and
+     Foreground, and its data lives in the DM layer's domain.
      (Leaflet's own popup/tooltip/control chrome keeps its stock panes
      above the stack; that is UI, not table material.) */
-  for (const [paneName, z] of [["layerMap", 205], ["layerTokens", 300], ["layerGm", 400], ["layerLight", 500], ["layerForeground", 560]]) {
+  for (const [paneName, z] of [["layerMap", 205], ["layerGm", 300], ["layerTokens", 400], ["layerLight", 500], ["layerForeground", 560]]) {
     map.createPane(paneName);
     map.getPane(paneName).style.zIndex = z;
     map.getPane(paneName).style.pointerEvents = "none";
@@ -2219,7 +2222,7 @@ setInterval(loadSharedEntries, 60000);
   }
   $("addTokenBtn").addEventListener("click", () => {
     const p = toXY(map.getCenter());
-    const tk = { id: newId(), name: "New token", x: p.x, y: p.y, size: 1, color: "amber", hp: null, maxHp: null, img: "", status: [], entryId: "" };
+    const tk = { id: newId(), name: "New token", x: p.x, y: p.y, size: 1, color: "amber", hp: null, maxHp: null, img: "", status: [], entryId: "", gm: $("drawLayerSel").value === "gm" }; /* v1.96: placed while the DM layer is active -> starts GM-only */
     tokens.push(tk);
     drawTokens();
     openTokenEditor({ mode: "new", tk });
@@ -2237,7 +2240,7 @@ setInterval(loadSharedEntries, 60000);
   function libPlace(patch){
     const c = toXY(map.getCenter());
     const off = (tokens.length % 5) * 1.5;
-    const tk = Object.assign({ id: newId(), name: "Token", x: Math.min(98, c.x + off), y: Math.min(98, c.y + off), size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" }, patch);
+    const tk = Object.assign({ id: newId(), name: "Token", x: Math.min(98, c.x + off), y: Math.min(98, c.y + off), size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "", gm: $("drawLayerSel").value === "gm" }, patch);
     const custom = $("libName").value.trim();
     if (custom) tk.name = custom;
     tokens.push(tk);
@@ -2382,34 +2385,51 @@ setInterval(loadSharedEntries, 60000);
   let fogState = { enabled: false, revealed: [] };
   let drawItems = [];
   const drawStatusEl = $("drawStatus");
-  /* Named drawing layers (Shaun, 2026-11-05 — "as many layers as I can
-     get"): every map's draw store carries its own layer list; Shared and
-     GM only always exist, and up to 12 layers can be added per map. Old
-     items only carry a gm flag — layerOf() maps them onto the two
-     original layers so nothing already drawn changes. */
-  const DEFAULT_DRAW_LAYERS = [{ id: "shared", name: "Shared", gm: false, hidden: false }, { id: "gm", name: "GM only", gm: true, hidden: false }];
+  /* The four layers (Shaun, 2026-11-07 ~23:22): every map automatically
+     has Map / DM / Player / Foreground. The draw store's layer list
+     carries the three placement layers — Player ("shared"), DM ("gm"),
+     Foreground ("fg"); the Map layer is the map image itself. Legacy
+     per-map custom layer defs (2026-11-05) stay untouched in the stored
+     data and their items still render — gm-flagged defs in the DM
+     layer, the rest in the Player layer — but the layer list the DM
+     works with is exactly the four. Old items only carrying a gm flag
+     map through layerOf() as before, so nothing already drawn changes. */
+  const DEFAULT_DRAW_LAYERS = [{ id: "shared", name: "Player", gm: false, hidden: false }, { id: "gm", name: "DM", gm: true, hidden: false }, { id: "fg", name: "Foreground", gm: false, hidden: false }];
   let drawLayers = DEFAULT_DRAW_LAYERS.map(l => ({ ...l }));
   const layerOf = it => it.layer || (it.gm ? "gm" : "shared");
   const drawLayerDef = id => drawLayers.find(l => l.id === id) || drawLayers[0];
   const curDrawColor = () => $("drawColor").value;
   const curDrawWidth = () => parseInt($("drawWidth").value, 10) || 3;
   const curDrawFill = () => $("drawFillMode").value !== "outline";
-  function curLayerPatch(){ const def = drawLayerDef($("drawLayerSel").value); return { layer: def.id, gm: !!def.gm }; }
+  function curLayerPatch(){ const def = drawLayerDef($("drawLayerSel").value); return { layer: def.id, gm: !!def.gm, fg: def.id === "fg" }; }
+  const LAYER_NAMES = { map: "Map layer", gm: "DM layer", shared: "Player layer", fg: "Foreground layer" };
+  function ensureLayerDefs(){
+    if (!drawLayers.some(l => l.id === "shared")) drawLayers.unshift({ id: "shared", name: "Player", gm: false, hidden: false });
+    if (!drawLayers.some(l => l.id === "gm")) drawLayers.push({ id: "gm", name: "DM", gm: true, hidden: false });
+    if (!drawLayers.some(l => l.id === "fg")) drawLayers.push({ id: "fg", name: "Foreground", gm: false, hidden: false });
+  }
   function buildLayerUi(){
+    ensureLayerDefs();
     const sel = $("drawLayerSel");
     const cur = sel.value;
-    sel.innerHTML = drawLayers.map(l => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
-    if (drawLayers.some(l => l.id === cur)) sel.value = cur;
-    $("drawLayerChips").innerHTML = drawLayers.map(l =>
-      `<span class="layer-chip">${esc(l.name)} <button type="button" class="chip-eye" data-layer="${l.id}" aria-pressed="${!l.hidden}" title="Show or hide this layer for the whole table">${l.hidden ? "hidden" : "shown"}</button></span>`).join("");
+    sel.innerHTML = ["shared", "gm", "fg"].map(id => `<option value="${id}">${LAYER_NAMES[id]}</option>`).join("");
+    sel.value = ["shared", "gm", "fg"].includes(cur) ? cur : "shared";
+    const chip = id => { const l = drawLayerDef(id); return `<span class="layer-chip">${LAYER_NAMES[id]} <button type="button" class="chip-eye" data-layer="${id}" aria-pressed="${!l.hidden}" title="Show or hide the ${LAYER_NAMES[id]} for the whole table">${l.hidden ? "hidden" : "shown"}</button></span>`; };
+    $("drawLayerChips").innerHTML = `<span class="layer-chip layer-chip-map" title="The map itself — always on">${LAYER_NAMES.map}</span>` + chip("gm") + chip("shared") + chip("fg");
     $("drawLayerChips").querySelectorAll(".chip-eye").forEach(b => b.addEventListener("click", async () => {
       const l = drawLayerDef(b.dataset.layer);
       l.hidden = !l.hidden;
       buildLayerUi(); renderDraw();
       const ok = await saveDraw();
-      drawStatusEl.textContent = ok ? `Layer "${l.name}" ${l.hidden ? "hidden" : "shown"} for the whole table.` : "Layer change didn't save — refreshed.";
+      drawStatusEl.textContent = ok ? `${LAYER_NAMES[l.id] || l.name} ${l.hidden ? "hidden" : "shown"} for the whole table.` : "Layer change didn't save — refreshed.";
       if (!ok) loadDraw(true);
     }));
+    /* The four layers are automatic and fixed — the old add/rename/delete
+       layer controls are retired (stored custom defs are untouched). */
+    const addB = $("drawAddLayer"), renB = $("layerRenameBtn"), delB = $("layerDelBtn");
+    if (addB) addB.hidden = true;
+    if (renB) renB.hidden = true;
+    if (delB) delB.hidden = true;
   }
 
   /* ---- GM view: a plain per-device on/off toggle. There is NO PIN and
@@ -2547,7 +2567,7 @@ setInterval(loadSharedEntries, 60000);
       return [[a[0], a[1]], [a[0], b[1]], [b[0], b[1]], [b[0], a[1]]];
     });
     fogLayer.addLayer(L.polygon([[[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]], ...holes],
-      { pane: "layerGm", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: effectiveGm() ? 0.45 : 0.93, interactive: false }));
+      { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: effectiveGm() ? 0.45 : 0.93, interactive: false } /* v1.96: the fog veil rides the internal Light pane so it stays above the Player layer now that the DM pane sits below it in the four-layer stack */));
     if (effectiveGm()) for (const r of fogState.revealed)
       fogLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { pane: "layerGm", color: "#e8a33d", weight: 1, fill: false, interactive: false }));
   }
@@ -2608,7 +2628,7 @@ setInterval(loadSharedEntries, 60000);
       if (ldef.hidden) continue;
       if (ldef.gm && !gm) continue;
       const lop = (typeof ldef.opacity === "number" ? ldef.opacity : 1) * (typeof it.opacity === "number" ? it.opacity : 1);
-      const st = { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false, opacity: it.fillMode === "fill" ? 0 : lop };
+      const st = { pane: (it.gm || ldef.gm) ? "layerGm" : (it.fg || ldef.id === "fg") ? "layerForeground" : "layerTokens", color: it.color || "#e8a33d", weight: it.w || 3, fillColor: it.color || "#e8a33d", interactive: false, opacity: it.fillMode === "fill" ? 0 : lop };
       const fo = it.fillMode === "fill" ? 0.35 * lop : (it.fill === false ? 0 : 0.18) * lop;
       if (it.type === "line") drawLayer.addLayer(L.polyline(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fill: false }));
       else if (it.type === "poly") drawLayer.addLayer(L.polygon(it.pts.map(p => toLatLng(p[0], p[1])), { ...st, fillOpacity: fo }));
@@ -2622,13 +2642,13 @@ setInterval(loadSharedEntries, 60000);
       }
       else if (it.type === "rect") drawLayer.addLayer(L.rectangle([toLatLng(it.x, it.y), toLatLng(it.x + it.w, it.y + it.h)], { ...st, fillOpacity: fo }));
       else if (it.type === "circle") drawLayer.addLayer(L.circle(toLatLng(it.x, it.y), { ...st, radius: it.r / 100 * MW, fillOpacity: fo }));
-      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
+      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : (it.fg || ldef.id === "fg") ? "layerForeground" : "layerTokens", icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
       else if (it.type === "ellipse") {
         const epts = [], ecx = it.x / 100 * MW, ecy = it.y / 100 * MH;
         for (let k = 0; k < 48; k++) { const a = k / 48 * Math.PI * 2; epts.push(uToLatLng(ecx + Math.cos(a) * it.rx / 100 * MW, ecy + Math.sin(a) * it.ry / 100 * MH)); }
         drawLayer.addLayer(L.polygon(epts, { ...st, fillOpacity: fo }));
       }
-      else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", icon: stampIcon(it, lop), interactive: false }));
+      else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : (it.fg || ldef.id === "fg") ? "layerForeground" : "layerTokens", icon: stampIcon(it, lop), interactive: false }));
       else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(paintRotUrl(it.data), frameBounds(), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", opacity: lop, interactive: false }));
       else if (it.type === "template") {
         const anchorTk = it.anchor ? tokens.find(t => t.id === it.anchor) : null;
@@ -4648,11 +4668,12 @@ setInterval(loadSharedEntries, 60000);
 
 
   /* ================= v1.09: Dynamic lighting — walls, light sources, token vision =================
-     Shaun's layer stack: 1 Map, 2 Tokens, 3 GM, 4 Light, 5 Foreground.
-     This build lives in the Light layer (layerLight pane, z500); walls are
-     drawn/edited as GM material (layerGm, z400); the Foreground pane
-     (layerForeground, z560, fgFx group) sits above it, reserved for
-     overhead material — no foreground content exists yet.
+     Shaun's four layers (2026-11-07): 1 Map, 2 DM, 3 Player,
+     4 Foreground. This build is a SYSTEM, not a listed layer: lighting
+     renders internally in the Light pane (z500, between Player and
+     Foreground); walls are drawn/edited as DM-layer material (layerGm
+     pane, z300); the Foreground pane (layerForeground, z560, fgFx
+     group) sits above it for overhead material.
      State per map in the shared store, key vtt_light / vtt_light_<mapId>:
      { enabled, walls:[{id,kind:"wall"|"door"|"window",a:[x,y],b:[x,y],open}],
        lights:[{id,name,x,y,bright,dim,color,flame}] } — positions in map %,
@@ -4674,7 +4695,7 @@ setInterval(loadSharedEntries, 60000);
   const wallFx = L.layerGroup().addTo(map);
   const lightFx = L.layerGroup().addTo(map);
   const lightEditFx = L.layerGroup().addTo(map);
-  const fgFx = L.layerGroup().addTo(map); /* Foreground layer (5) — reserved, extensible */
+  const fgFx = L.layerGroup().addTo(map); /* Foreground layer (4 of the four) — overhead overlays */
   const lightStatusEl = $("lightStatus");
   const LIGHT_PRESETS = {
     candle: { label: "Candle", bright: 5, dim: 10, color: "#ffc46b", flame: true },
@@ -6988,7 +7009,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2331";
+        var BUILD_STAMP = "2026-11-07-2338";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8904,7 +8925,7 @@ function floorConnected(L, cols, rows){
       var vlayers = [];
       walk(function(l){
         if (l instanceof window.L.Marker) return;
-        if (!l.options || (l.options.pane !== "layerMap" && l.options.pane !== "layerGm")) return;
+        if (!l.options || (l.options.pane !== "layerMap" && l.options.pane !== "layerGm" && l.options.pane !== "layerTokens" && l.options.pane !== "layerForeground")) return;
         if (l.getLatLngs || (l.getLatLng && l.getRadius)) vlayers.push(l);
       });
       var pip = function(pt, cps){
@@ -11106,7 +11127,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     } catch(e){ say("Placement failed: " + (e && e.message || e)); }
   }
   function placeToken(patch, p, label){
-    var tk = Object.assign({ id: newId(), name: "Token", x: p.x, y: p.y, size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "" }, patch);
+    var tk = Object.assign({ id: newId(), name: "Token", x: p.x, y: p.y, size: 1, color: "amber", hp: null, maxHp: null, img: "", sym: "", status: [], entryId: "", gm: $("drawLayerSel") && $("drawLayerSel").value === "gm" }, patch);
     tokens.push(tk);
     saveTokens().then(function(ok){
       drawTokens();
@@ -11115,12 +11136,17 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     });
   }
   function steamDefault(){ try { return localStorage.getItem("apocArSteamDefault") !== "0"; } catch(e){ return true; } }
+  function arLayerPatch(){
+    var s = document.getElementById("drawLayerSel");
+    var v = s ? s.value : "shared";
+    return v === "gm" ? { layer: "gm", gm: true } : v === "fg" ? { layer: "fg", gm: false, fg: true } : { layer: "shared", gm: false };
+  }
   function placeTile(b, p){
     var kind = b.dataset.kind;
     if (kind === "prop") {
       var PD = CAT("propDefs") || {}, d = PD[b.dataset.prop]; if (!d) return;
       var sOn = steamDefault();
-      pushDraw({ type: "stamp", x: p.x, y: p.y, size: d.fw, rot: 0, sym: "", color: d.color === "gold" ? "amber" : d.color, layer: "shared", gm: false, prop: b.dataset.prop, fw: d.fw, fh: d.fh, steam: sOn ? 1 : 0, img: sOn && window.__arSteamURL ? (window.__arSteamURL(b.dataset.prop) || "") : "" }, propName(b.dataset.prop));
+      pushDraw({ type: "stamp", x: p.x, y: p.y, size: d.fw, rot: 0, sym: "", color: d.color === "gold" ? "amber" : d.color, ...arLayerPatch(), prop: b.dataset.prop, fw: d.fw, fh: d.fh, steam: sOn ? 1 : 0, img: sOn && window.__arSteamURL ? (window.__arSteamURL(b.dataset.prop) || "") : "" }, propName(b.dataset.prop));
     } else if (kind === "sym" || kind === "disc") {
       var patch = { name: b.dataset.name || "Token", color: b.dataset.color || "amber" };
       if (b.dataset.sym) patch.sym = b.dataset.sym;
@@ -11128,9 +11154,9 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       if (nm && nm.value.trim()) patch.name = nm.value.trim();
       placeToken(patch, p, patch.name);
     } else if (kind === "art") {
-      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 2, rot: 0, img: b.dataset.img, layer: "shared", gm: false, steam: steamDefault() ? 1 : 0, imgPlain: b.dataset.img }, b.dataset.name || "Artwork");
+      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 2, rot: 0, img: b.dataset.img, ...arLayerPatch(), steam: steamDefault() ? 1 : 0, imgPlain: b.dataset.img }, b.dataset.name || "Artwork");
     } else if (kind === "tex") {
-      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 3, rot: 0, img: texURL(b.dataset.tex), layer: "shared", gm: false, steam: steamDefault() ? 1 : 0, imgPlain: texURL(b.dataset.tex) }, (b.dataset.name || "Texture") + " patch");
+      pushDraw({ type: "stamp", x: p.x, y: p.y, size: 3, rot: 0, img: texURL(b.dataset.tex), ...arLayerPatch(), steam: steamDefault() ? 1 : 0, imgPlain: texURL(b.dataset.tex) }, (b.dataset.name || "Texture") + " patch");
     } else if (kind === "light") {
       if (!gmOn()) { say("Lights are GM material — switch GM view on to place one."); return; }
       var preset = null; LIGHTS.forEach(function(L){ if (L[0] === b.dataset.light) preset = L[2]; });
@@ -11690,7 +11716,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       if (!b) return;
       e.stopPropagation();
       var p = centrePct();
-      placeStamp({ type: "stamp", x: p.x, y: p.y, size: 2, rot: 0, img: b.dataset.img, layer: "shared", gm: false, steam: 1, name: b.dataset.name }, b.dataset.name);
+      placeStamp({ type: "stamp", x: p.x, y: p.y, size: 2, rot: 0, img: b.dataset.img, ...arLayerPatch(), steam: 1, name: b.dataset.name }, b.dataset.name);
     }, true);
     catsEl2.addEventListener("pointerdown", function(e){
       var b = e.target && e.target.closest ? e.target.closest(".ar-tile[data-kind=\"stairs\"]") : null;
@@ -11712,7 +11738,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
         if (moved) {
           var mapEl = $("apocMap"); var r = mapEl.getBoundingClientRect();
           var px = Math.max(2, Math.min(98, (ev.clientX - r.left) / r.width * 100)), py = Math.max(2, Math.min(98, (ev.clientY - r.top) / r.height * 100));
-          placeStamp({ type: "stamp", x: px, y: py, size: 2, rot: 0, img: b.dataset.img, layer: "shared", gm: false, steam: 1, name: b.dataset.name }, b.dataset.name);
+          placeStamp({ type: "stamp", x: px, y: py, size: 2, rot: 0, img: b.dataset.img, ...arLayerPatch(), steam: 1, name: b.dataset.name }, b.dataset.name);
         }
       }
       window.addEventListener("pointermove", mv, true);
@@ -12375,5 +12401,11 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   setInterval(tick, 200);
 })();
 </script>
+
+<style>
+/* APOC-V196 layers: the Map layer chip is a fixed label (the map itself,
+   always on) — not an activatable tab like the other three layers. */
+.layer-chip-map{cursor:default;opacity:.85}
+</style>
 </body>
 </html>
