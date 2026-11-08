@@ -786,8 +786,7 @@ body.map-expanded .stage-row{display:contents}
                 <div class="monster-detail" id="monsterDetail" hidden></div>
               </div>
             </div>
-            <div class="lib-panel" id="mapRepo">
-              <div class="nest" id="mapsNest">
+            <div class="nest" id="mapsNest">
                 <button type="button" class="nest-head" aria-expanded="false"><span>Maps <span class="muted small" id="mapRepoCount"></span></span></button>
                 <div class="nest-body">
                   <div class="field">
@@ -797,7 +796,6 @@ body.map-expanded .stage-row{display:contents}
                   <div class="mr-list" id="mapRepoList"></div>
                   <p class="muted small" id="mapRepoStatus"></p>
                 </div>
-              </div>
             </div>
             <div class="lib-panel" id="stampLib" hidden>
               <div class="nest" id="stampsNest">
@@ -2371,7 +2369,7 @@ setInterval(loadSharedEntries, 60000);
      Fog and drawings are per-map (same key pattern as tokens). GM view is a
      plain per-screen on/off toggle (this browser session) — no PIN, no lock
      (Shaun, 2026-11-06). Projection is always the player view. */
-  function effectiveGm(){ try { return gmView && !isProjecting(); } catch(e) { return false; } }
+  function effectiveGm(){ try { if (isProjecting()) { try { return sessionStorage.getItem("apocDispGm") === "1"; } catch(e) { return false; } } return gmView && !isProjecting(); } catch(e) { return false; } } /* v2.00: a TV copy renders GM only when Shaun picked DM view for that screen (flag kept in sessionStorage by the APOC-V200 display poller, reloaded on change) */
   /* (TDZ-guarded: the gazetteer calls this during init, before the
      "let gmView" declaration has run — unguarded it threw on every load.) */
   window.effectiveGm = effectiveGm;
@@ -2538,12 +2536,21 @@ setInterval(loadSharedEntries, 60000);
      content while projecting; on the ?display=1 TV copy the whole tools
      bar (this button included) is display:none via body.displaying CSS.
      Convenience, not real security — the page and its store are public. */
-  $("gmBtn").hidden = false;
-  try {
-    /* Per-device flag first (v1.59); the old per-tab session flag is
-       honoured too so nobody mid-session loses GM on this upgrade. */
-    if (localStorage.getItem("apocGm") === "1" || sessionStorage.getItem("apocGm") === "1") gmView = true;
-  } catch(e) { /* storage unavailable — GM view just starts off */ }
+  /* v2.00 (Shaun, 2026-11-08 ~01:22): GM view lives ONLY on DM-armed
+     devices (his laptop — armed once via ?dm=1, remembered in
+     localStorage apocVttDM) and is ON BY DEFAULT at every load there.
+     The hold-to-switch still drops out for the session; a reload
+     returns to ON. Unarmed devices get no button and no GM state.
+     Supersedes the v1.35 "button everywhere, starts off" state. */
+  var gmArmed200 = false;
+  try { gmArmed200 = new URLSearchParams(location.search).get("dm") === "1" || localStorage.getItem("apocVttDM") === "1"; } catch(e) {}
+  $("gmBtn").hidden = !gmArmed200;
+  if (gmArmed200) {
+    gmView = true;
+    $("gmBtn").setAttribute("aria-pressed", "true");
+    $("fogControls").hidden = false;
+    $("lightControls").hidden = false;
+  }
 
   /* ---- Fog of war ---- */
   async function loadFog(quiet){
@@ -7009,7 +7016,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-07-2352";
+        var BUILD_STAMP = "2026-11-08-0134";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -12536,6 +12543,162 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   var img = pv.querySelector("img");
   if (img) img.addEventListener("load", placeLeft);
   window.addEventListener("resize", placeLeft);
+})();
+</script>
+
+<style id="APOC-V200">
+/* APOC-V200 (Shaun, 2026-11-08 ~01:16-01:27) — Art Library right stack,
+   Maps' own header (HTML hoist in this build), Library squeeze, full-height
+   under-map dropdowns, GM View laptop-only/default-on + per-screen TV
+   DM choice. Layout rules are desktop-scoped: the verified phone drawer
+   (v1.95) is untouched. */
+@media (min-width:821px){
+  /* (3) Squeeze: the dock narrows 300px -> 224px, hard right; the freed
+     76px flows to .map-stage (flex:1 1 auto), so the map box opens
+     closer to the Library. Floated Libraries keep their saved width. */
+  #mapPanel .stage-row > .map-repo{flex:0 0 224px;width:224px}
+  /* (1) Single column: the opened Library body and every sub-grid that
+     stacked buttons three-abreast go one-across, so the buttons form
+     one vertical stack. Content grids (tiles, map entries) unchanged. */
+  .map-repo .artlib.open > .nest-body{grid-template-columns:1fr !important}
+  #mapPanel #artLibrary #tokenLib:not([hidden]){grid-template-columns:1fr !important}
+  #mapPanel .mr-list, #mapPanel #libMonsters{grid-template-columns:1fr !important}
+  /* (1) Every Library button shrink-wraps and hugs the RIGHT edge:
+     section heads, category heads, folder heads alike. */
+  #artLibrary .nest-head{width:max-content !important;max-width:100%;margin-left:auto !important}
+  /* (5) Full-height dropdowns: no 6px gap under the button, no height
+     cap — the APOC-V200 script pins exact pixels (top = the tab's
+     bottom, height = down to the screen bottom). */
+  #mapPanel .ctl-set{top:100% !important;max-height:none !important}
+}
+/* TV DM-choice buttons: pressed = that screen is in DM view. */
+#tvDm1Btn[aria-pressed="true"], #tvDm2Btn[aria-pressed="true"]{box-shadow:inset 0 0 0 2px #f0b43c}
+</style>
+<script>
+/* APOC-V200 script: Maps-hoist fallback, full-height dropdown pinning,
+   per-screen TV DM view (control buttons + display poller). */
+(function(){
+  "use strict";
+  /* (2) fallback: if a future base still nests #mapsNest inside the
+     #mapRepo wrapper, hoist it to a direct Library section at runtime. */
+  var mr = document.getElementById("mapRepo"), mn = document.getElementById("mapsNest");
+  if (mr && mn && mn.parentElement === mr && mr.parentNode) {
+    mr.parentNode.insertBefore(mn, mr);
+    mr.parentNode.removeChild(mr);
+  }
+
+  var disp = new URLSearchParams(location.search).get("display");
+
+  /* ===== display copies: follow this screen's DM flag =====
+     The flag rides the screen's own row (vtt_active for Screen 1,
+     vtt_active_2 for Screen 2; a mirroring Screen 2 has no row and
+     stays player). effectiveGm() reads sessionStorage "apocDispGm"
+     synchronously, so the flag is kept there and the copy reloads
+     when the flag (or assignment) changes — the v1.77 pattern. */
+  if (disp === "1" || disp === "2") {
+    var KEY = disp === "2" ? "vtt_active_2" : "vtt_active";
+    var SSK = "apocDispGmSig" + disp;
+    async function poll(){
+      try {
+        if (typeof db === "undefined" || typeof SETTINGS_TABLE === "undefined") return;
+        var res = await db.from(SETTINGS_TABLE).select("value").eq("key", KEY).maybeSingle();
+        var v = (res && res.data && res.data.value) || {};
+        var gm = v.gm === true;
+        var sig = String(v.mapId || "") + "|" + (gm ? "1" : "0");
+        var prev = null;
+        try { prev = sessionStorage.getItem(SSK); } catch(e){}
+        if (prev === null) {
+          try { sessionStorage.setItem(SSK, sig); sessionStorage.setItem("apocDispGm", gm ? "1" : "0"); } catch(e){}
+          if (gm) location.reload(); /* reboot with the DM flag readable from the first render */
+          return;
+        }
+        if (sig !== prev) {
+          try { sessionStorage.setItem(SSK, sig); sessionStorage.setItem("apocDispGm", gm ? "1" : "0"); } catch(e){}
+          location.reload();
+        }
+      } catch(e){ /* read-only poll; a miss retries next tick */ }
+    }
+    setInterval(poll, 4000);
+    poll();
+    return; /* display copies get no controls, no dropdown pinning */
+  }
+
+  /* ===== (5) full-height dropdowns: pin each open set exactly ===== */
+  var TABID = { fog: "fogTab", lighting: "lightTab" };
+  function pinSets(){
+    if (window.innerWidth < 821) return;
+    document.querySelectorAll(".ctl-set").forEach(function(set){
+      if (set.hidden) {
+        if (set.style.height || set.style.top) { set.style.height = ""; set.style.top = ""; }
+        return;
+      }
+      var name = set.id.replace(/^set-/, "");
+      var tab = document.getElementById(TABID[name] || (name + "Tab"));
+      var op = set.offsetParent;
+      if (!tab || !op) return;
+      var tr = tab.getBoundingClientRect(), orr = op.getBoundingClientRect();
+      var ts = Math.round(tr.bottom - orr.top) + "px";
+      var hs = Math.max(80, Math.round(window.innerHeight - tr.bottom)) + "px";
+      if (set.style.top !== ts) set.style.top = ts;
+      if (set.style.height !== hs) set.style.height = hs;
+    });
+  }
+  setInterval(pinSets, 200);
+  window.addEventListener("resize", pinSets);
+
+  /* ===== (6) control page: per-screen DM view choice =====
+     Two toggle buttons ride with the Push to TV / Screen 2 cluster.
+     Default for every send stays PLAYER: fresh sends (map switch,
+     Screen 2 Send) write rows without gm; these toggles are the only
+     way a screen enters DM view, and each screen is independent. */
+  function curMap(){
+    try { if (window.__apocShelf && window.__apocShelf.current) return window.__apocShelf.current(); } catch(e){}
+    var s = document.getElementById("mapSelect");
+    return s ? s.value : null;
+  }
+  async function readRow(key){
+    try {
+      var r = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+      return (r && r.data && r.data.value) || null;
+    } catch(e){ return null; }
+  }
+  function mkTvBtn(id, label, key){
+    var b = document.createElement("button");
+    b.type = "button"; b.className = "btn"; b.id = id;
+    b.setAttribute("aria-pressed", "false");
+    b.textContent = label;
+    b.title = "DM view for this TV: on = the TV shows GM material for its map; off = player view. Default is player view.";
+    b.addEventListener("click", async function(){
+      var row = await readRow(key);
+      var now = !(row && row.gm === true);
+      var mid = (row && row.mapId) || curMap() || "faerun";
+      b.disabled = true;
+      try {
+        await db.from(SETTINGS_TABLE).upsert(
+          { key: key, value: { mapId: mid, gm: now }, updated_at: new Date().toISOString() },
+          { onConflict: "key" });
+        b.setAttribute("aria-pressed", String(now));
+      } catch(e){ /* write failed — state stays as painted before */ }
+      b.disabled = false;
+    });
+    readRow(key).then(function(row){ b.setAttribute("aria-pressed", String(!!(row && row.gm === true))); });
+    return b;
+  }
+  function placeTv(){
+    var push = document.getElementById("pushTvBtn");
+    if (!push || !push.parentNode) return;
+    var b1 = document.getElementById("tvDm1Btn"), b2 = document.getElementById("tvDm2Btn");
+    if (!b1) {
+      b1 = mkTvBtn("tvDm1Btn", "TV: DM view", "vtt_active");
+      b2 = mkTvBtn("tvDm2Btn", "Screen 2: DM view", "vtt_active_2");
+    }
+    var anchor = document.getElementById("screen2MirrorBtn") || document.getElementById("screen2SendBtn") || push;
+    if (anchor.nextSibling !== b1) anchor.parentNode.insertBefore(b1, anchor.nextSibling);
+    if (b1.nextSibling !== b2) b1.parentNode.insertBefore(b2, b1.nextSibling);
+  }
+  placeTv();
+  var t0 = Date.now();
+  var tm = setInterval(function(){ placeTv(); if (Date.now() - t0 > 12000) clearInterval(tm); }, 400);
 })();
 </script>
 
