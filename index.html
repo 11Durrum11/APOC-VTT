@@ -7286,7 +7286,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0502";
+        var BUILD_STAMP = "2026-11-08-0902";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8753,10 +8753,15 @@ function floorConnected(L, cols, rows){
          FLOAT, where it sits in the flow, at the squeezed 184px width.
          A saved float (his own drag) always wins over this default. */
       var erD = el.getBoundingClientRect();
-      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 184 } };
+      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 112 } }; /* APOC-V214: halved default */
     }
-    var w = park.float.w ? Math.min(Math.max(120, park.float.w), Math.max(120, pr.width - 12)) : 184;
-    var x = Math.max(-Math.round(w * 0.6), Math.min(Math.round(park.float.x) || 0, Math.round(pr.width - w * 0.4)));
+    /* APOC-V214: Library footprint halved — hard cap 112px (half the
+       v2.00 docked 224px). A wider saved rect clamps down and keeps
+       its RIGHT edge: x shifts by the shaved amount before the park
+       clamps run. */
+    var wRaw214 = park.float.w ? Math.round(park.float.w) : 112;
+    var w = Math.min(Math.max(72, wRaw214), Math.min(112, Math.max(72, pr.width - 12)));
+    var x = Math.max(-Math.round(w * 0.6), Math.min((Math.round(park.float.x) || 0) + Math.max(0, wRaw214 - w), Math.round(pr.width - w * 0.4)));
     var y = Math.max(0, Math.round(park.float.y) || 0);
     el.classList.add("per-float");
     el.style.width = w + "px";
@@ -11014,10 +11019,15 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       /* APOC-V205: no saved float — default free float at its in-flow
          spot, squeezed 184px width (see applyRepoPark). */
       var erD = el.getBoundingClientRect();
-      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 184 } };
+      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 112 } }; /* APOC-V214: halved default */
     }
-    var w = park.float.w ? Math.min(Math.max(120, park.float.w), Math.max(120, pr.width - 12)) : 184;
-    var x = Math.max(-Math.round(w * 0.6), Math.min(Math.round(park.float.x) || 0, Math.round(pr.width - w * 0.4)));
+    /* APOC-V214: Library footprint halved — hard cap 112px (half the
+       v2.00 docked 224px). A wider saved rect clamps down and keeps
+       its RIGHT edge: x shifts by the shaved amount before the park
+       clamps run. */
+    var wRaw214 = park.float.w ? Math.round(park.float.w) : 112;
+    var w = Math.min(Math.max(72, wRaw214), Math.min(112, Math.max(72, pr.width - 12)));
+    var x = Math.max(-Math.round(w * 0.6), Math.min((Math.round(park.float.x) || 0) + Math.max(0, wRaw214 - w), Math.round(pr.width - w * 0.4)));
     var y = Math.max(0, Math.round(park.float.y) || 0);
     el.classList.add("per-float");
     el.style.width = w + "px";
@@ -11452,7 +11462,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var rp = repo(); if (!rp) return;
     var pn = document.getElementById("mapPanel");
     var pw = pn ? pn.getBoundingClientRect().width : 2600;
-    if (rsz.mode.indexOf("r") >= 0) rp.style.width = Math.round(Math.max(220, Math.min(rsz.w + (e.clientX - rsz.sx), pw - 12))) + "px";
+    if (rsz.mode.indexOf("r") >= 0) rp.style.width = Math.round(Math.max(72, Math.min(rsz.w + (e.clientX - rsz.sx), 112, pw - 12))) + "px"; /* APOC-V214 cap */
     if (rsz.mode.indexOf("b") >= 0) rp.style.height = Math.round(Math.max(60, Math.min(rsz.h + (e.clientY - rsz.sy), window.innerHeight))) + "px";
   }, true);
   function endRsz(){
@@ -13316,7 +13326,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   /* (3) Squeeze: the dock narrows 300px -> 224px, hard right; the freed
      76px flows to .map-stage (flex:1 1 auto), so the map box opens
      closer to the Library. Floated Libraries keep their saved width. */
-  #mapPanel .stage-row > .map-repo{flex:0 0 224px;width:224px}
+  #mapPanel .stage-row > .map-repo{flex:0 0 112px;width:112px} /* APOC-V214: halved */
   /* (1) Single column: the opened Library body and every sub-grid that
      stacked buttons three-abreast go one-across, so the buttons form
      one vertical stack. Content grids (tiles, map entries) unchanged. */
@@ -14001,8 +14011,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   pill.addEventListener("click", function(){
     var el = repoEl(), pn = panelEl(); if (!el || !pn) return;
     var pr = pn.getBoundingClientRect();
-    var w = Math.round(el.getBoundingClientRect().width) || 184;
-    if (w < 120) w = 184;
+    var w = Math.round(el.getBoundingClientRect().width) || 112;
+    if (w < 72 || w > 112) w = 112; /* APOC-V214: halved footprint standard */
     var x = Math.max(0, Math.round(pr.width - w - 12)), y = 10;
     var st = loadJ(PKEY);
     st.repo = { float: { x: x, y: y, w: w } };
@@ -14145,5 +14155,73 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
 #gmBtn[aria-pressed="true"]{opacity:1;filter:none}
 </style>
 
+
+<style id="APOC-V214">
+/* APOC-V214 (Shaun, 2026-11-08 ~06:43): Art Library footprint halved,
+   staying on the right. Docked/floated standard width is now 112px —
+   half the v2.00 squeeze (224px). Desktop-scoped like APOC-V200; the
+   phone drawer is untouched. */
+@media (min-width:821px){
+  #mapPanel .stage-row > .map-repo{flex-basis:112px !important;width:112px !important}
+  .map-repo.per-float{max-width:112px}
+}
+</style>
+<script>
+/* ================= APOC-V214 — Library width guard =================
+   The width itself is capped at the source (perimeter float apply,
+   v188 resize, V211 pill — all patched in this build). This guard is
+   the backstop for any OTHER writer that can re-widen the panel —
+   chiefly a saved free-layout "per-repo" width applied at boot: it
+   caps the stored records and the rendered box at 112px, keeping the
+   RIGHT edge where it was, and never fights a live drag (the v2.11
+   grip-rescue keeps working: a narrower box only helps it). */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var MQ = window.matchMedia("(min-width: 821px)");
+  var PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1", CAP = 112;
+  function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
+  function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  function repoEl(){ return document.querySelector(".map-repo"); }
+  var pressing = false;
+  window.addEventListener("pointerdown", function(e){
+    var el = repoEl();
+    pressing = !!(el && e.target && el.contains(e.target));
+  }, true);
+  window.addEventListener("pointerup", function(){ pressing = false; setTimeout(clampLib, 200); }, true);
+  window.addEventListener("pointercancel", function(){ pressing = false; }, true);
+  function capRecords(){
+    var st = loadJ(PKEY), fl = st.repo && st.repo.float, changed = false;
+    if (fl && fl.w && fl.w > CAP) { fl.x = (Math.round(fl.x) || 0) + (Math.round(fl.w) - CAP); fl.w = CAP; changed = true; }
+    if (changed) saveJ(PKEY, st);
+    var fp = loadJ(FKEY), rp = fp["per-repo"];
+    if (rp && rp.w && rp.w > CAP) { rp.w = CAP; saveJ(FKEY, fp); }
+  }
+  function clampLib(){
+    if (!MQ.matches || pressing) return;
+    var el = repoEl(); if (!el) return;
+    if (el.classList.contains("per-dragging")) return;
+    capRecords();
+    var rr = el.getBoundingClientRect();
+    if (!rr.width || rr.width <= CAP + 0.5) return;
+    var pn = document.getElementById("mapPanel");
+    if (el.classList.contains("per-float") && pn) {
+      var pr = pn.getBoundingClientRect();
+      var nl = Math.round((rr.left - pr.left) + (rr.width - CAP));
+      el.style.width = CAP + "px";
+      el.style.left = nl + "px";
+      var st = loadJ(PKEY);
+      if (st.repo && st.repo.float) { st.repo.float.x = nl; st.repo.float.w = CAP; saveJ(PKEY, st); }
+    } else {
+      el.style.width = CAP + "px";
+    }
+    setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+  }
+  [1200, 3000, 5400].forEach(function(ms){ setTimeout(clampLib, ms); });
+  var rzT = 0;
+  window.addEventListener("resize", function(){ clearTimeout(rzT); rzT = setTimeout(clampLib, 450); });
+  setInterval(clampLib, 3000);
+})();
+</script>
 </body>
 </html>
