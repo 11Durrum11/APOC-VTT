@@ -1234,6 +1234,9 @@ body.map-expanded .stage-row{display:contents}
         <div class="field full">
           <label class="atlas-toggle"><input type="checkbox" id="lightFlame"> Flame</label>
         </div>
+        <div class="field full">
+          <label class="atlas-toggle"><input type="checkbox" id="lightOn"> Lit — this light is on</label>
+        </div>
       </div>
       <div class="map-actions">
         <button type="submit" class="btn primary">Save light</button>
@@ -2566,6 +2569,53 @@ setInterval(loadSharedEntries, 60000);
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: fogKey(), value: fogState, updated_at: new Date().toISOString() }, { onConflict: "key" });
     return !error;
   }
+  /* v2.01: union-safe shade. A Leaflet polygon [rect, ...holes] paints with
+     fill-rule evenodd: a point inside TWO holes sits inside 3 rings (odd)
+     and is shaded AGAIN — overlapping lights (and overlapping fog reveals)
+     re-darkened their own overlap lens (Shaun, 2026-11-08 ~01:20:
+     "everywhere the light overlaps it creates the opposite of light").
+     The shade is now a plain rect whose SVG path wears a MASK — white
+     frame minus the lit shapes in black; mask cuts union correctly no
+     matter how the shapes overlap. Any failure falls back to the legacy
+     holed polygon, so the shade can never go missing. */
+  function maskedShade(group, rectRing, holeRingsLL, fillOpacity, maskId){
+    const opts = { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity, interactive: false };
+    let shade = null;
+    try {
+      const pathD = rings => {
+        const tmp = L.polygon(rings, { pane: "layerLight", stroke: false, fill: false, interactive: false });
+        group.addLayer(tmp);
+        const el = tmp.getElement && tmp.getElement();
+        const d = el ? el.getAttribute("d") : null;
+        group.removeLayer(tmp);
+        return d;
+      };
+      const rectD = pathD([rectRing]);
+      if (!rectD) throw new Error("no rect path");
+      shade = L.polygon([rectRing], opts);
+      group.addLayer(shade);
+      const sEl = shade.getElement && shade.getElement();
+      const svg = sEl && sEl.ownerSVGElement;
+      if (!svg) throw new Error("no svg");
+      const NS = "http://www.w3.org/2000/svg";
+      let defs = svg.querySelector("defs");
+      if (!defs) { defs = document.createElementNS(NS, "defs"); svg.insertBefore(defs, svg.firstChild); }
+      let mask = defs.querySelector("#" + maskId);
+      if (!mask) { mask = document.createElementNS(NS, "mask"); mask.setAttribute("id", maskId); defs.appendChild(mask); }
+      mask.setAttribute("maskUnits", "userSpaceOnUse");
+      mask.setAttribute("x", "-100000"); mask.setAttribute("y", "-100000");
+      mask.setAttribute("width", "200000"); mask.setAttribute("height", "200000");
+      let inner = '<path d="' + rectD + '" fill="#ffffff"/>';
+      for (const h of holeRingsLL) { const d = pathD([h]); if (d) inner += '<path d="' + d + '" fill="#000000"/>'; }
+      mask.innerHTML = inner;
+      sEl.setAttribute("mask", "url(#" + maskId + ")");
+      return shade;
+    } catch (e) {
+      if (shade) { try { group.removeLayer(shade); } catch (_) {} }
+      group.addLayer(L.polygon([rectRing, ...holeRingsLL], opts));
+      return null;
+    }
+  }
   function renderFog(){
     fogLayer.clearLayers();
     if (!fogState.enabled) return;
@@ -2573,8 +2623,7 @@ setInterval(loadSharedEntries, 60000);
       const a = toLatLng(r.x, r.y), b = toLatLng(r.x + r.w, r.y + r.h);
       return [[a[0], a[1]], [a[0], b[1]], [b[0], b[1]], [b[0], a[1]]];
     });
-    fogLayer.addLayer(L.polygon([[[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]], ...holes],
-      { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: effectiveGm() ? 0.45 : 0.93, interactive: false } /* v1.96: the fog veil rides the internal Light pane so it stays above the Player layer now that the DM pane sits below it in the four-layer stack */));
+    maskedShade(fogLayer, [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]], holes, effectiveGm() ? 0.45 : 0.93, "apocFogMask"); /* v2.01: mask-union shade (the holed polygon re-veiled overlapping reveals); the veil still rides the internal Light pane so it stays above the Player layer (v1.96) */
     if (effectiveGm()) for (const r of fogState.revealed)
       fogLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { pane: "layerGm", color: "#e8a33d", weight: 1, fill: false, interactive: false }));
   }
@@ -4683,7 +4732,8 @@ setInterval(loadSharedEntries, 60000);
      group) sits above it for overhead material.
      State per map in the shared store, key vtt_light / vtt_light_<mapId>:
      { enabled, walls:[{id,kind:"wall"|"door"|"window",a:[x,y],b:[x,y],open}],
-       lights:[{id,name,x,y,bright,dim,color,flame}] } — positions in map %,
+       lights:[{id,name,x,y,bright,dim,color,flame,on}] } — on:false = doused
+       (v2.01: renders nothing anywhere, persists per map). Positions in map %,
      radii in feet (converted with the map's shared scale). Windows block
      light and vision while CLOSED and pass both while OPEN (v1.90, the
      same rule as doors; v1.60 had them never blocking); they are drawn
@@ -4768,7 +4818,9 @@ setInterval(loadSharedEntries, 60000);
   }
   window.__apocLightTest = { blockers: lightBlockers, visPoly, pointInPolyU };
   function lightIcon(src){
-    return L.divIcon({ className: "light-icon", html: `<span class="light-dot" style="background:${esc(src.color || "#ffb347")};box-shadow:0 0 14px 5px ${esc(src.color || "#ffb347")}"></span><span class="light-name">${esc(src.name || "Light")}</span>`, iconAnchor: [9, 9] });
+    const off = !!src && src.on === false; /* v2.01: a doused light shows grey and unglowing, named (off) in GM view */
+    const col = off ? "#6b7280" : (src.color || "#ffb347");
+    return L.divIcon({ className: "light-icon", html: `<span class="light-dot" style="background:${esc(col)};box-shadow:${off ? "none" : "0 0 14px 5px " + esc(col)}"></span><span class="light-name">${esc(src.name || "Light")}${off ? " (off)" : ""}</span>`, iconAnchor: [9, 9] });
   }
   async function loadLighting(quiet){
     if (!db) return;
@@ -4825,9 +4877,14 @@ setInterval(loadSharedEntries, 60000);
     const polysOf = (x, y, ft) => { const [ux, uy] = toUnits({ x, y }); return visPoly(ux, uy, ft * ftU, segs); };
     const dimPolys = [], brightPolys = [], tints = [];
     for (const src of lightState.lights) {
-      const f = flickerFactor(src);
-      const dim = polysOf(src.x, src.y, (src.dim || 0) * f), bright = polysOf(src.x, src.y, (src.bright || 0) * f);
-      if (dim.length > 2) { dimPolys.push(dim); tints.push({ poly: dim, color: src.color || "#ffb347", src }); }
+      if (src.on === false) continue; /* v2.01: a doused light emits nothing — no tint, no shade cut, no glow marker */
+      /* v2.01: shadow geometry is computed at the TRUE radii. The flame
+         flicker used to scale the radius, recomputing every visibility
+         polygon every 200ms, so all the negative spaces breathed with
+         the flame. Flicker now only shimmers the tint alpha below;
+         the shadow polygons are identical on every flicker tick. */
+      const dim = polysOf(src.x, src.y, src.dim || 0), bright = polysOf(src.x, src.y, src.bright || 0);
+      if (dim.length > 2) { dimPolys.push(dim); tints.push({ poly: dim, color: src.color || "#ffb347", src, f: flickerFactor(src) }); }
       if (bright.length > 2) brightPolys.push(bright);
     }
     for (const tk of tokens) {
@@ -4839,13 +4896,13 @@ setInterval(loadSharedEntries, 60000);
     const rect = [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]];
     if (!playerView) {
       /* GM sees everything: tints only, no darkness. */
-      for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10, interactive: false }));
-      manageFlicker(lightState.lights.some(s => s.flame));
+      for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10 * (1 + ((t.f || 1) - 1) * 3), interactive: false })); /* v2.01: the flame shimmer lives in this tint alpha only — geometry never moves */
+      manageFlicker(lightState.lights.some(s => s.flame && s.on !== false));
       return;
     }
-    for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16, interactive: false }));
-    if (brightPolys.length) lightFx.addLayer(L.polygon([rect, ...brightPolys.map(toLL)], { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: 0.38, interactive: false }));
-    lightFx.addLayer(L.polygon([rect, ...dimPolys.map(toLL)], { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity: 0.93, interactive: false }));
+    for (const t of tints) lightFx.addLayer(L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16 * (1 + ((t.f || 1) - 1) * 3), interactive: false })); /* v2.01: tint-alpha shimmer only */
+    if (brightPolys.length) maskedShade(lightFx, rect, brightPolys.map(toLL), 0.38, "apocBrightMask"); /* v2.01: mask-union shades — overlapping lights can no longer darken each other */
+    maskedShade(lightFx, rect, dimPolys.map(toLL), 0.93, "apocDimMask");
     const visibleAt = (x, y) => { const [ux, uy] = toUnits({ x, y }); return dimPolys.some(p => pointInPolyU(ux, uy, p)); };
     for (const tk of tokens) {
       const m = tokenMarkers[tk.id];
@@ -4856,7 +4913,7 @@ setInterval(loadSharedEntries, 60000);
     for (const t of tints) {
       if (visibleAt(t.src.x, t.src.y)) lightFx.addLayer(L.marker(toLatLng(t.src.x, t.src.y), { pane: "layerLight", interactive: false, icon: lightIcon(t.src) }));
     }
-    manageFlicker(lightState.lights.some(s => s.flame));
+    manageFlicker(lightState.lights.some(s => s.flame && s.on !== false));
   }
   function manageFlicker(want){
     const ok = want && lightState.enabled && lightBlockers().length <= 120 && lightState.lights.length <= 25 && !document.hidden;
@@ -4971,6 +5028,7 @@ setInterval(loadSharedEntries, 60000);
     $("lightColor").value = src.color || "#ffb347";
     syncLightColorChip();
     $("lightFlame").checked = !!src.flame;
+    $("lightOn").checked = src.on !== false; /* v2.01: per-light on/off (legacy lights have no on field = lit) */
     $("lightForm").hidden = false;
   }
   $("lightForm").addEventListener("submit", async e => {
@@ -4982,6 +5040,7 @@ setInterval(loadSharedEntries, 60000);
     src.dim = Math.max(src.bright, parseFloat($("lightDim").value) || 0);
     src.color = $("lightColor").value || "#ffb347";
     src.flame = $("lightFlame").checked;
+    src.on = $("lightOn").checked; /* v2.01: the doused state persists per map in the shared light state */
     const ok = await saveLighting(); renderLighting();
     lightStatusEl.textContent = ok ? `${src.name} updated — the table sees it.` : "Light update didn't save — refreshed.";
     if (!ok) loadLighting(true);
@@ -5002,7 +5061,8 @@ setInterval(loadSharedEntries, 60000);
     openEditor: openLightEditor, state: () => lightState,
     del: async src => { lightState.lights = lightState.lights.filter(s => s.id !== src.id); const ok = await saveLighting(); renderLighting(); return ok; },
     delWall: async w => { lightState.walls = lightState.walls.filter(x => x !== w); const ok = await saveLighting(); renderLighting(); return ok; },
-    toggleDoor: async w => { w.open = !w.open; const ok = await saveLighting(); renderLighting(); return ok; }
+    toggleDoor: async w => { w.open = !w.open; const ok = await saveLighting(); renderLighting(); return ok; },
+    toggleOn: async src => { src.on = src.on === false; const ok = await saveLighting(); renderLighting(); return ok; } /* v2.01: right-click douse / relight, saved per map */
   };
   $("lightCancel").addEventListener("click", () => { $("lightForm").hidden = true; lightEditingId = null; });
   $("lightColorBtn").addEventListener("click", () => {
@@ -6578,7 +6638,7 @@ function floorConnected(L, cols, rows){
     if (lightState.enabled) {
       const segs = lightBlockers(); const ftU = ftToUnits(1);
       const [ux, uy] = toUnits({ x: tk.x, y: tk.y });
-      const lit = lightState.lights.some(src => { const [sx, sy] = toUnits({ x: src.x, y: src.y }); return pointInPolyU(ux, uy, visPoly(sx, sy, (src.dim || 0) * ftU, segs)); })
+      const lit = lightState.lights.some(src => { if (src.on === false) return false; /* v2.01: doused lights light nothing, 3D included */ const [sx, sy] = toUnits({ x: src.x, y: src.y }); return pointInPolyU(ux, uy, visPoly(sx, sy, (src.dim || 0) * ftU, segs)); })
         || tokens.some(o => { if (o === tk || o.gm || !(o.light > 0)) return false; const [sx, sy] = toUnits({ x: o.x, y: o.y }); return pointInPolyU(ux, uy, visPoly(sx, sy, o.light * ftU, segs)); });
       if (!lit) return false;
     }
@@ -6610,13 +6670,23 @@ function floorConnected(L, cols, rows){
     if (lightState.enabled) {
       const segs = lightBlockers(); const ftU = ftToUnits(1);
       const dimP = [], brightP = [];
-      for (const src of lightState.lights) { const [ux, uy] = toUnits({ x: src.x, y: src.y });
+      for (const src of lightState.lights) { if (src.on === false) continue; /* v2.01: doused */
+        const [ux, uy] = toUnits({ x: src.x, y: src.y });
         const d = visPoly(ux, uy, (src.dim || 0) * ftU, segs), b = visPoly(ux, uy, (src.bright || 0) * ftU, segs);
         if (d.length > 2) dimP.push(d); if (b.length > 2) brightP.push(b); }
       for (const tk of tokens) { if (tk.gm || !(tk.light > 0)) continue; const [ux, uy] = toUnits({ x: tk.x, y: tk.y });
         const p = visPoly(ux, uy, tk.light * ftU, segs); if (p.length > 2) dimP.push(p); }
-      const darken = (polys, alpha) => { if (!polys.length && alpha > 0.5) { g.fillStyle = `rgba(2,3,6,${alpha})`; g.fillRect(0, 0, cw, ch); return; }
-        g.fillStyle = `rgba(2,3,6,${alpha})`; g.beginPath(); g.rect(0, 0, cw, ch); for (const p of polys) { p.forEach((pt, i) => { const [PX, PY] = fp(pt.x, pt.y); const X = PX * sx, Y = PY * sy; if (i) g.lineTo(X, Y); else g.moveTo(X, Y); }); g.closePath(); } g.fill("evenodd"); };
+      const darken = (polys, alpha) => { /* v2.01: the lit polys are CUT OUT of the darkness with destination-out (a true union). The old single-path g.fill("evenodd") re-darkened every overlap lens — the same defect as the 2D shades. */
+        const off = darken._off || (darken._off = document.createElement("canvas"));
+        if (off.width !== cw || off.height !== ch) { off.width = cw; off.height = ch; }
+        const og = off.getContext("2d");
+        og.globalCompositeOperation = "source-over";
+        og.clearRect(0, 0, cw, ch);
+        og.fillStyle = `rgba(2,3,6,${alpha})`; og.fillRect(0, 0, cw, ch);
+        og.globalCompositeOperation = "destination-out";
+        og.fillStyle = "rgba(0,0,0,1)";
+        for (const p of polys) { og.beginPath(); p.forEach((pt, i) => { const [PX, PY] = fp(pt.x, pt.y); const X = PX * sx, Y = PY * sy; if (i) og.lineTo(X, Y); else og.moveTo(X, Y); }); og.closePath(); og.fill(); }
+        g.drawImage(off, 0, 0); };
       darken(brightP, 0.36); darken(dimP, 0.92);
     }
     const tex = new THREE.CanvasTexture(cv);
@@ -6734,6 +6804,7 @@ function floorConnected(L, cols, rows){
     /* light sources as real lights (first N) + a visible flame marker */
     let li = 0;
     for (const src of lightState.lights) {
+      if (src.on === false) continue; /* v2.01: doused lights get no 3D point light */
       if (li >= TD_CAPS.pointLights) break;
       const [lx, lz] = tdW(src.x, src.y);
       const pl = new THREE.PointLight(new THREE.Color(src.color || "#ffb347"), 0.85, Math.max(2, (src.dim || 20) / feetPerSquare), 1.6);
@@ -6780,7 +6851,7 @@ function floorConnected(L, cols, rows){
     TD.counts.tokens = n;
   }
   function tdSignature(){
-    return JSON.stringify([currentMapId, tokens.map(t => [t.id, t.x, t.y, t.gm ? 1 : 0, t.img || t.sym || ""]), lightState.enabled, lightState.walls.map(w => w.open ? 1 : 0), lightState.lights.map(s => [s.x, s.y, s.dim]),
+    return JSON.stringify([currentMapId, tokens.map(t => [t.id, t.x, t.y, t.gm ? 1 : 0, t.img || t.sym || ""]), lightState.enabled, lightState.walls.map(w => w.open ? 1 : 0), lightState.lights.map(s => [s.x, s.y, s.dim, s.on === false ? 0 : 1]), /* v2.01: douse/relight rebuilds the 3D scene */
       fogState.enabled, fogState.revealed.length, drawItems.filter(i => i.type === "stamp").map(i => [i.x, i.y, i.prop || ""]), effectiveGm(), lightPreview, gridOn]);
   }
   async function tdLoadGenData(){
@@ -7016,7 +7087,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0134";
+        var BUILD_STAMP = "2026-11-08-0144";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8883,6 +8954,7 @@ function floorConnected(L, cols, rows){
     if (hit.type === "light") {
       return { title: o.name || "Light", items: [
         { label: "Edit light", fn: function(){ window.vttLights.openEditor(o); } },
+        { label: o.on === false ? "Turn light on" : "Turn light off", fn: function(){ window.vttLights.toggleOn(o); } },
         { label: "Delete light", danger: true, fn: function(){ if (confirm("Remove the light \"" + (o.name || "light") + "\"?")) window.vttLights.del(o); } }
       ] };
     }
