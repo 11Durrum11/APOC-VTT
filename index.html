@@ -7286,7 +7286,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-0902";
+        var BUILD_STAMP = "2026-11-08-0951";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -14223,5 +14223,24 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   setInterval(clampLib, 3000);
 })();
 </script>
+
+<style id="APOC-V217">
+/* APOC-V217 (Shaun, voice call 2026-11-08 ~09:40): PHONE ONLY — the Art
+   Library squeezed to its minimums on the right. Opener tab shrunk to
+   its label; library buttons tight to their labels; the drawer pulled
+   right and narrowed from both sides (left+right minimum) to the
+   smallest width that still works. Desktop (>820px) untouched. */
+@media (max-width:820px){
+  #repoTab{padding:10px 5px;min-height:0;font-size:.8rem}
+  #mapPanel .map-repo{width:min(224px,70vw)}
+  #mapPanel .map-repo.lib-open{width:min(224px,70vw) !important;padding:8px}
+  .map-repo .nest-head{min-height:24px;padding:3px 6px;font-size:.85rem;line-height:1.15;border-radius:7px}
+  #artLibrary #mapsNest > .nest-head{min-height:24px;padding:3px 6px;font-size:.85rem;line-height:1.15}
+  #monsterNest > .nest-head, #npcNest > .nest-head{padding:3px 6px}
+  .map-repo .nest-head .muted{font-size:.7rem}
+  #mapPanel #artLibrary #tokenLib:not([hidden]){grid-template-columns:1fr}
+  .map-repo .btn{min-height:30px;padding:5px 8px;font-size:.85rem}
+}
+</style>
 </body>
 </html>
