@@ -726,6 +726,8 @@ body.map-expanded .stage-row{display:contents}
 .ps-recent{width:18px;height:18px;border:1px solid rgba(255,255,255,.45);border-radius:4px;padding:0;cursor:pointer;flex:none}
 .ps-recents .muted{font-size:.72rem}
 #psPreset{max-width:130px}
+.ps-imp{display:flex;gap:6px;align-items:center;padding:6px 2px 2px}
+.ps-imp img{width:26px;height:26px;object-fit:contain;border:1px solid rgba(255,255,255,.35);border-radius:4px}
 </style>
 </head>
 <body data-scene="bastion-streets">
@@ -863,7 +865,7 @@ body.map-expanded .stage-row{display:contents}
             <div class="lib-panel" id="stampLib" hidden>
               <div class="nest" id="stampsNest">
                 <button type="button" class="nest-head" aria-expanded="false">Stamps</button>
-                <div class="nest-body"><div class="lib-grid" id="stampGrid"></div></div>
+                <div class="nest-body"><div class="lib-grid" id="stampGrid"></div><div class="ps-imp"><button type="button" class="btn" id="psImgBtn">Import image…</button><img id="psImgThumb" alt="" hidden><span class="muted" id="psImgName"></span></div><input type="file" id="psImgFile" accept="image/*" hidden></div>
               </div>
             </div>
           </div>
@@ -993,6 +995,14 @@ body.map-expanded .stage-row{display:contents}
       <div class="field" style="flex:0 1 auto">
         <label for="psHard">Hardness</label>
         <input id="psHard" type="range" min="0" max="100" step="5" value="100" style="width:90px"> <output class="ps-out" id="psHardOut">100%</output>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="psRound">Roundness</label>
+        <input id="psRound" type="range" min="10" max="100" step="5" value="100" style="width:90px"> <output class="ps-out" id="psRoundOut">100%</output>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="psRoundAng">Brush angle</label>
+        <input id="psRoundAng" type="range" min="0" max="180" step="5" value="0" style="width:90px"> <output class="ps-out" id="psRoundAngOut">0°</output>
       </div>
       <div class="field" style="flex:0 1 auto">
         <label for="psTol">Fill tolerance</label>
@@ -2760,7 +2770,7 @@ setInterval(loadSharedEntries, 60000);
         const h2 = [B[0] + HL * Math.cos(ang - 2.6), B[1] + HL * Math.sin(ang - 2.6)];
         drawLayer.addLayer(L.polygon([uToLatLng(B[0], B[1]), uToLatLng(h1[0], h1[1]), uToLatLng(h2[0], h2[1])], { ...st, fillOpacity: 0.85 * lop }));
       }
-      else if (it.type === "rect") drawLayer.addLayer(L.rectangle([toLatLng(it.x, it.y), toLatLng(it.x + it.w, it.y + it.h)], { ...st, fillOpacity: fo }));
+      else if (it.type === "rect") drawLayer.addLayer(L.rectangle([toLatLng(it.x, it.y), toLatLng(it.x + it.w, it.y + it.h)], { ...st, weight: it.sw || it.w || 3, fillOpacity: fo }));
       else if (it.type === "circle") drawLayer.addLayer(L.circle(toLatLng(it.x, it.y), { ...st, radius: it.r / 100 * MW, fillOpacity: fo }));
       else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : (it.fg || ldef.id === "fg") ? "layerForeground" : "layerTokens", icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop};font-size:${it.tsz ? it.tsz + "px" : ".85rem"};font-family:${it.tfont || "inherit"}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
       else if (it.type === "ellipse") {
@@ -2963,7 +2973,7 @@ setInterval(loadSharedEntries, 60000);
       if (du > 3) drawPts.push([p.x, p.y]);
       previewLayer.addLayer(L.polyline(drawPts.map(q => toLatLng(q[0], q[1])), { color, weight: curDrawWidth(), interactive: false }));
     } else if (tool === "rect") {
-      const r = rectFromDrag(drawStart.p, p);
+      const r = rectFromDrag(drawStart.p, psShiftHeld(e) ? psSquarePt(drawStart.p, p) : p);
       previewLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { color, weight: 2, fillColor: color, fillOpacity: 0.18, interactive: false }));
     } else if (tool === "circle") {
       const r = Math.hypot((p.x - drawStart.p.x) / 100 * MW, (p.y - drawStart.p.y) / 100 * MH);
@@ -3001,7 +3011,7 @@ setInterval(loadSharedEntries, 60000);
     let item = null;
     if (tool === "line" && startPts && startPts.length > 1) item = { type: "line", pts: smoothLine(startPts), color, w: curDrawWidth(), ...layerPatch };
     else if (tool === "arrow") { const d = Math.hypot((p.x - start.p.x) / 100 * MW, (p.y - start.p.y) / 100 * MH); if (d > 2) item = { type: "arrow", a: [start.p.x, start.p.y], b: [p.x, p.y], color, w: curDrawWidth(), ...layerPatch }; }
-    else if (tool === "rect") { const r = rectFromDrag(start.p, p); if (r.w > 0.1 && r.h > 0.1) item = { type: "rect", ...r, color, w: curDrawWidth(), fill: curDrawFill(), ...layerPatch }; }
+    else if (tool === "rect") { const r = rectFromDrag(start.p, psShiftHeld(e) ? psSquarePt(start.p, p) : p); if (r.w > 0.1 && r.h > 0.1) item = { type: "rect", ...r, color, sw: curDrawWidth(), fill: curDrawFill(), ...layerPatch }; }
     else if (tool === "circle") {
       const rUnits = Math.hypot((p.x - start.p.x) / 100 * MW, (p.y - start.p.y) / 100 * MH);
       if (rUnits > 2) item = { type: "circle", x: start.p.x, y: start.p.y, r: rUnits / MW * 100, color, w: curDrawWidth(), fill: curDrawFill(), ...layerPatch };
@@ -3514,7 +3524,7 @@ setInterval(loadSharedEntries, 60000);
       inner = `<img src="${arSrc}" alt="" style="width:${iw}px;height:${ih}px;opacity:${op}${arSrc !== pa.url ? `;transform:rotate(${rot}deg)` : ""}">`;
       return L.divIcon({ className: "stamp-icon", html: inner, iconSize: [iw, ih], iconAnchor: [iw / 2, ih / 2] });
     }
-    if (it.img) inner = `<img src="${esc(it.img)}" alt="" style="width:${px}px;height:${px}px;transform:rotate(${rot}deg);opacity:${op}">`;
+    if (it.img) { const ih = it.ar ? Math.max(12, Math.round(px / it.ar)) : px; inner = `<img src="${esc(it.img)}" alt="" style="width:${px}px;height:${ih}px;transform:rotate(${rot}deg);opacity:${op}">`; return L.divIcon({ className: "stamp-icon", html: inner, iconSize: [px, ih], iconAnchor: [px / 2, ih / 2] }); }
     else {
       const hex = LIB_HEX[it.color] || LIB_HEX.amber;
       inner = `<span class="lib-sym" style="width:${px}px;height:${px}px;font-size:${Math.round(px * 0.52)}px;background:${hex}33;border:2px solid ${hex};transform:rotate(${rot}deg);opacity:${op}">${esc(it.sym || "?")}</span>`;
@@ -3745,7 +3755,7 @@ setInterval(loadSharedEntries, 60000);
   function placeStamp(p){
     if (!curStamp) return;
     const it = { type: "stamp", x: p.x, y: p.y, size: parseFloat($("stampSize").value) || 2, rot: parseInt($("stampRot").value, 10) || 0, ...curLayerPatch() };
-    if (curStamp.img) it.img = curStamp.img;
+    if (curStamp.img) { it.img = curStamp.img; if (curStamp.ar) it.ar = curStamp.ar; }
     else { it.sym = curStamp.sym; it.color = curStamp.color; }
     const o = curDrawOpacity();
     if (o < 1) it.opacity = Math.round(o * 100) / 100;
@@ -3887,6 +3897,11 @@ setInterval(loadSharedEntries, 60000);
     ctx.save();
     if (erase) ctx.globalCompositeOperation = "destination-out";
     const hard = psHard();
+    /* APOC-PS2: roundness squashes the round stamp into an ellipse
+       (angle rotates it) — one transform around the existing stamp, so
+       hardness/flow/eraser behaviour is unchanged. */
+    const rnd = psRound();
+    if (rnd < 0.999) { const ang = psRoundAng(); ctx.translate(pt.x, pt.y); if (ang) ctx.rotate(ang); ctx.scale(1, rnd); ctx.translate(-pt.x, -pt.y); }
     if (hard >= 0.99) {
       ctx.globalAlpha = a;
       ctx.fillStyle = erase ? "#000" : curDrawColor();
@@ -3916,7 +3931,7 @@ setInterval(loadSharedEntries, 60000);
        and hardness/flow apply along the whole stroke, not just at dots. */
     const r = Math.max(0.6, brushRadius(rec));
     const dist = Math.hypot(pt.x - last.x, pt.y - last.y);
-    const steps = Math.max(1, Math.min(64, Math.ceil(dist / Math.max(1, r * 0.35))));
+    const steps = Math.max(1, Math.min(96, Math.ceil(dist / Math.max(1, r * 0.35 * Math.max(0.4, Math.min(1, psRound()))))));
     for (let i = 1; i <= steps; i++) psStamp(rec, { x: last.x + (pt.x - last.x) * i / steps, y: last.y + (pt.y - last.y) * i / steps }, paintStroke.erase);
     paintStroke.last = pt;
     paintPreviewTick(rec, paintStroke.layerId);
@@ -4133,7 +4148,7 @@ setInterval(loadSharedEntries, 60000);
     }
     if (paintStroke) { paintMove(p); return; }
     if (cloneStroke) { cloneMove(p); return; }
-    if (artStart && artStart.tool === "ellipse") ellipsePreview(artStart.p, p);
+    if (artStart && artStart.tool === "ellipse") ellipsePreview(artStart.p, psShiftHeld(e) ? psSquarePt(artStart.p, p) : p);
   });
   map.on("mouseup", async e => {
     const p = toXY(e.latlng);
@@ -4159,9 +4174,10 @@ setInterval(loadSharedEntries, 60000);
       artStart = null;
       artFx.clearLayers();
       if (selItem) renderSelection();
-      const rx = Math.abs(p.x - a.x) / 2, ry = Math.abs(p.y - a.y) / 2;
+      const ep = psShiftHeld(e) ? psSquarePt(a, p) : p;
+      const rx = Math.abs(ep.x - a.x) / 2, ry = Math.abs(ep.y - a.y) / 2;
       if (armedMode === "draw" && rx > 0.1 && ry > 0.1) {
-        drawItems.push(withOp({ type: "ellipse", x: (a.x + p.x) / 2, y: (a.y + p.y) / 2, rx, ry, color: curDrawColor(), w: curDrawWidth(), fill: curDrawFill(), ...curLayerPatch() }));
+        drawItems.push(withOp({ type: "ellipse", x: (a.x + ep.x) / 2, y: (a.y + ep.y) / 2, rx, ry, color: curDrawColor(), w: curDrawWidth(), fill: curDrawFill(), ...curLayerPatch() }));
         const ok = await saveDraw(); renderDraw();
         drawStatusEl.textContent = ok ? "Ellipse saved — the table sees it." : "Ellipse didn't save — try again.";
         if (!ok) loadDraw(true);
@@ -4656,6 +4672,8 @@ setInterval(loadSharedEntries, 60000);
      per-map draw store, so player/TV copies render identically. */
   function psFlow(){ const v = parseFloat((($("psFlow") || {}).value)); return Number.isFinite(v) ? Math.min(1, Math.max(0.02, v)) : 1; }
   function psHard(){ const v = parseFloat((($("psHard") || {}).value)); return Number.isFinite(v) ? Math.min(1, Math.max(0, v / 100)) : 1; }
+  function psRound(){ const v = parseFloat((($("psRound") || {}).value)); return Number.isFinite(v) ? Math.min(1, Math.max(0.1, v / 100)) : 1; }
+  function psRoundAng(){ const v = parseFloat((($("psRoundAng") || {}).value)); return Number.isFinite(v) ? (v * Math.PI / 180) : 0; }
   function psRgb(hex){ const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "")); if (!m) return "232,163,61"; const n = parseInt(m[1], 16); return ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255); }
   /* recent colours (per device) */
   let psRecents = [];
@@ -4696,7 +4714,7 @@ setInterval(loadSharedEntries, 60000);
   setInterval(psSyncSwatches, 900);
   /* numeric readouts */
   function psWireReadouts(){
-    const pairs = [["drawWidthRange", "psSizeOut", v => v + " px"], ["drawOpacity", "psOpOut", v => Math.round(v * 100) + "%"], ["psFlow", "psFlowOut", v => Math.round(v * 100) + "%"], ["psHard", "psHardOut", v => v + "%"], ["psTol", "psTolOut", v => String(v)]];
+    const pairs = [["drawWidthRange", "psSizeOut", v => v + " px"], ["drawOpacity", "psOpOut", v => Math.round(v * 100) + "%"], ["psFlow", "psFlowOut", v => Math.round(v * 100) + "%"], ["psHard", "psHardOut", v => v + "%"], ["psRound", "psRoundOut", v => v + "%"], ["psRoundAng", "psRoundAngOut", v => v + "°"], ["psTol", "psTolOut", v => String(v)]];
     for (const [src, out, fmt] of pairs) {
       const s = $(src), o = $(out); if (!s || !o) continue;
       const upd = () => { o.textContent = fmt(parseFloat(s.value)); };
@@ -4728,6 +4746,8 @@ setInterval(loadSharedEntries, 60000);
     $("drawOpacity").value = String(p.op); $("drawOpacity").dispatchEvent(new Event("input"));
     $("psFlow").value = String(p.flow); $("psFlow").dispatchEvent(new Event("input"));
     $("psHard").value = String(p.hard); $("psHard").dispatchEvent(new Event("input"));
+    if (p.round != null && $("psRound")) { $("psRound").value = String(p.round); $("psRound").dispatchEvent(new Event("input")); }
+    if (p.rang != null && $("psRoundAng")) { $("psRoundAng").value = String(p.rang); $("psRoundAng").dispatchEvent(new Event("input")); }
     psWireReadouts();
     drawStatusEl.textContent = "Brush preset applied.";
   }
@@ -4740,7 +4760,7 @@ setInterval(loadSharedEntries, 60000);
     const name = prompt("Preset name:");
     if (!name || !name.trim()) return;
     const list = psCustomPresets();
-    list.push({ name: name.trim().slice(0, 28), p: { tool: $("drawTool").value || "paint", size: parseFloat($("drawWidthRange").value) || 3, op: parseFloat($("drawOpacity").value) || 1, flow: psFlow(), hard: Math.round(psHard() * 100) } });
+    list.push({ name: name.trim().slice(0, 28), p: { tool: $("drawTool").value || "paint", size: parseFloat($("drawWidthRange").value) || 3, op: parseFloat($("drawOpacity").value) || 1, flow: psFlow(), hard: Math.round(psHard() * 100), round: Math.round(psRound() * 100), rang: Math.round(psRoundAng() * 180 / Math.PI) } });
     try { localStorage.setItem("apocVttBrushPresetsV1", JSON.stringify(list.slice(-24))); } catch(e) {}
     psBuildPresets();
     drawStatusEl.textContent = "Preset saved on this device.";
@@ -4783,7 +4803,7 @@ setInterval(loadSharedEntries, 60000);
     const tool = $("drawTool").value, p = toXY(e.latlng);
     if (psStart && (psStart.tool === "sline" || psStart.tool === "gradient")) {
       previewLayer.clearLayers();
-      if (psStart.tool === "sline") previewLayer.addLayer(L.polyline([toLatLng(psStart.p.x, psStart.p.y), e.latlng], { color: curDrawColor(), weight: curDrawWidth(), interactive: false }));
+      if (psStart.tool === "sline") { const sp = psShiftHeld(e) ? psSnap45Pt(psStart.p, p) : p; previewLayer.addLayer(L.polyline([toLatLng(psStart.p.x, psStart.p.y), toLatLng(sp.x, sp.y)], { color: curDrawColor(), weight: curDrawWidth(), interactive: false })); }
       else previewLayer.addLayer(L.rectangle([toLatLng(psStart.p.x, psStart.p.y), e.latlng], { color: curDrawColor(), weight: 1, dashArray: "5 5", fillColor: curDrawColor(), fillOpacity: 0.25, interactive: false }));
       return;
     }
@@ -4811,8 +4831,9 @@ setInterval(loadSharedEntries, 60000);
     if (armedMode !== "draw") return;
     const p = toXY(e.latlng);
     if (st.tool === "sline") {
-      if (Math.hypot(p.x - st.p.x, p.y - st.p.y) < 0.3) return;
-      drawItems.push(withOp({ type: "line", pts: [[st.p.x, st.p.y], [p.x, p.y]], color: curDrawColor(), w: curDrawWidth(), ...curLayerPatch() }));
+      const sp = psShiftHeld(e) ? psSnap45Pt(st.p, p) : p;
+      if (Math.hypot(sp.x - st.p.x, sp.y - st.p.y) < 0.3) return;
+      drawItems.push(withOp({ type: "line", pts: [[st.p.x, st.p.y], [sp.x, sp.y]], color: curDrawColor(), w: curDrawWidth(), ...curLayerPatch() }));
       const ok = await saveDraw(); renderDraw();
       drawStatusEl.textContent = ok ? "Line drawn." : "Line didn't save — refreshed.";
       if (!ok) loadDraw(true);
@@ -4835,8 +4856,55 @@ setInterval(loadSharedEntries, 60000);
     }
   });
   map.on("move zoom resize", () => { try { psResetPreview(); } catch(e) {} });
+  /* APOC-PS2: shift-constrain for shapes. Rect locks to a square and
+     ellipse to a circle — true in frame pixels (MW/MH convert the
+     percent-of-frame points) — and the straight line snaps to 45°
+     steps. Held-shift is read off the Leaflet event's originalEvent. */
+  function psShiftHeld(e){ return !!(e && e.originalEvent && e.originalEvent.shiftKey); }
+  function psSquarePt(a, p){
+    const dx = (p.x - a.x) / 100 * MW, dy = (p.y - a.y) / 100 * MH;
+    const s = Math.max(Math.abs(dx), Math.abs(dy));
+    return { x: a.x + (dx < 0 ? -s : s) / MW * 100, y: a.y + (dy < 0 ? -s : s) / MH * 100 };
+  }
+  function psSnap45Pt(a, p){
+    const dx = (p.x - a.x) / 100 * MW, dy = (p.y - a.y) / 100 * MH;
+    const len = Math.hypot(dx, dy); if (!len) return p;
+    const step = Math.PI / 4, ang = Math.round(Math.atan2(dy, dx) / step) * step;
+    return { x: a.x + Math.cos(ang) * len / MW * 100, y: a.y + Math.sin(ang) * len / MH * 100 };
+  }
+  window.__psShift = { held: psShiftHeld, square: psSquarePt, snap45: psSnap45Pt };
+  /* APOC-PS2: image-stamp import — a picked image file (downscaled to a
+     512px longest side) becomes the current stamp; placing it stores a
+     normal stamp item in the per-map draw row, so it saves, syncs and
+     reloads like any other stamp. */
+  function psImportImageFile(file){
+    if (!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const im = new Image();
+      im.onload = () => {
+        const sc = Math.min(1, 512 / Math.max(im.width, im.height));
+        const w = Math.max(1, Math.round(im.width * sc)), h = Math.max(1, Math.round(im.height * sc));
+        const c = document.createElement("canvas"); c.width = w; c.height = h;
+        c.getContext("2d").drawImage(im, 0, 0, w, h);
+        let url = ""; try { url = c.toDataURL("image/webp", 0.85); } catch(e) {}
+        if (!url || url.indexOf("data:image/webp") !== 0) url = c.toDataURL("image/png");
+        curStamp = { img: url, ar: Math.round(w / h * 1000) / 1000 };
+        const th = $("psImgThumb"); if (th) { th.src = url; th.hidden = false; }
+        const nm = $("psImgName"); if (nm) nm.textContent = file.name || "image";
+        const grid = $("stampGrid"); if (grid) grid.querySelectorAll(".lib-item").forEach(x => x.classList.remove("stamp-picked"));
+        if ($("drawTool").value !== "stamp") { $("drawTool").value = "stamp"; $("drawTool").dispatchEvent(new Event("change")); }
+        drawStatusEl.textContent = "Image stamp ready — tap the map to place it (Stamp size / rotation apply).";
+      };
+      im.onerror = () => { drawStatusEl.textContent = "That file isn't an image I can read."; };
+      im.src = rd.result;
+    };
+    rd.readAsDataURL(file);
+  }
+  if ($("psImgBtn")) $("psImgBtn").addEventListener("click", () => { const f = $("psImgFile"); if (f) f.click(); });
+  if ($("psImgFile")) $("psImgFile").addEventListener("change", e => { psImportImageFile(e.target.files && e.target.files[0]); e.target.value = ""; });
   psWireReadouts(); psRenderRecents(); psBuildPresets(); psSyncSwatches(); psSyncBlend(); psSyncTextFields();
-  window.__ps = { version: "PS1", flow: psFlow, hard: psHard, bg: () => psBg, recents: () => psRecents.slice() };
+  window.__ps = { version: "PS2", flow: psFlow, hard: psHard, round: psRound, rang: psRoundAng, bg: () => psBg, recents: () => psRecents.slice() };
 
   /* ---- Colour wheel (Shaun, 2026-11-06: a very in-depth colour wheel
      INSTEAD of the multi-panel swatch palette). A full HSV disc — hue by
@@ -7798,7 +7866,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-2034";
+        var BUILD_STAMP = "2026-11-08-2127";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
