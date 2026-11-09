@@ -718,6 +718,15 @@ body.map-expanded .stage-row{display:contents}
    stage never hangs blank. */
 #apocMap.apoc-hold211 .leaflet-pane{opacity:0!important}
 </style>
+<style id="APOC-PS1">
+.ps-out{font-size:.72rem;min-width:2.4em;display:inline-block;color:#f2e7c8}
+.ps-sw{width:26px;height:26px;border:2px solid #f2e7c8;border-radius:6px;padding:0;cursor:pointer;flex:none}
+.ps-swrow{display:flex;gap:5px;align-items:center}
+.ps-recents{display:flex;gap:4px;flex-wrap:wrap;align-items:center;min-height:18px}
+.ps-recent{width:18px;height:18px;border:1px solid rgba(255,255,255,.45);border-radius:4px;padding:0;cursor:pointer;flex:none}
+.ps-recents .muted{font-size:.72rem}
+#psPreset{max-width:130px}
+</style>
 </head>
 <body data-scene="bastion-streets">
 <script>/* v1.07: Push to TV — a ?display copy of this page is the map-only TV view; flag it before first paint so no controls ever flash. */ if (new URLSearchParams(location.search).has("display")) document.body.classList.add("displaying");</script>
@@ -949,6 +958,9 @@ body.map-expanded .stage-row{display:contents}
           <option value="stamp">Stamp</option>
           <option value="pick">Eyedropper</option>
           <option value="bucket">Fill bucket</option>
+          <option value="sline">Straight line</option>
+          <option value="gradient">Gradient fill</option>
+          <option value="smudge">Smudge</option>
           <option value="erase">Eraser</option>
         </select>
       </div>
@@ -968,11 +980,49 @@ body.map-expanded .stage-row{display:contents}
       </div>
       <div class="field" style="flex:0 1 auto">
         <label for="drawWidthRange">Brush size</label>
-        <input id="drawWidthRange" type="range" min="1" max="24" step="1" value="3" style="width:110px">
+        <input id="drawWidthRange" type="range" min="1" max="48" step="1" value="3" style="width:110px"> <output class="ps-out" id="psSizeOut">3 px</output>
       </div>
       <div class="field" style="flex:0 1 auto">
         <label for="drawOpacity">Opacity</label>
-        <input id="drawOpacity" type="range" min="0.1" max="1" step="0.05" value="1" style="width:110px">
+        <input id="drawOpacity" type="range" min="0.1" max="1" step="0.05" value="1" style="width:110px"> <output class="ps-out" id="psOpOut">100%</output>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="psFlow">Flow</label>
+        <input id="psFlow" type="range" min="0.05" max="1" step="0.05" value="1" style="width:90px"> <output class="ps-out" id="psFlowOut">100%</output>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="psHard">Hardness</label>
+        <input id="psHard" type="range" min="0" max="100" step="5" value="100" style="width:90px"> <output class="ps-out" id="psHardOut">100%</output>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="psTol">Fill tolerance</label>
+        <input id="psTol" type="range" min="0" max="80" step="2" value="14" style="width:90px"> <output class="ps-out" id="psTolOut">14</output>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label>FG / BG</label>
+        <span class="ps-swrow"><button type="button" class="ps-sw" id="psFg" style="background:#e8a33d" title="Foreground colour — opens the colour wheel"></button><button type="button" class="ps-sw" id="psBg" style="background:#20242c" title="Background colour — opens the colour wheel"></button><button type="button" class="btn" id="psSwap" title="Swap foreground / background (X)">Swap</button></span>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="psBlend">Layer blend</label>
+        <select id="psBlend">
+          <option value="normal" selected>Normal</option>
+          <option value="multiply">Multiply</option>
+          <option value="screen">Screen</option>
+          <option value="overlay">Overlay</option>
+          <option value="darken">Darken</option>
+          <option value="lighten">Lighten</option>
+        </select>
+      </div>
+      <div class="field" style="flex:0 1 auto">
+        <label for="psPreset">Brush preset</label>
+        <span class="ps-swrow"><select id="psPreset"><option value="">Presets…</option></select><button type="button" class="btn" id="psPresetSave">Save preset</button></span>
+      </div>
+      <div class="field" style="flex:0 1 auto" id="psTextFields" hidden>
+        <label for="psTextSize">Text size / font</label>
+        <span class="ps-swrow"><input id="psTextSize" type="number" min="10" max="72" step="1" value="18" style="width:64px"><select id="psTextFont"><option value="">Default</option><option value="Georgia, serif">Serif</option><option value="'Trebuchet MS', sans-serif">Trebuchet</option><option value="'Courier New', monospace">Mono</option><option value="Impact, sans-serif">Impact</option></select></span>
+      </div>
+      <div class="field" style="flex:1 1 100%">
+        <div class="ps-recents" id="psRecents"><span class="muted">Recent colours appear here.</span></div>
       </div>
       <div class="field" style="flex:0 1 auto">
         <label for="drawFillMode">Shape fill</label>
@@ -2701,14 +2751,14 @@ setInterval(loadSharedEntries, 60000);
       }
       else if (it.type === "rect") drawLayer.addLayer(L.rectangle([toLatLng(it.x, it.y), toLatLng(it.x + it.w, it.y + it.h)], { ...st, fillOpacity: fo }));
       else if (it.type === "circle") drawLayer.addLayer(L.circle(toLatLng(it.x, it.y), { ...st, radius: it.r / 100 * MW, fillOpacity: fo }));
-      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : (it.fg || ldef.id === "fg") ? "layerForeground" : "layerTokens", icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
+      else if (it.type === "text") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : (it.fg || ldef.id === "fg") ? "layerForeground" : "layerTokens", icon: L.divIcon({ className: "atlas-icon", html: `<span class="draw-text" style="color:${it.color || "#f2e7c8"};opacity:${lop};font-size:${it.tsz ? it.tsz + "px" : ".85rem"};font-family:${it.tfont || "inherit"}">${esc(it.text)}</span>`, iconAnchor: [0, 0] }), interactive: false }));
       else if (it.type === "ellipse") {
         const epts = [], ecx = it.x / 100 * MW, ecy = it.y / 100 * MH;
         for (let k = 0; k < 48; k++) { const a = k / 48 * Math.PI * 2; epts.push(uToLatLng(ecx + Math.cos(a) * it.rx / 100 * MW, ecy + Math.sin(a) * it.ry / 100 * MH)); }
         drawLayer.addLayer(L.polygon(epts, { ...st, fillOpacity: fo }));
       }
       else if (it.type === "stamp") drawLayer.addLayer(L.marker(toLatLng(it.x, it.y), { pane: (it.gm || ldef.gm) ? "layerGm" : (it.fg || ldef.id === "fg") ? "layerForeground" : "layerTokens", icon: stampIcon(it, lop), interactive: false }));
-      else if (it.type === "paint") drawLayer.addLayer(L.imageOverlay(paintRotUrl(it.data), frameBounds(), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", opacity: lop, interactive: false }));
+      else if (it.type === "paint") { const _po = L.imageOverlay(paintRotUrl(it.data), frameBounds(), { pane: (it.gm || ldef.gm) ? "layerGm" : "layerMap", opacity: lop, interactive: false }); drawLayer.addLayer(_po); try { const _el = _po.getElement(); if (_el) _el.style.mixBlendMode = ldef.blend || "normal"; } catch(e) {} }
       else if (it.type === "template") {
         const anchorTk = it.anchor ? tokens.find(t => t.id === it.anchor) : null;
         const ox = anchorTk ? anchorTk.x : it.x, oy = anchorTk ? anchorTk.y : it.y;
@@ -2828,7 +2878,7 @@ setInterval(loadSharedEntries, 60000);
     if (tool === "text") {
       const text = prompt("Text note:");
       if (text && text.trim()) {
-        drawItems.push(withOp({ type: "text", x: p.x, y: p.y, text: text.trim().slice(0, 80), color: curDrawColor(), ...curLayerPatch() }));
+        drawItems.push(withOp({ type: "text", x: p.x, y: p.y, text: text.trim().slice(0, 80), color: curDrawColor(), tsz: Math.max(10, Math.min(72, parseInt((($("psTextSize") || {}).value), 10) || 18)), tfont: ($("psTextFont") || {}).value || "", ...curLayerPatch() }));
         saveDraw().then(ok => { renderDraw(); drawStatusEl.textContent = ok ? "Note placed." : "Note didn't save."; if (!ok) loadDraw(true); });
       }
       return;
@@ -3747,10 +3797,52 @@ setInterval(loadSharedEntries, 60000);
   function layerLop(id){ const d = drawLayerDef(id); return typeof d.opacity === "number" ? d.opacity : 1; }
   function brushRadius(rec){ return Math.max(1, (curDrawWidth() * CELL / 2) / MW * rec.canvas.width); }
   let paintLive = null, paintLiveAt = 0;
+  function psResetPreview(){
+    const el = window.__psPreviewEl, rec = window.__psPreviewRec;
+    if (!el || !rec) return;
+    try {
+      const b = frameBounds();
+      const tl = map.latLngToLayerPoint(b.getNorthWest());
+      const se = map.latLngToLayerPoint(b.getSouthEast());
+      el.style.width = Math.max(2, Math.round(se.x - tl.x)) + "px";
+      el.style.height = Math.max(2, Math.round(se.y - tl.y)) + "px";
+      L.DomUtil.setTransform(el, tl);
+    } catch(e) {}
+  }
   function paintPreviewTick(rec, layerId){
     const now = Date.now();
     if (now - paintLiveAt < 120) return;
     paintLiveAt = now;
+    /* APOC-PS1 perf: the legacy tick encoded the whole paint canvas to a
+       PNG data URL on every 120 ms tick and pushed it through Leaflet —
+       on a large map that saturates the main thread during a fast stroke.
+       This Leaflet build only accepts IMG urls/elements for imageOverlay
+       (a canvas argument is silently dropped), so the preview instead
+       mounts the working canvas element itself in the paint pane,
+       positioned with Leaflet's own projection: stroke mutations then
+       appear with zero encode cost. The rotated case keeps the legacy
+       path (it needs a rotated copy anyway). Removed at stroke end. */
+    if (!mapRot) {
+      try {
+        if (window.__psPreviewEl !== rec.canvas) {
+          if (window.__psPreviewEl) window.__psPreviewEl.remove();
+          const def = drawLayerDef(layerId);
+          const pane = map.getPane(def.gm ? "layerGm" : "layerMap");
+          if (!pane) throw new Error("no pane");
+          rec.canvas.style.position = "absolute";
+          rec.canvas.style.left = "0"; rec.canvas.style.top = "0";
+          rec.canvas.style.pointerEvents = "none";
+          rec.canvas.style.zIndex = "6";
+          pane.appendChild(rec.canvas);
+          window.__psPreviewEl = rec.canvas;
+        }
+        window.__psPreviewRec = rec;
+        window.__psPreviewEl.style.opacity = String(layerLop(layerId));
+        try { window.__psPreviewEl.style.mixBlendMode = drawLayerDef(layerId).blend || "normal"; } catch(e) {}
+        psResetPreview();
+        return;
+      } catch(e) { /* fall through to the legacy encode path */ }
+    }
     let url;
     try { url = (mapRot ? rotateCanvasCopy(rec.canvas, mapRot) : rec.canvas).toDataURL("image/png"); } catch(e) { return; }
     if (!paintLive) paintLive = L.imageOverlay(url, frameBounds(), { interactive: false, opacity: layerLop(layerId) }).addTo(paintFx);
@@ -3758,6 +3850,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function endRasterStroke(layerId){
     if (paintLive) { paintFx.removeLayer(paintLive); paintLive = null; }
+    if (window.__psPreviewEl) { try { window.__psPreviewEl.remove(); } catch(e) {} window.__psPreviewEl = null; window.__psPreviewRec = null; }
     serializePaint(layerId);
     const ok = await saveDraw(); renderDraw();
     drawStatusEl.textContent = ok ? "Painting saved — the table sees it." : "Painting didn't save — refreshed.";
@@ -3771,29 +3864,49 @@ setInterval(loadSharedEntries, 60000);
     paintStroke = { layerId, rec, erase: !!erase, last: null };
     paintStampAt(p);
   }
+  /* APOC-PS1: one brush stamp honouring flow + hardness. Hardness < 100
+     feathers the edge with a radial gradient; flow scales the alpha each
+     stamp lays down (stamps overlap along a stroke, so flow builds up
+     gradually like a real airbrush/brush flow control). The eraser uses
+     the same stamp through destination-out, so it erases to fully
+     transparent with the same size/flow/hardness. */
+  function psStamp(rec, pt, erase){
+    const ctx = rec.ctx, r = Math.max(0.6, brushRadius(rec));
+    const a = Math.max(0.02, Math.min(1, curDrawOpacity() * psFlow()));
+    ctx.save();
+    if (erase) ctx.globalCompositeOperation = "destination-out";
+    const hard = psHard();
+    if (hard >= 0.99) {
+      ctx.globalAlpha = a;
+      ctx.fillStyle = erase ? "#000" : curDrawColor();
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2); ctx.fill();
+    } else {
+      const g = ctx.createRadialGradient(pt.x, pt.y, r * hard, pt.x, pt.y, r);
+      const col = erase ? "0,0,0" : psRgb(curDrawColor());
+      g.addColorStop(0, "rgba(" + col + "," + a + ")");
+      g.addColorStop(1, "rgba(" + col + ",0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
   function paintStampAt(p){
     if (!paintStroke) return;
-    const rec = paintStroke.rec, ctx = rec.ctx, pt = paintXY(rec, p);
-    ctx.save();
-    if (paintStroke.erase) ctx.globalCompositeOperation = "destination-out";
-    ctx.globalAlpha = paintStroke.erase ? 1 : curDrawOpacity();
-    ctx.fillStyle = curDrawColor();
-    ctx.beginPath(); ctx.arc(pt.x, pt.y, brushRadius(rec), 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
+    const rec = paintStroke.rec, pt = paintXY(rec, p);
+    psStamp(rec, pt, paintStroke.erase);
     paintStroke.last = pt;
     paintPreviewTick(rec, paintStroke.layerId);
   }
   function paintMove(p){
     if (!paintStroke) return;
-    const rec = paintStroke.rec, ctx = rec.ctx, pt = paintXY(rec, p), last = paintStroke.last || pt;
-    ctx.save();
-    if (paintStroke.erase) ctx.globalCompositeOperation = "destination-out";
-    ctx.globalAlpha = paintStroke.erase ? 1 : curDrawOpacity();
-    ctx.strokeStyle = curDrawColor();
-    ctx.lineWidth = brushRadius(rec) * 2;
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(pt.x, pt.y); ctx.stroke();
-    ctx.restore();
+    const rec = paintStroke.rec, pt = paintXY(rec, p), last = paintStroke.last || pt;
+    /* APOC-PS1: interpolated stamps along the segment (spacing ~35% of
+       the radius) — smooth strokes at any speed, no polygonal corners,
+       and hardness/flow apply along the whole stroke, not just at dots. */
+    const r = Math.max(0.6, brushRadius(rec));
+    const dist = Math.hypot(pt.x - last.x, pt.y - last.y);
+    const steps = Math.max(1, Math.min(64, Math.ceil(dist / Math.max(1, r * 0.35))));
+    for (let i = 1; i <= steps; i++) psStamp(rec, { x: last.x + (pt.x - last.x) * i / steps, y: last.y + (pt.y - last.y) * i / steps }, paintStroke.erase);
     paintStroke.last = pt;
     paintPreviewTick(rec, paintStroke.layerId);
   }
@@ -3864,6 +3977,7 @@ setInterval(loadSharedEntries, 60000);
   }
   function hex2(v){ return Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0"); }
   function setDrawColor(hex){
+    try { noteRecentColor(hex); } catch(e) {}
     $("drawColor").value = hex;
     const aChip = $("drawColorAnyChip"); if (aChip) aChip.style.background = hex;
     const aHx = $("drawColorAnyHex"); if (aHx) aHx.textContent = hex;
@@ -3930,7 +4044,7 @@ setInterval(loadSharedEntries, 60000);
     const fa = Math.round(alpha * 255);
     if (sr === fr && sg === fg && sb === fb && sa === fa) return;
     const seen = new Uint8Array(w * h);
-    const match = i => Math.abs(d[i] - sr) < 14 && Math.abs(d[i + 1] - sg) < 14 && Math.abs(d[i + 2] - sb) < 14 && Math.abs(d[i + 3] - sa) < 14;
+    const TOL = Math.max(1, parseInt((($("psTol") || {}).value), 10) || 14); const match = i => Math.abs(d[i] - sr) < TOL && Math.abs(d[i + 1] - sg) < TOL && Math.abs(d[i + 2] - sb) < TOL && Math.abs(d[i + 3] - sa) < TOL;
     const stack = [[px, py]];
     while (stack.length) {
       const [cx, cy] = stack.pop();
@@ -4520,6 +4634,199 @@ setInterval(loadSharedEntries, 60000);
     const out = e.originalEvent && (e.originalEvent.altKey || e.originalEvent.shiftKey);
     map.setZoomAround(e.latlng, map.getZoom() + (out ? -1 : 1));
   });
+
+  /* ================= APOC-PS1: Photoshop-level Draw delta =================
+     Adds what the art program did not have: flow/hardness brush model
+     (engine patched above), fill tolerance, foreground/background
+     swatches with swap, recent colours, brush presets, per-layer blend
+     modes (paint overlays), text size/font, and three new tools —
+     Straight line (vector), Gradient fill (raster FG->BG over the drag
+     rectangle), Smudge (raster). Everything stores through the existing
+     per-map draw store, so player/TV copies render identically. */
+  function psFlow(){ const v = parseFloat((($("psFlow") || {}).value)); return Number.isFinite(v) ? Math.min(1, Math.max(0.02, v)) : 1; }
+  function psHard(){ const v = parseFloat((($("psHard") || {}).value)); return Number.isFinite(v) ? Math.min(1, Math.max(0, v / 100)) : 1; }
+  function psRgb(hex){ const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "")); if (!m) return "232,163,61"; const n = parseInt(m[1], 16); return ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255); }
+  /* recent colours (per device) */
+  let psRecents = [];
+  try { psRecents = JSON.parse(localStorage.getItem("apocVttRecentColorsV1") || "[]"); } catch(e) { psRecents = []; }
+  function noteRecentColor(hex){
+    if (!/^#[0-9a-f]{6}$/i.test(String(hex || ""))) return;
+    hex = hex.toLowerCase();
+    psRecents = [hex].concat(psRecents.filter(c => c !== hex)).slice(0, 14);
+    try { localStorage.setItem("apocVttRecentColorsV1", JSON.stringify(psRecents)); } catch(e) {}
+    psRenderRecents();
+  }
+  function psRenderRecents(){
+    const host = $("psRecents"); if (!host) return;
+    if (!psRecents.length) { host.innerHTML = '<span class="muted">Recent colours appear here.</span>'; return; }
+    host.innerHTML = "";
+    for (const c of psRecents) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "ps-recent"; b.style.background = c; b.title = c;
+      b.addEventListener("click", () => setDrawColor(c));
+      host.appendChild(b);
+    }
+  }
+  /* foreground / background */
+  let psBg = "#20242c";
+  try { psBg = localStorage.getItem("apocVttBgColorV1") || psBg; } catch(e) {}
+  function psSyncSwatches(){
+    const fg = $("psFg"), bg = $("psBg");
+    if (fg) fg.style.background = $("drawColor").value;
+    if (bg) bg.style.background = psBg;
+  }
+  function psSetBg(hex){ psBg = hex; try { localStorage.setItem("apocVttBgColorV1", hex); } catch(e) {} psSyncSwatches(); }
+  if ($("psFg")) $("psFg").addEventListener("click", () => toggleWheelFor(null, $("drawColor").value));
+  if ($("psBg")) $("psBg").addEventListener("click", () => toggleWheelFor(hex => psSetBg(hex), psBg));
+  if ($("psSwap")) $("psSwap").addEventListener("click", () => { const old = $("drawColor").value; setDrawColor(psBg); psSetBg(old); });
+  document.addEventListener("keydown", e => {
+    if ((e.key === "x" || e.key === "X") && document.activeElement && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { const old = $("drawColor").value; setDrawColor(psBg); psSetBg(old); }
+  });
+  setInterval(psSyncSwatches, 900);
+  /* numeric readouts */
+  function psWireReadouts(){
+    const pairs = [["drawWidthRange", "psSizeOut", v => v + " px"], ["drawOpacity", "psOpOut", v => Math.round(v * 100) + "%"], ["psFlow", "psFlowOut", v => Math.round(v * 100) + "%"], ["psHard", "psHardOut", v => v + "%"], ["psTol", "psTolOut", v => String(v)]];
+    for (const [src, out, fmt] of pairs) {
+      const s = $(src), o = $(out); if (!s || !o) continue;
+      const upd = () => { o.textContent = fmt(parseFloat(s.value)); };
+      s.addEventListener("input", upd); upd();
+    }
+  }
+  /* brush presets: built-ins + per-device customs */
+  const PS_BUILTINS = [
+    ["Fine liner", { tool: "paint", size: 2, op: 1, flow: 1, hard: 100 }],
+    ["Soft brush", { tool: "paint", size: 14, op: 0.85, flow: 0.55, hard: 15 }],
+    ["Marker", { tool: "paint", size: 7, op: 0.9, flow: 1, hard: 85 }],
+    ["Airbrush", { tool: "spray", size: 14, op: 0.5, flow: 0.3, hard: 0 }],
+    ["Chalk", { tool: "paint", size: 9, op: 0.85, flow: 0.8, hard: 40 }],
+    ["Big eraser", { tool: "erase", size: 18, op: 1, flow: 1, hard: 90 }]
+  ];
+  function psCustomPresets(){ try { return JSON.parse(localStorage.getItem("apocVttBrushPresetsV1") || "[]"); } catch(e) { return []; } }
+  function psBuildPresets(){
+    const sel = $("psPreset"); if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">Presets…</option>';
+    PS_BUILTINS.forEach(([name], i) => { const o = document.createElement("option"); o.value = "b:" + i; o.textContent = name; sel.appendChild(o); });
+    psCustomPresets().forEach((p, i) => { const o = document.createElement("option"); o.value = "c:" + i; o.textContent = p.name; sel.appendChild(o); });
+    sel.value = cur;
+  }
+  function psApplyPreset(p){
+    if (!p) return;
+    if (p.tool) { $("drawTool").value = p.tool; $("drawTool").dispatchEvent(new Event("change")); }
+    const wr = $("drawWidthRange"); wr.value = String(p.size); wr.dispatchEvent(new Event("input"));
+    $("drawOpacity").value = String(p.op); $("drawOpacity").dispatchEvent(new Event("input"));
+    $("psFlow").value = String(p.flow); $("psFlow").dispatchEvent(new Event("input"));
+    $("psHard").value = String(p.hard); $("psHard").dispatchEvent(new Event("input"));
+    psWireReadouts();
+    drawStatusEl.textContent = "Brush preset applied.";
+  }
+  if ($("psPreset")) $("psPreset").addEventListener("change", () => {
+    const v = $("psPreset").value; if (!v) return;
+    const [kind, idx] = v.split(":");
+    psApplyPreset(kind === "b" ? PS_BUILTINS[Number(idx)][1] : (psCustomPresets()[Number(idx)] || {}).p);
+  });
+  if ($("psPresetSave")) $("psPresetSave").addEventListener("click", () => {
+    const name = prompt("Preset name:");
+    if (!name || !name.trim()) return;
+    const list = psCustomPresets();
+    list.push({ name: name.trim().slice(0, 28), p: { tool: $("drawTool").value || "paint", size: parseFloat($("drawWidthRange").value) || 3, op: parseFloat($("drawOpacity").value) || 1, flow: psFlow(), hard: Math.round(psHard() * 100) } });
+    try { localStorage.setItem("apocVttBrushPresetsV1", JSON.stringify(list.slice(-24))); } catch(e) {}
+    psBuildPresets();
+    drawStatusEl.textContent = "Preset saved on this device.";
+  });
+  /* blend mode for the current draw layer */
+  function psSyncBlend(){ const s = $("psBlend"); if (!s) return; const def = drawLayerDef($("drawLayerSel").value); s.value = def.blend || "normal"; }
+  if ($("psBlend")) $("psBlend").addEventListener("change", async () => {
+    const def = drawLayerDef($("drawLayerSel").value);
+    const v = $("psBlend").value;
+    if (v === "normal") delete def.blend; else def.blend = v;
+    const ok = await saveDraw(); renderDraw(); psSyncBlend();
+    drawStatusEl.textContent = ok ? "Layer blend: " + v + "." : "Blend didn't save — refreshed.";
+    if (!ok) loadDraw(true);
+  });
+  if ($("drawLayerSel")) $("drawLayerSel").addEventListener("change", psSyncBlend);
+  /* text fields visibility */
+  function psSyncTextFields(){ const f = $("psTextFields"); if (f) f.hidden = $("drawTool").value !== "text"; }
+  $("drawTool").addEventListener("change", psSyncTextFields);
+  /* ---- new tools router: sline / gradient / smudge ---- */
+  let psStart = null, psSmudge = null;
+  map.on("mousedown", async e => {
+    if (isProjecting() || armedMode !== "draw") return;
+    const tool = $("drawTool").value, p = toXY(e.latlng);
+    if (tool === "sline") { psStart = { tool, p }; return; }
+    if (tool === "gradient") { psStart = { tool, p }; return; }
+    if (tool === "smudge") {
+      const layerId = $("drawLayerSel").value;
+      const rec = await ensurePaint(layerId);
+      const pt = paintXY(rec, p), r = Math.max(2, brushRadius(rec));
+      const carry = document.createElement("canvas");
+      carry.width = Math.max(2, Math.round(r * 2)); carry.height = Math.max(2, Math.round(r * 2));
+      const cx = carry.getContext("2d");
+      cx.drawImage(rec.canvas, pt.x - r, pt.y - r, r * 2, r * 2, 0, 0, carry.width, carry.height);
+      psSmudge = { layerId, rec, carry, last: pt, r };
+      return;
+    }
+  });
+  map.on("mousemove", e => {
+    if (isProjecting()) return;
+    const tool = $("drawTool").value, p = toXY(e.latlng);
+    if (psStart && (psStart.tool === "sline" || psStart.tool === "gradient")) {
+      previewLayer.clearLayers();
+      if (psStart.tool === "sline") previewLayer.addLayer(L.polyline([toLatLng(psStart.p.x, psStart.p.y), e.latlng], { color: curDrawColor(), weight: curDrawWidth(), interactive: false }));
+      else previewLayer.addLayer(L.rectangle([toLatLng(psStart.p.x, psStart.p.y), e.latlng], { color: curDrawColor(), weight: 1, dashArray: "5 5", fillColor: curDrawColor(), fillOpacity: 0.25, interactive: false }));
+      return;
+    }
+    if (psSmudge) {
+      const rec = psSmudge.rec, pt = paintXY(rec, p), r = psSmudge.r;
+      if (Math.hypot(pt.x - psSmudge.last.x, pt.y - psSmudge.last.y) < 1.5) return;
+      const ctx = rec.ctx;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.15, Math.min(0.85, psFlow() * 0.7));
+      ctx.drawImage(psSmudge.carry, pt.x - r, pt.y - r);
+      ctx.restore();
+      /* pick up a blended sample so the smear evolves as it travels */
+      const cx = psSmudge.carry.getContext("2d");
+      cx.save(); cx.globalAlpha = 0.45; cx.globalCompositeOperation = "source-over";
+      cx.drawImage(rec.canvas, pt.x - r, pt.y - r, r * 2, r * 2, 0, 0, psSmudge.carry.width, psSmudge.carry.height);
+      cx.restore();
+      psSmudge.last = pt;
+      paintPreviewTick(rec, psSmudge.layerId);
+    }
+  });
+  map.on("mouseup", async e => {
+    if (psSmudge) { const l = psSmudge.layerId; psSmudge = null; await endRasterStroke(l); return; }
+    if (!psStart) return;
+    const st = psStart; psStart = null; previewLayer.clearLayers();
+    if (armedMode !== "draw") return;
+    const p = toXY(e.latlng);
+    if (st.tool === "sline") {
+      if (Math.hypot(p.x - st.p.x, p.y - st.p.y) < 0.3) return;
+      drawItems.push(withOp({ type: "line", pts: [[st.p.x, st.p.y], [p.x, p.y]], color: curDrawColor(), w: curDrawWidth(), ...curLayerPatch() }));
+      const ok = await saveDraw(); renderDraw();
+      drawStatusEl.textContent = ok ? "Line drawn." : "Line didn't save — refreshed.";
+      if (!ok) loadDraw(true);
+      return;
+    }
+    if (st.tool === "gradient") {
+      const layerId = $("drawLayerSel").value;
+      const rec = await ensurePaint(layerId);
+      const a = paintXY(rec, st.p), b = paintXY(rec, p);
+      const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+      if (x1 - x0 < 3 || y1 - y0 < 3) { drawStatusEl.textContent = "Gradient needs a drag with some size."; return; }
+      const ctx = rec.ctx;
+      const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+      g.addColorStop(0, curDrawColor()); g.addColorStop(1, psBg);
+      ctx.save(); ctx.globalAlpha = curDrawOpacity(); ctx.fillStyle = g;
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0); ctx.restore();
+      await endRasterStroke(layerId);
+      drawStatusEl.textContent = "Gradient filled — the table sees it.";
+      return;
+    }
+  });
+  map.on("move zoom resize", () => { try { psResetPreview(); } catch(e) {} });
+  psWireReadouts(); psRenderRecents(); psBuildPresets(); psSyncSwatches(); psSyncBlend(); psSyncTextFields();
+  window.__ps = { version: "PS1", flow: psFlow, hard: psHard, bg: () => psBg, recents: () => psRecents.slice() };
+
   /* ---- Colour wheel (Shaun, 2026-11-06: a very in-depth colour wheel
      INSTEAD of the multi-panel swatch palette). A full HSV disc — hue by
      angle, saturation by radius — with a brightness slider, an editable
@@ -6926,10 +7233,6 @@ function floorConnected(L, cols, rows){
     if (TD.renderer) TD.renderer.setPixelRatio(TD.prefs.quality === "performance" ? 1 : Math.min(window.devicePixelRatio || 1, 2));
   }
   function tdBuildStatic(){
-    /* APOC-ANIM: carry live door angles across rebuilds, so a swing in
-       progress continues instead of snapping when the scene rebuilds */
-    TD._doorCarry = {};
-    if (TD.doorHinges) for (const _h of TD.doorHinges) TD._doorCarry[_h.id] = _h.g.rotation.y;
     if (TD.root) { TD.scene.remove(TD.root); tdDispose(TD.root); }
     TD.root = new THREE.Group(); TD.scene.add(TD.root);
     TD.rot = (((mapRot | 0) % 4) + 4) % 4; /* v1.64: build in the rotated frame the 2D table shows */
@@ -7026,8 +7329,6 @@ function floorConnected(L, cols, rows){
           ring.position.set(leafLen * 0.86, hU * 0.45, 0.06); hinge.add(ring);
           if (w.open) hinge.rotation.y += (flip ? -1 : 1) * THREE.MathUtils.degToRad(100);
           wallsGrp.add(hinge);
-          if (TD._doorCarry && TD._doorCarry[w.id] != null) hinge.rotation.y = TD._doorCarry[w.id]; /* APOC-ANIM */
-          (wallsGrp.userData.hinges = wallsGrp.userData.hinges || []).push({ g: hinge, id: w.id, flip, base: -ang + (flip ? Math.PI : 0), open0: !!w.open }); /* APOC-ANIM: the render loop swings these */
         };
         if (len >= 1.6) { mkLeaf(ax, az, len / 2, false); mkLeaf(bx, bz, len / 2, true); }
         else mkLeaf(ax, az, len, false);
@@ -7048,7 +7349,6 @@ function floorConnected(L, cols, rows){
         const mullMat = tdMat(0x3a332a, { roughness: .8 });
         const mv = new THREE.Mesh(new THREE.BoxGeometry(0.05, hU * 0.5, 0.075), mullMat); mv.position.set(len / 2, hU * 0.57, 0); winHinge.add(mv);
         const mh = new THREE.Mesh(new THREE.BoxGeometry(len, 0.05, 0.075), mullMat); mh.position.set(len / 2, hU * 0.57, 0); winHinge.add(mh);
-        const mfr = new THREE.Mesh(new THREE.BoxGeometry(len, 0.07, 0.075), mullMat); mfr.position.set(len / 2, hU * 0.82, 0); winHinge.add(mfr); /* APOC-DA3D d-fix: head-frame rail inside the window hinge */
         winHinge.userData.tdWindowId = w.id; winHinge.userData.tdOpen = !!w.open;
         if (w.open) winHinge.rotation.y = -ang + THREE.MathUtils.degToRad(100);
         wallsGrp.add(winHinge);
@@ -7059,7 +7359,6 @@ function floorConnected(L, cols, rows){
       }
     }
     wallsGrp.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } }); /* APOC-V200 */
-    TD.doorHinges = (wallsGrp.userData && wallsGrp.userData.hinges) || []; /* APOC-ANIM */
     TD.counts.walls = wallCount;
     /* APOC-DA3D P1: roof — a toggleable cap over the walled area.
        Like DA, it hides itself when you go inside (first-person) or
@@ -7101,17 +7400,6 @@ function floorConnected(L, cols, rows){
       propsGrp.add(node);
     }
     TD.counts.props = propCount; TD.counts.propsSkipped = skipped;
-    /* APOC-ANIM: ambient particles — dust motes drifting through the
-       air, embers rising off flame lights. View-only ambience;
-       Performance quality skips them entirely */
-    TD.dustPts = null; TD.emberPts = null;
-    if (TD.prefs.quality !== "performance") {
-      const mkPts = (n, gen, color, size, opacity) => { const pos = new Float32Array(n * 3), base = new Float32Array(n * 3), phase = new Float32Array(n); for (let i = 0; i < n; i++) { const p = gen(i); pos.set(p, i * 3); base.set(p, i * 3); phase[i] = Math.random() * 6.283; } const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(pos, 3)); const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color, size, transparent: true, opacity, depthWrite: false })); TD.root.add(pts); return { pts, base, phase }; };
-      const dust = mkPts(220, () => [(Math.random() - 0.5) * Wu, 0.25 + Math.random() * 2.1, (Math.random() - 0.5) * Hu], 0xffe9b8, 0.045, 0.5);
-      TD.dustPts = dust.pts; TD.dustBase = dust.base; TD.dustPhase = dust.phase;
-      const flames = lightState.lights.filter(l => l.flame && l.on !== false).slice(0, 6);
-      if (flames.length) { const per = 12; const emb = mkPts(flames.length * per, (i) => { const fl = flames[Math.floor(i / per)]; const [lx, lz] = tdW(fl.x, fl.y); return [lx + (Math.random() - 0.5) * 0.2, 0.35, lz + (Math.random() - 0.5) * 0.2]; }, 0xff9a3c, 0.05, 0.85); TD.emberPts = emb.pts; TD.emberBase = emb.base; TD.emberPhase = emb.phase; }
-    }
     /* APOC-DA3D P2: auto-clutter — DA-style surface dressing as a
        per-device VIEW toggle. Deterministic per stamp (seeded by the
        stamp id), so the GM, the players and the TV dress identically.
@@ -7242,34 +7530,9 @@ function floorConnected(L, cols, rows){
       if (!TD.active) return;
       TD.raf = requestAnimationFrame(loop);
       const t = performance.now() / 1000;
-      const dt = Math.min(0.05, t - (TD._lastT == null ? t : TD._lastT)); TD._lastT = t; /* APOC-ANIM */
       TD.root.traverse(m => { if (m.name === "flame") { const s = 1 + 0.16 * Math.sin(t * 11 + m.position.x * 3.1) + 0.07 * Math.sin(t * 23 + m.position.z * 5.3); m.scale.set(s, 1 + 0.22 * Math.sin(t * 13 + m.position.x), s); } });
-      if (TD.tokGrp) for (const k in TD.tokenObjs) { const g = TD.tokenObjs[k]; g.rotation.y = Math.atan2(TD.camera.position.x - g.position.x, TD.camera.position.z - g.position.z); if (!(TD.drag && TD.drag.grp === g)) { let ph = 0; for (let ci = 0; ci < k.length; ci++) ph += k.charCodeAt(ci); g.position.y = 0.03 * (1 + Math.sin(t * 1.5 + (ph % 6.28))); } } /* APOC-V200: standees face the camera — APOC-ANIM: plus a subtle idle bob (never while dragged) */
+      if (TD.tokGrp) for (const k in TD.tokenObjs) { const g = TD.tokenObjs[k]; g.rotation.y = Math.atan2(TD.camera.position.x - g.position.x, TD.camera.position.z - g.position.z); } /* APOC-V200: standees face the camera */
       TD.scene.traverse(m => { if (m.isPointLight && m.userData.flame) m.intensity = 0.85 + 0.14 * Math.sin(t * 9.3 + m.userData.seed * 7.0) + 0.06 * Math.sin(t * 21.7 + m.userData.seed * 3.0); });
-      /* APOC-ANIM: doors swing to their shared open/closed state (never
-         teleport); the displayed camera glides to a new view preset
-         instead of cutting; dust drifts; embers rise off flame lights;
-         Gloom fog breathes. All view-only — the shared state is read,
-         never written */
-      if (TD.doorHinges && TD.doorHinges.length) {
-        const k7 = Math.min(1, dt * 6.5);
-        for (const h of TD.doorHinges) {
-          let open = h.open0;
-          if (typeof lightState !== "undefined" && lightState.walls) { const lw = lightState.walls.find(x => x.id === h.id); if (lw) open = lw.open; }
-          const target = h.base + (open ? (h.flip ? -1 : 1) * 1.7453 : 0);
-          h.g.rotation.y += (target - h.g.rotation.y) * k7;
-        }
-      }
-      if (TD._lv !== TD.view) { TD._lv = TD.view; TD._glide = 0.7; if (!TD.camCur) TD.camCur = { tx: TD.cam.tx, tz: TD.cam.tz, az: TD.cam.az, el: TD.cam.el, dist: TD.cam.dist }; }
-      if (TD._glide > 0 && TD.camCur) {
-        TD._glide -= dt; const gf = Math.min(1, dt * 6);
-        for (const kf of ["tx", "tz", "el", "dist"]) TD.camCur[kf] += (TD.cam[kf] - TD.camCur[kf]) * gf;
-        let daz = TD.cam.az - TD.camCur.az; while (daz > Math.PI) daz -= 2 * Math.PI; while (daz < -Math.PI) daz += 2 * Math.PI; TD.camCur.az += daz * gf;
-        if (TD._glide <= 0) TD.camCur = null;
-      }
-      if (TD.dustPts) { const pa = TD.dustPts.geometry.attributes.position, pb = TD.dustBase, pp = TD.dustPhase; for (let i3 = 0; i3 < pp.length; i3++) { pa.array[i3 * 3 + 1] = pb[i3 * 3 + 1] + 0.12 * Math.sin(t * 0.35 + pp[i3]); pa.array[i3 * 3] = pb[i3 * 3] + 0.15 * Math.sin(t * 0.22 + pp[i3] * 1.7); } pa.needsUpdate = true; }
-      if (TD.emberPts) { const ea = TD.emberPts.geometry.attributes.position, eb = TD.emberBase, ep = TD.emberPhase; for (let j3 = 0; j3 < ep.length; j3++) { const cyc = (t * 0.25 * (0.7 + (ep[j3] % 0.6)) + ep[j3]) % 1; ea.array[j3 * 3 + 1] = eb[j3 * 3 + 1] + cyc * 1.1; ea.array[j3 * 3] = eb[j3 * 3] + 0.06 * Math.sin(t * 2 + ep[j3] * 9.0) * cyc; } ea.needsUpdate = true; }
-      if (TD.scene && TD.scene.fog && TD.prefs && TD.prefs.mood === "gloom") { TD.scene.fog.near = 26 + 3.5 * Math.sin(t * 0.11); TD.scene.fog.far = 85 + 7 * Math.sin(t * 0.11 + 0.6); }
       tdUpdateCamera();
       TD.renderer.render(TD.scene, TD.camera);
     };
@@ -7311,7 +7574,7 @@ function floorConnected(L, cols, rows){
       TD.camera.lookAt(TD.fp.x + Math.sin(TD.fp.yaw) * cp, eye + Math.sin(TD.fp.pitch), TD.fp.z - Math.cos(TD.fp.yaw) * cp);
       return;
     }
-    const c = (TD._glide > 0 && TD.camCur) ? TD.camCur : TD.cam; /* APOC-ANIM: glide while a view transition runs */
+    const c = TD.cam;
     const cx = c.tx + c.dist * Math.cos(c.el) * Math.cos(c.az);
     const cz = c.tz + c.dist * Math.cos(c.el) * Math.sin(c.az);
     const cy = c.dist * Math.sin(c.el);
@@ -7480,7 +7743,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1939";
+        var BUILD_STAMP = "2026-11-08-1941";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
