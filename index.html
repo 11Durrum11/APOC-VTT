@@ -940,6 +940,31 @@ body.map-expanded .stage-row{display:contents}
       <span class="muted small" id="lightStatus"></span>
     </div>
     <div class="map-tools">
+      <div class="field" style="flex:1 1 100%" id="roomBuilderPanel">
+        <label>Room Builder — Dungeon Alchemist style</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:end">
+          <button type="button" class="btn" id="roomDrawBtn" aria-pressed="false">Draw room</button>
+          <span class="field" style="flex:0 1 auto"><label for="roomKind">Furnish as</label>
+            <select id="roomKind"><option value="generic">Generic</option><option value="bedroom">Bedroom</option><option value="kitchen">Kitchen</option><option value="shrine">Shrine</option><option value="armory">Armory</option><option value="treasury">Treasury</option><option value="library">Library</option></select></span>
+          <span class="field" style="flex:0 1 auto"><label for="roomTheme">Floor</label>
+            <select id="roomTheme"><option value="stone">Stone flags</option><option value="wood">Wood planks</option><option value="dirt">Dirt &amp; rock</option><option value="marble">Marble</option><option value="darkstone">Dark stone</option><option value="grass">Grass &amp; dirt</option></select></span>
+          <span class="field" style="flex:0 1 auto"><label for="roomDoorSide">Door on</label>
+            <select id="roomDoorSide"><option value="auto">Auto (longest/south)</option><option value="south">South</option><option value="north">North</option><option value="east">East</option><option value="west">West</option><option value="none">No door</option></select></span>
+          <label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="roomWindow"> Window cut</label>
+          <button type="button" class="btn" id="roomCloseBtn">Close outline</button>
+          <button type="button" class="btn" id="roomUndoPtBtn">Undo corner</button>
+          <button type="button" class="btn" id="roomCancelBtn">Clear</button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:end;margin-top:4px">
+          <span class="field" style="flex:1 1 200px"><label for="roomList">Rooms on this map</label>
+            <select id="roomList"></select></span>
+          <button type="button" class="btn" id="roomDoorBtn">Toggle door</button>
+          <button type="button" class="btn" id="roomRerollBtn">Re-roll furnish</button>
+          <button type="button" class="btn" id="roomRestyleBtn">Restyle floor</button>
+          <button type="button" class="btn" id="roomDeleteBtn">Delete room</button>
+        </div>
+        <p class="muted small" id="roomStatus"></p>
+      </div>
       <div class="field" style="flex:0 1 auto">
         <label for="drawTool">Draw tool</label>
         <select id="drawTool">
@@ -4251,6 +4276,482 @@ setInterval(loadSharedEntries, 60000);
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: DROP_REG_KEY, value: { maps: dropMaps }, updated_at: new Date().toISOString() }, { onConflict: "key" });
     return !error;
   }
+
+  /* ================= APOC-V238: .dd2vtt import + 2D Room Builder ================= */
+  /* ---- embedded .dd2vtt converter (work/da3d/dd2vtt-converter.js) ---- */
+/* dd2vtt-converter.js — Universal VTT (.dd2vtt / .uvtt) -> APOC-VTT lighting value.
+   Standalone: usable in node (module.exports) and in the browser page
+   (window.convertDd2vtt / window.dd2vttToLightState).
+
+   UVTT input (spec fields):
+     format, resolution { map_origin {x,y}, map_size {x,y}, pixels_per_grid },
+     image (base64), line_of_sight [[{x,y},...], ...],
+     portals [{ position {x,y}, rotation, bounds [{x,y},{x,y}], closed, freestanding }],
+     lights [{ position {x,y}, range, intensity, color, shadows }],
+     environment { ... } (not consumed: VTT lighting has no ambient field)
+   Coordinates in UVTT geometry are GRID units. VTT coordinates are
+   PERCENT of the map image dimensions:
+     pct = (grid - map_origin) / map_size * 100
+   (map_origin is normally {0,0}; when a file carries a non-zero origin
+   the geometry is offset by it, so it is subtracted.)
+   UVTT light range is in GRID units; VTT bright/dim are FEET on a
+   5-ft grid (VTT preset convention: torch bright 20 / dim 40 ft for a
+   range-8 source): dim = range * 5, bright = dim / 2.
+   Light colour per spec is a hex string, in practice AARRGGBB
+   (e.g. "ffeccd8b" in the format's worked example) — the alpha byte
+   is stripped. Bare integer colours from some exporters are also
+   accepted. objects_line_of_sight (object occluders) converts
+   exactly like line_of_sight: "essentially the same as a wall"
+   (uvtt2fgu format documentation).
+*/
+"use strict";
+function dd2vttColor(c) {
+  if (c === null || c === undefined || c === "") return "#ffc46b";
+  if (typeof c === "number" && isFinite(c)) {
+    return "#" + (c & 0xffffff).toString(16).padStart(6, "0");
+  }
+  var s = String(c).trim().toLowerCase();
+  if (s.startsWith("0x")) s = s.slice(2);
+  if (s.startsWith("#")) s = s.slice(1);
+  if (/^[0-9a-f]{8}$/.test(s)) s = s.slice(2); /* AARRGGBB -> RRGGBB */
+  if (/^[0-9a-f]{6}$/.test(s)) return "#" + s;
+  if (/^[0-9a-f]{3}$/.test(s)) return "#" + s.split("").map(function (ch) { return ch + ch; }).join("");
+  return "#ffc46b";
+}
+function convertDd2vtt(uvtt, opts) {
+  opts = opts || {};
+  if (!uvtt || typeof uvtt !== "object") throw new Error("dd2vtt: not an object");
+  var res = uvtt.resolution || {};
+  var size = res.map_size || {};
+  var sx = Number(size.x), sy = Number(size.y);
+  if (!(sx > 0) || !(sy > 0)) throw new Error("dd2vtt: resolution.map_size missing/invalid");
+  var origin = res.map_origin || { x: 0, y: 0 };
+  var ox = Number(origin.x) || 0, oy = Number(origin.y) || 0;
+  var feetPerSquare = Number(opts.feetPerSquare) > 0 ? Number(opts.feetPerSquare) : 5;
+  function pct(p) {
+    return [Math.round(((Number(p.x) - ox) / sx * 100) * 10000) / 10000,
+            Math.round(((Number(p.y) - oy) / sy * 100) * 10000) / 10000];
+  }
+  var walls = [], lights = [], wi = 0, li = 0, di = 0;
+  /* line_of_sight + objects_line_of_sight: arrays of polylines ->
+     split into segments, kind wall (object occluders are walls) */
+  var los = (Array.isArray(uvtt.line_of_sight) ? uvtt.line_of_sight : [])
+    .concat(Array.isArray(uvtt.objects_line_of_sight) ? uvtt.objects_line_of_sight : []);
+  los.forEach(function (line) {
+    if (!Array.isArray(line)) return;
+    for (var i = 0; i + 1 < line.length; i++) {
+      if (!line[i] || !line[i + 1]) continue;
+      walls.push({ id: "uvtt-w" + (++wi), kind: "wall", a: pct(line[i]), b: pct(line[i + 1]) });
+    }
+  });
+  /* portals -> doors (or windows when the portal is marked as one).
+     UVTT spec portals carry no door/window type field; exporters that
+     distinguish them do so out-of-band. Dungeon Alchemist exports
+     windows as portals too, indistinguishable in the spec fields, so
+     the default is door; an explicit marker (type/kind/label/window)
+     is honoured when present. */
+  var portals = Array.isArray(uvtt.portals) ? uvtt.portals : [];
+  portals.forEach(function (p) {
+    if (!p) return;
+    var a, b;
+    if (Array.isArray(p.bounds) && p.bounds.length >= 2 && p.bounds[0] && p.bounds[1]) {
+      a = pct(p.bounds[0]); b = pct(p.bounds[1]);
+    } else if (p.position) {
+      /* fallback: 1-grid segment centred on position, along rotation */
+      var rot = Number(p.rotation) || 0;
+      var dx = Math.cos(rot) * 0.5, dy = Math.sin(rot) * 0.5;
+      a = pct({ x: Number(p.position.x) - dx, y: Number(p.position.y) - dy });
+      b = pct({ x: Number(p.position.x) + dx, y: Number(p.position.y) + dy });
+    } else return;
+    var marker = String(p.type || p.kind || p.label || p.name || "").toLowerCase();
+    var isWindow = p.window === true || marker.indexOf("window") >= 0;
+    di++;
+    walls.push({ id: "uvtt-d" + di, kind: isWindow ? "window" : "door", a: a, b: b, open: !p.closed, h: 8 });
+  });
+  /* lights */
+  var src = Array.isArray(uvtt.lights) ? uvtt.lights : [];
+  src.forEach(function (L) {
+    if (!L || !L.position) return;
+    var xy = pct(L.position);
+    var range = Number(L.range);
+    if (!(range > 0)) range = 0;
+    var dim = Math.round(range * feetPerSquare);
+    lights.push({ id: "uvtt-l" + (++li), name: "Imported light " + li, x: xy[0], y: xy[1],
+                  bright: Math.round(dim / 2), dim: dim, color: dd2vttColor(L.color), flame: false });
+  });
+  return { enabled: true, walls: walls, lights: lights };
+}
+if (typeof module !== "undefined" && module.exports) module.exports = { convertDd2vtt: convertDd2vtt, dd2vttColor: dd2vttColor };
+if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; window.dd2vttToLightState = convertDd2vtt; window.dd2vttColor = dd2vttColor; }
+  /* ---- .dd2vtt import glue (from the pushA build, verbatim but for the UVTT-limit line) ---- */
+  function isDd2vttFile(file){
+    return !!file && /\.(dd2vtt|uvtt)$/i.test(file.name || "");
+  }
+  async function addDd2vttFile(file){
+    try {
+      const text = await file.text();
+      const uvtt = JSON.parse(text);
+      if (!uvtt || typeof uvtt !== "object" || !uvtt.image) throw new Error("no embedded map image");
+      const converted = convertDd2vtt(uvtt);
+      const b64 = String(uvtt.image).replace(/^data:[^,]*,/, "").replace(/\s+/g, "");
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      let type = "image/png", ext = "png";
+      if (bytes[0] === 0xff && bytes[1] === 0xd8) { type = "image/jpeg"; ext = "jpg"; }
+      else if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) { type = "image/webp"; ext = "webp"; }
+      const base = (file.name || "Dungeon Alchemist map").replace(/\.(dd2vtt|uvtt)$/i, "").slice(0, 56) || "Dungeon Alchemist map";
+      const imgFile = new File([new Blob([bytes], { type })], base + "." + ext, { type });
+      const before = new Set(Object.keys(MAPS));
+      await addDroppedFile(imgFile);
+      const newId = Object.keys(MAPS).find(id => !before.has(id) && MAPS[id] && MAPS[id].drop);
+      if (!newId) { drawStatusEl.textContent = "The .dd2vtt image was added, but the new map could not be identified — its lighting was not written."; return; }
+      let ok = false;
+      try {
+        const { error } = await db.from(SETTINGS_TABLE).upsert({ key: newId === "faerun" ? "vtt_light" : `vtt_light_${newId}`, value: converted, updated_at: new Date().toISOString() }, { onConflict: "key" });
+        ok = !error;
+      } catch(e) { ok = false; }
+      if (ok && currentMapId === newId) { try { await loadLighting(true); } catch(e) {} }
+      drawStatusEl.textContent = ok
+        ? `"${base}" imported from Dungeon Alchemist — ${converted.walls.length} wall/door segments and ${converted.lights.length} lights saved for everybody. Note: UVTT can't tell doors from windows, so any windows in the file came in as open doors.`
+        : `"${base}" was added as a map, but its Dungeon Alchemist lighting didn't save — other screens can't load its walls/lights yet.`;
+    } catch(e) {
+      drawStatusEl.textContent = "That .dd2vtt file couldn't be imported: " + (e && e.message ? e.message : e);
+    }
+  }
+  window.__addDd2vttFile = addDd2vttFile;
+  /* ---------------- 2D Room Builder (PC) ---------------- */
+  const roomsKey = () => currentMapId === "faerun" ? "vtt_rooms" : `vtt_rooms_${currentMapId}`;
+  let roomRecs = [], roomRecsFor = null, roomTool = false, roomPts = [], roomDown = null, roomWallDrag = null;
+  let roomLayer = null;
+  const ROOM_KINDS = {
+    generic:  { label: "Generic",  set: [["table", 1], ["chair", 2], ["barrel", 1], ["crate", 1], ["rug", 1], ["candle", 1]] },
+    bedroom:  { label: "Bedroom",  set: [["bed", 1], ["wardrobe", 1], ["chest", 1], ["stool", 1], ["rug", 1], ["candle", 1]] },
+    kitchen:  { label: "Kitchen",  set: [["counter", 1], ["table", 1], ["stool", 2], ["cauldron", 1], ["keg", 1], ["fireplace", 1]] },
+    shrine:   { label: "Shrine",   set: [["altar", 1], ["pew", 2], ["candle", 2], ["lectern", 1], ["statue", 1]] },
+    armory:   { label: "Armory",   set: [["rack", 2], ["anvil", 1], ["barrel", 1], ["chest", 1], ["banner", 1]] },
+    treasury: { label: "Treasury", set: [["chest", 2], ["sack", 2], ["keg", 1], ["plinth", 1], ["statue", 1]] },
+    library:  { label: "Library",  set: [["shelf", 2], ["books", 2], ["desk", 1], ["lectern", 1], ["candle", 1]] }
+  };
+  const roomCols = () => Math.max(1, Math.round(MW / CELL));
+  const roomRows = () => Math.max(1, Math.round(MH / CELL));
+  const cellPctX = cx => cx / roomCols() * 100, cellPctY = cy => cy / roomRows() * 100;
+  function roomStatus(msg){ const el = $("roomStatus"); if (el) el.textContent = msg; if (drawStatusEl) drawStatusEl.textContent = msg; }
+  async function loadRooms(){
+    if (!db) return;
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", roomsKey()).maybeSingle();
+    if (error) return;
+    roomRecs = (data && data.value && Array.isArray(data.value.rooms)) ? data.value.rooms : [];
+    roomRecsFor = currentMapId;
+    buildRoomList(); renderRoomFloors();
+  }
+  async function saveRooms(){
+    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: roomsKey(), value: { rooms: roomRecs }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    return !error;
+  }
+  function roomSeed(str){ let h = 2166136261; for (const c of String(str)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+  function roomFloorURL(rec){
+    const th = GEN_THEMES[rec.theme] || GEN_THEMES.stone;
+    const cell = 48, w = rec.bbox.w * cell, h = rec.bbox.h * cell;
+    const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+    const g = cv.getContext("2d");
+    const rng = mulberry32(roomSeed(rec.id + "|" + rec.theme));
+    g.fillStyle = th.floor; g.fillRect(0, 0, w, h);
+    for (let y = 0; y < rec.bbox.h; y++) for (let x = 0; x < rec.bbox.w; x++) {
+      g.fillStyle = rng() < 0.5 ? th.floor : th.floor2;
+      g.globalAlpha = 0.25 + rng() * 0.3; g.fillRect(x * cell, y * cell, cell, cell);
+    }
+    g.globalAlpha = 1; g.strokeStyle = th.line; g.lineWidth = 2;
+    for (let x = 0; x <= rec.bbox.w; x++) { g.beginPath(); g.moveTo(x * cell, 0); g.lineTo(x * cell, h); g.stroke(); }
+    for (let y = 0; y <= rec.bbox.h; y++) { g.beginPath(); g.moveTo(0, y * cell); g.lineTo(w, y * cell); g.stroke(); }
+    g.strokeStyle = th.wallD; g.lineWidth = 5; g.strokeRect(0, 0, w, h);
+    return cv.toDataURL("image/png");
+  }
+  function renderRoomFloors(){
+    if (!window.map) return;
+    if (!roomLayer) { roomLayer = L.layerGroup().addTo(map); }
+    roomLayer.clearLayers();
+    for (const rec of roomRecs) {
+      const a = toLatLng(cellPctX(rec.bbox.x), cellPctY(rec.bbox.y));
+      const b = toLatLng(cellPctX(rec.bbox.x + rec.bbox.w), cellPctY(rec.bbox.y + rec.bbox.h));
+      roomLayer.addLayer(L.imageOverlay(roomFloorURL(rec), [a, b], { pane: "layerMap", interactive: false }));
+    }
+  }
+  function roomInsideCells(rec){
+    const cells = [];
+    const inPoly = (cx, cy) => {
+      const px = cx + 0.5, py = cy + 0.5; let inside = false;
+      const pts = rec.pts;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const xi = pts[i][0], yi = pts[i][1], xj = pts[j][0], yj = pts[j][1];
+        if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+      }
+      return inside;
+    };
+    for (let y = rec.bbox.y; y < rec.bbox.y + rec.bbox.h; y++)
+      for (let x = rec.bbox.x; x < rec.bbox.x + rec.bbox.w; x++)
+        if (inPoly(x, y)) cells.push([x, y]);
+    return cells;
+  }
+  function furnishRoom(rec){
+    const kind = ROOM_KINDS[rec.kind] || ROOM_KINDS.generic;
+    const cols = roomCols(), rows = roomRows();
+    const rng = mulberry32(roomSeed(rec.id + "|f" + (rec.furnishSeed || 0)));
+    const cells = roomInsideCells(rec);
+    const doorCells = new Set();
+    const door = lightState.walls.find(w => w.id === rec.doorId);
+    if (door) {
+      const mx = (door.a[0] + door.b[0]) / 2 / 100 * cols, my = (door.a[1] + door.b[1]) / 2 / 100 * rows;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) doorCells.add(Math.floor(mx) + dx + "," + (Math.floor(my) + dy));
+    }
+    const cellSet = new Set(cells.map(c => c[0] + "," + c[1]));
+    const occupied = new Set();
+    const distWall = c => Math.min(c[0] - rec.bbox.x, rec.bbox.x + rec.bbox.w - 1 - c[0], c[1] - rec.bbox.y, rec.bbox.y + rec.bbox.h - 1 - c[1]);
+    const sorted = [...cells].sort((a, b) => distWall(a) - distWall(b) || rng() - 0.5);
+    const items = [];
+    for (const [prop, want] of kind.set) {
+      const d = PROP_DEFS[prop]; if (!d) continue;
+      let placedN = 0;
+      for (const c of sorted) {
+        if (placedN >= want) break;
+        let free = true;
+        for (let yy = c[1]; yy < c[1] + d.fh && free; yy++) for (let xx = c[0]; xx < c[0] + d.fw && free; xx++) {
+          const k = xx + "," + yy;
+          if (!cellSet.has(k) || occupied.has(k) || doorCells.has(k)) free = false;
+        }
+        if (!free) continue;
+        for (let yy = c[1]; yy < c[1] + d.fh; yy++) for (let xx = c[0]; xx < c[0] + d.fw; xx++) occupied.add(xx + "," + yy);
+        const gx = c[0] + (d.fw - 1) / 2, gy = c[1] + (d.fh - 1) / 2;
+        items.push({ type: "stamp", x: Math.round((gx + 0.5) / cols * 10000) / 100, y: Math.round((gy + 0.5) / rows * 10000) / 100, size: d.fw, rot: 0, sym: "", color: d.color === "gold" ? "amber" : d.color, layer: "shared", gm: false, prop, fw: d.fw, fh: d.fh, roomId: rec.id });
+        placedN++;
+      }
+    }
+    return items;
+  }
+  function buildRoomFromPts(rawPts, opts){
+    opts = opts || {};
+    const pts = rawPts.map(p => [p[0], p[1]]);
+    if (pts.length < 2) return null;
+    if (pts.length === 2) { /* two corners → rectangle */
+      const [a, b] = pts;
+      pts.splice(0, 2, [a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]);
+    }
+    if (pts.length < 3) return null;
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const bbox = { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+    window.__roomLastBuild = { rawPts: rawPts, bbox: bbox };
+    if (bbox.w < 2 || bbox.h < 2) { roomStatus("Room too small — needs at least 2×2 cells."); return null; }
+    const rec = { id: "room-" + newId(), pts, bbox, kind: opts.kind || "generic", theme: opts.theme || "stone", seed: roomSeed(pts.flat().join(",") + "|" + Date.now()), furnishSeed: 0, wallIds: [], doorId: null, windowId: null, created: new Date().toISOString() };
+    /* edges → wall segments; the door edge is split around a 1-cell door */
+    const edges = [];
+    for (let i = 0; i < pts.length; i++) { const a = pts[i], b = pts[(i + 1) % pts.length]; if (a[0] !== b[0] || a[1] !== b[1]) edges.push([a, b]); }
+    const edgeLen = e => Math.abs(e[1][0] - e[0][0]) + Math.abs(e[1][1] - e[0][1]);
+    const sidePref = opts.doorSide || "auto";
+    let doorEdge = -1, best = -1;
+    if (sidePref !== "none") edges.forEach((e, i) => {
+      if (edgeLen(e) < 3) return;
+      let score = edgeLen(e);
+      const isSouth = e[0][1] === bbox.y + bbox.h && e[1][1] === bbox.y + bbox.h;
+      const isNorth = e[0][1] === bbox.y && e[1][1] === bbox.y;
+      const isEast = e[0][0] === bbox.x + bbox.w && e[1][0] === bbox.x + bbox.w;
+      const isWest = e[0][0] === bbox.x && e[1][0] === bbox.x;
+      if (sidePref === "south" && !isSouth) return;
+      if (sidePref === "north" && !isNorth) return;
+      if (sidePref === "east" && !isEast) return;
+      if (sidePref === "west" && !isWest) return;
+      if (sidePref === "auto" && isSouth) score += 0.5;
+      if (score > best) { best = score; doorEdge = i; }
+    });
+    let windowEdge = -1;
+    if (opts.window) { let bw = -1; edges.forEach((e, i) => { if (i !== doorEdge && edgeLen(e) >= 3 && edgeLen(e) > bw) { bw = edgeLen(e); windowEdge = i; } }); }
+    const seg = (a, b, kind2) => ({ id: newId(), kind: kind2, a: [cellPctX(a[0]), cellPctY(a[1])], b: [cellPctX(b[0]), cellPctY(b[1])], open: false });
+    edges.forEach((e, i) => {
+      const [a, b] = e;
+      if (i === doorEdge || i === windowEdge) {
+        const kind2 = i === doorEdge ? "door" : "window";
+        const horiz = a[1] === b[1];
+        const len = edgeLen(e), mid = Math.floor(len / 2);
+        const at = t => horiz ? [a[0] + Math.sign(b[0] - a[0]) * t, a[1]] : [a[0], a[1] + Math.sign(b[1] - a[1]) * t];
+        const s1 = seg(a, at(mid), "wall"), ds = seg(at(mid), at(mid + 1), kind2), s2 = seg(at(mid + 1), b, "wall");
+        for (const s of [s1, ds, s2]) { lightState.walls.push(s); rec.wallIds.push(s.id); }
+        if (kind2 === "door") rec.doorId = ds.id; else rec.windowId = ds.id;
+      } else {
+        const s = seg(a, b, "wall"); lightState.walls.push(s); rec.wallIds.push(s.id);
+      }
+    });
+    if (!lightState.enabled) { lightState.enabled = true; const le = $("lightEnabled"); if (le) le.checked = true; }
+    const items = furnishRoom(rec);
+    for (const it of items) drawItems.push(it);
+    rec.stampCount = items.length;
+    roomRecs.push(rec);
+    return rec;
+  }
+  async function commitRoom(rec){
+    if (!rec) return;
+    const okL = await saveLighting(); renderLighting();
+    const okD = await saveDraw(); renderDraw();
+    const okR = await saveRooms();
+    buildRoomList(); renderRoomFloors();
+    roomStatus(`Room built — ${rec.wallIds.length} wall segments${rec.doorId ? " with a door" : ""}${rec.windowId ? " and a window" : ""}, ${rec.stampCount || 0} furnishings (${(ROOM_KINDS[rec.kind] || {}).label || rec.kind}).${okL && okD && okR ? "" : " (A save didn't go through — refreshed state may differ.)"}`);
+    const sel = $("roomList"); if (sel) sel.value = rec.id;
+  }
+  function buildRoomList(){
+    const sel = $("roomList"); if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = "";
+    for (const r of roomRecs) {
+      const o = document.createElement("option"); o.value = r.id;
+      o.textContent = `${(ROOM_KINDS[r.kind] || {}).label || r.kind} room — ${r.bbox.w}×${r.bbox.h} @ ${r.bbox.x},${r.bbox.y}`;
+      sel.appendChild(o);
+    }
+    if (roomRecs.some(r => r.id === cur)) sel.value = cur;
+  }
+  function selectedRoom(){ const sel = $("roomList"); return roomRecs.find(r => r.id === (sel && sel.value)) || null; }
+  function setRoomTool(on){
+    roomTool = !!on; roomPts = []; roomDown = null; roomWallDrag = null;
+    const b = $("roomDrawBtn"); if (b) { b.setAttribute("aria-pressed", String(roomTool)); b.textContent = roomTool ? "Drawing… tap corners (or drag a rectangle)" : "Draw room"; }
+    if (roomTool) { try { setLightArmed(null); } catch (e) {} const dt = $("drawTool"); if (dt) dt.value = ""; }
+    try { if (roomTool) map.dragging.disable(); else if (typeof rulerOn === "undefined" || !rulerOn) map.dragging.enable(); } catch (e) {} /* v2.38: no map pan while the room tool is armed — the drag endpoints must stay put */
+    if (previewLayer) previewLayer.clearLayers();
+    roomStatus(roomTool ? "Room tool on: tap the room's corners in order (each tap snaps to the grid and squares up), or drag a rectangle. Then Close outline." : "Room tool off.");
+  }
+  function roomSnap(p){
+    const cols = roomCols(), rows = roomRows();
+    return [Math.max(0, Math.min(cols, Math.round(p.x / 100 * cols))), Math.max(0, Math.min(rows, Math.round(p.y / 100 * rows)))];
+  }
+  function roomPreview(){
+    if (!previewLayer) return;
+    previewLayer.clearLayers();
+    if (roomPts.length) {
+      const latlngs = roomPts.map(pt => toLatLng(cellPctX(pt[0]), cellPctY(pt[1])));
+      previewLayer.addLayer(L.polyline(latlngs, { color: "#6ec7e8", weight: 3, dashArray: "5 5", interactive: false }));
+      for (const ll of latlngs) previewLayer.addLayer(L.circleMarker(ll, { radius: 4, color: "#6ec7e8", interactive: false }));
+    }
+  }
+  function roomSegDist(p, w){
+    const ax = w.a[0], ay = w.a[1], bx = w.b[0], by = w.b[1];
+    const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
+    let t = ((p.x - ax) * dx + (p.y - ay) * dy) / L2; t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (ax + t * dx), p.y - (ay + t * dy));
+  }
+  map.on("mousedown", e => {
+    if (!roomTool || isProjecting() || !gmView) return;
+    const p = toXY(e.latlng);
+    /* wall-move: grabbing near a room wall drags the whole segment */
+    if (!roomPts.length) {
+      const ids = new Set(roomRecs.flatMap(r => r.wallIds));
+      let bestW = null, bestD = 1.6;
+      for (const w of lightState.walls) if (ids.has(w.id)) { const d = roomSegDist(p, w); if (d < bestD) { bestD = d; bestW = w; } }
+      if (bestW) { roomWallDrag = { id: bestW.id, start: p, a: [...bestW.a], b: [...bestW.b] }; return; }
+    }
+    roomDown = { pt: roomSnap(p), raw: p, moved: false };
+  });
+  map.on("mousemove", e => {
+    if (!roomTool) return;
+    const p = toXY(e.latlng);
+    if (roomWallDrag) {
+      const w = lightState.walls.find(x => x.id === roomWallDrag.id);
+      if (w) {
+        const dx = p.x - roomWallDrag.start.x, dy = p.y - roomWallDrag.start.y;
+        w.a = [Math.round((roomWallDrag.a[0] + dx) * 100) / 100, Math.round((roomWallDrag.a[1] + dy) * 100) / 100];
+        w.b = [Math.round((roomWallDrag.b[0] + dx) * 100) / 100, Math.round((roomWallDrag.b[1] + dy) * 100) / 100];
+        renderLighting();
+      }
+      return;
+    }
+    if (roomDown && Math.hypot(p.x - roomDown.raw.x, p.y - roomDown.raw.y) > 1.2) roomDown.moved = true;
+    if (roomDown && roomDown.moved && previewLayer) {
+      previewLayer.clearLayers();
+      const a = roomDown.pt, b = roomSnap(p);
+      previewLayer.addLayer(L.rectangle([toLatLng(cellPctX(Math.min(a[0], b[0])), cellPctY(Math.min(a[1], b[1]))), toLatLng(cellPctX(Math.max(a[0], b[0])), cellPctY(Math.max(a[1], b[1])))], { color: "#6ec7e8", weight: 2, dashArray: "5 5", interactive: false }));
+    }
+  });
+  map.on("mouseup", async e => {
+    if (!roomTool) return;
+    if (roomWallDrag) {
+      const w = lightState.walls.find(x => x.id === roomWallDrag.id);
+      roomWallDrag = null;
+      if (w) { const ok = await saveLighting(); renderLighting(); roomStatus(ok ? "Wall moved and saved." : "Wall move didn't save — refreshed."); if (!ok) loadLighting(true); }
+      return;
+    }
+    if (!roomDown) return;
+    const p = toXY(e.latlng), end = roomSnap(p), down = roomDown;
+    roomDown = null;
+    if (down.moved) { /* drag = rectangle */
+      window.__roomLastDrag = { downCell: down.pt, endCell: end, cols: roomCols(), rows: roomRows() };
+      const rec = buildRoomFromPts([down.pt, end], roomFormOpts());
+      roomPts = []; if (previewLayer) previewLayer.clearLayers();
+      await commitRoom(rec);
+      return;
+    }
+    /* click = polygon corner (Manhattan-squared to the previous corner) */
+    let pt = end;
+    if (roomPts.length) {
+      const prev = roomPts[roomPts.length - 1];
+      if (Math.abs(pt[0] - prev[0]) >= Math.abs(pt[1] - prev[1])) pt = [pt[0], prev[1]]; else pt = [prev[0], pt[1]];
+      if (pt[0] === prev[0] && pt[1] === prev[1]) return;
+      if (roomPts.length >= 2 && pt[0] === roomPts[0][0] && pt[1] === roomPts[0][1]) { await closeRoomOutline(); return; }
+    }
+    roomPts.push(pt); roomPreview();
+    roomStatus(`Corner ${roomPts.length} set — keep tapping corners, or Close outline.`);
+  });
+  function roomFormOpts(){
+    return { kind: ($("roomKind") && $("roomKind").value) || "generic", theme: ($("roomTheme") && $("roomTheme").value) || "stone", doorSide: ($("roomDoorSide") && $("roomDoorSide").value) || "auto", window: !!($("roomWindow") && $("roomWindow").checked) };
+  }
+  async function closeRoomOutline(){
+    if (roomPts.length < 2) { roomStatus("Tap at least two corners first (two corners = a rectangle)."); return; }
+    const rec = buildRoomFromPts(roomPts, roomFormOpts());
+    roomPts = []; if (previewLayer) previewLayer.clearLayers();
+    await commitRoom(rec);
+  }
+  /* room panel wiring */
+  const rbBtn = $("roomDrawBtn"); if (rbBtn) rbBtn.addEventListener("click", () => setRoomTool(!roomTool));
+  const rcBtn = $("roomCloseBtn"); if (rcBtn) rcBtn.addEventListener("click", closeRoomOutline);
+  const ruBtn = $("roomUndoPtBtn"); if (ruBtn) ruBtn.addEventListener("click", () => { roomPts.pop(); roomPreview(); });
+  const rxBtn = $("roomCancelBtn"); if (rxBtn) rxBtn.addEventListener("click", () => { roomPts = []; if (previewLayer) previewLayer.clearLayers(); roomStatus("Outline cleared."); });
+  const rdBtn = $("roomDoorBtn"); if (rdBtn) rdBtn.addEventListener("click", async () => {
+    const rec = selectedRoom(); if (!rec || !rec.doorId) { roomStatus("Pick a room with a door first."); return; }
+    const door = lightState.walls.find(w => w.id === rec.doorId); if (!door) { roomStatus("That room's door is gone."); return; }
+    door.open = !door.open; const ok = await saveLighting(); renderLighting();
+    roomStatus(ok ? `Door ${door.open ? "opened" : "closed"} — saved.` : "Door change didn't save — refreshed."); if (!ok) loadLighting(true);
+  });
+  const rrBtn = $("roomRerollBtn"); if (rrBtn) rrBtn.addEventListener("click", async () => {
+    const rec = selectedRoom(); if (!rec) { roomStatus("Pick a room first."); return; }
+    drawItems = drawItems.filter(it => it.roomId !== rec.id);
+    rec.furnishSeed = (rec.furnishSeed || 0) + 1;
+    rec.kind = ($("roomKind") && $("roomKind").value) || rec.kind;
+    const items = furnishRoom(rec);
+    for (const it of items) drawItems.push(it);
+    rec.stampCount = items.length;
+    await saveDraw(); renderDraw(); await saveRooms();
+    roomStatus(`Re-furnished as ${(ROOM_KINDS[rec.kind] || {}).label || rec.kind} — ${items.length} pieces.`);
+  });
+  const rsBtn = $("roomRestyleBtn"); if (rsBtn) rsBtn.addEventListener("click", async () => {
+    const rec = selectedRoom(); if (!rec) { roomStatus("Pick a room first."); return; }
+    rec.theme = ($("roomTheme") && $("roomTheme").value) || rec.theme;
+    await saveRooms(); renderRoomFloors();
+    roomStatus(`Floor restyled to ${(GEN_THEMES[rec.theme] || {}).label || rec.theme}.`);
+  });
+  const rdelBtn = $("roomDeleteBtn"); if (rdelBtn) rdelBtn.addEventListener("click", async () => {
+    const rec = selectedRoom(); if (!rec) { roomStatus("Pick a room first."); return; }
+    const ids = new Set(rec.wallIds);
+    lightState.walls = lightState.walls.filter(w => !ids.has(w.id));
+    drawItems = drawItems.filter(it => it.roomId !== rec.id);
+    roomRecs = roomRecs.filter(r => r.id !== rec.id);
+    await saveLighting(); renderLighting(); await saveDraw(); renderDraw(); await saveRooms();
+    buildRoomList(); renderRoomFloors();
+    roomStatus("Room deleted — its walls and furnishings went with it.");
+  });
+  setInterval(() => { if (roomRecsFor !== currentMapId) loadRooms(); }, 900);
+  if (document.readyState !== "loading") loadRooms(); else document.addEventListener("DOMContentLoaded", loadRooms);
+  window.__roomApi = {
+    arm: on => setRoomTool(on === undefined ? true : !!on),
+    buildRect: (x, y, w, h, opts) => { const rec = buildRoomFromPts([[x, y], [x + w, y + h]], opts || roomFormOpts()); return rec ? commitRoom(rec).then(() => rec) : null; },
+    buildPoly: (pts, opts) => { const rec = buildRoomFromPts(pts, opts || roomFormOpts()); return rec ? commitRoom(rec).then(() => rec) : null; },
+    list: () => roomRecs,
+    counts: () => ({ rooms: roomRecs.length, walls: lightState.walls.length, drawItems: drawItems.length }),
+    pctToContainer: (x, y) => { const ll = toLatLng(x, y); const pt = map.latLngToContainerPoint(L.latLng(ll[0], ll[1])); const r = $("apocMap").getBoundingClientRect(); return { x: pt.x + r.left, y: pt.y + r.top }; }
+  };
   function idbOpen(){
     return new Promise((res, rej) => {
       const r = indexedDB.open("apoc-vtt", 1);
@@ -4273,6 +4774,7 @@ setInterval(loadSharedEntries, 60000);
     } catch(e) { return []; }
   }
   async function addDroppedFile(file){
+    if (isDd2vttFile(file)) { await addDd2vttFile(file); return; }
     if (!file || !/^image\/(png|jpeg|webp|gif)/.test(file.type)) return;
     const url = URL.createObjectURL(file);
     let dims = null;
@@ -4314,7 +4816,7 @@ setInterval(loadSharedEntries, 60000);
     $("apocMap").classList.remove("drag-over");
     const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!f) return;
-    if (e.target && e.target.closest && e.target.closest("#apocMap")) {
+    if (e.target && e.target.closest && e.target.closest("#apocMap") && !isDd2vttFile(f)) {
       const rect = $("apocMap").getBoundingClientRect();
       const ll = map.containerPointToLatLng(L.point(e.clientX - rect.left, e.clientY - rect.top));
       addDroppedTokenFile(f, toXY(ll));
@@ -7882,7 +8384,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-2154";
+        var BUILD_STAMP = "2026-11-08-2208";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -16708,10 +17210,10 @@ return module.exports; })();</script>
   function $(id){ return document.getElementById(id); }
   var btn = document.createElement("button");
   btn.type = "button"; btn.className = "btn"; btn.id = "damImportBtn";
-  btn.textContent = "Import DA map (.dam)";
+  btn.textContent = "Import DA map (.dam / .dd2vtt)";
   btn.title = "Import a Dungeon Alchemist .dam file: floors become the map image, walls land in the lighting layer, objects land as draw stamps (placeholders named by their DA id until a catalog maps them).";
   var inp = document.createElement("input");
-  inp.type = "file"; inp.id = "damFileInput"; inp.accept = ".dam,.json,application/json"; inp.hidden = true;
+  inp.type = "file"; inp.id = "damFileInput"; inp.accept = ".dam,.dd2vtt,.uvtt,.json,application/json"; inp.hidden = true;
   var host = $("set-map") || $("mapDdPanel") || document.body;
   host.appendChild(btn); host.appendChild(inp);
   var damStatusEl = document.createElement("span"); damStatusEl.id = "damImportStatus"; damStatusEl.className = "hint"; host.appendChild(damStatusEl);
@@ -16720,7 +17222,7 @@ return module.exports; })();</script>
   async function readSetting(key){ try { var r = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle(); return (r && r.data && r.data.value) ? r.data.value : null; } catch(e) { return null; } }
   async function writeSetting(key, value){ await db.from(SETTINGS_TABLE).upsert({ key: key, value: value, updated_at: new Date().toISOString() }, { onConflict: "key" }); } /* APOC-CP7: the page has no reachable status line (setStatus is closure-scoped and stubbed) — the import reports beside its own button */
   btn.addEventListener("click", function(){ inp.click(); });
-  inp.addEventListener("change", function(){ if (inp.files && inp.files[0]) importDam(inp.files[0]); inp.value = ""; });
+  inp.addEventListener("change", function(){ var f = inp.files && inp.files[0]; if (f) { if (/\.(dd2vtt|uvtt)$/i.test(f.name || "") && typeof window.__addDd2vttFile === "function") window.__addDd2vttFile(f); else importDam(f); } inp.value = ""; });
 
   function guidTile(guid, label){
     var cv = document.createElement("canvas"); cv.width = 64; cv.height = 64;
