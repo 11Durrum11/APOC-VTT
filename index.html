@@ -11853,7 +11853,7 @@ function floorConnected(L, cols, rows){
       addLock(el, id, grip && grip.parentElement === el ? grip : el);
       addHandles(el, id);
       var rp = rec[id];
-      if (rp && (rp.w || rp.h)) { if (rp.w) el.style.width = rp.w + "px"; if (rp.h) el.style.height = rp.h + "px"; }
+      if (rp && (rp.w || rp.h) && !el.classList.contains("map-repo")) { if (rp.w) el.style.width = rp.w + "px"; if (rp.h) el.style.height = rp.h + "px"; } /* APOC-V243: the repo's size is owned by the perimeter float record + apocVttLibBoxH; the stale free-layout per-repo size (224x534) fought both owners — never applied to .map-repo */
       paintLock(el, id);
     });
     var zb = document.getElementById("zoomBar"); if (zb && !zb.dataset.fpDone) { zb.dataset.fpDone = "1"; addLock(zb, "zoombar", zb); paintLock(zb, "zoombar"); }
@@ -12500,7 +12500,6 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     repo.classList.add("lib187-open");
     var want = Math.round(B - top); /* APOC-V229: top is already the VIEWPORT top, so B - top IS the distance to the current screen bottom. The v2.19 form (minus scrollY) anchored the box to the UNSCROLLED screen bottom: scrolled down, the floated Library (in the stage-row flow) grew past the visible bottom and extended the document by the scroll offset, feeding the bottom-scroll blink loop. */
     var rr2 = rect(repo);
-    if (window.__apocLibBox) want = window.__apocLibBox.repoH; /* APOC-CP2: open-height freeze */
     if (Math.abs(rr2.height - want) > 1) repo.style.height = want + "px";
   }
 
@@ -12677,11 +12676,9 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (rp.classList.contains("per-float")) {
       /* the APOC-V187 anchor (re-pointed at the screen bottom in
          this build) sizes the box; the inner library fills it. */
-      if (!window.__apocLibBox) { window.__apocLibBoxT = window.__apocLibBoxT || Date.now(); if (Date.now() - window.__apocLibBoxT > 250) { var frzR = rect(rp), frzL = rect(lb); if (frzR && frzL && frzR.height > 0) window.__apocLibBox = { repoH: Math.round(frzR.height), libH: Math.round(frzL.height) }; } } /* APOC-CP5: capture BEFORE the scroll-quiet stand-down and sooner — the pre-capture window was the residual creep (BLINK3 on close3: steps only until capture, then still) */
-      if (window.__apocLibQuietUntil && Date.now() < window.__apocLibQuietUntil) return; /* APOC-V230: scroll-quiet — stand down while Shaun scrolls inside the Library */
+            if (window.__apocLibQuietUntil && Date.now() < window.__apocLibQuietUntil) return; /* APOC-V230: scroll-quiet — stand down while Shaun scrolls inside the Library */
       var lr = rect(lb), rr = rect(rp);
-      if (window.__apocLibBox && lr) { if (Math.abs(lr.height - window.__apocLibBox.libH) > 1) { lb.style.height = window.__apocLibBox.libH + "px"; libFilled = true; } if (lb.style.marginBottom) lb.style.marginBottom = ""; return; } /* APOC-CP2: frozen — content inside scrolls, the box does not chase it */
-      if (lr && rr && rr.height > 0) {
+            if (lr && rr && rr.height > 0) {
         var lh = Math.round(lr.height + (rr.bottom - 2 - lr.bottom));
         if (lh > 80 && Math.abs(lr.height - lh) > 1) { lb.style.height = lh + "px"; libFilled = true; }
         if (lb.style.marginBottom) lb.style.marginBottom = "";
@@ -14431,12 +14428,13 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (!body) return;
     var ih = window.innerHeight;
     if (repo.classList.contains("per-float")) {
-      if (repo.classList.contains("per-dragging")) return;
-      var rr = repo.getBoundingClientRect(), lr = lib.getBoundingClientRect();
-      if (rr.height < 50 || lr.height < 10) return;
-      var want = Math.round(rr.bottom - 2 - lr.top);
-      if (window.__apocLibBox) want = window.__apocLibBox.libH; /* APOC-CP2: open-height freeze */
-      if (want > 80 && Math.abs(lr.height - want) > 1) lib.style.height = want + "px";
+      /* APOC-V243: STAND DOWN while floated. This tick's absolute rect
+         formula (repo bottom - lib top, sampled at 200ms) raced the
+         v1.88 libTick's delta fill (450ms) and limit-cycled the open
+         Library +/-6px forever (recorder: 779/773/785/773...). The
+         libTick fill is one-step convergent against anchorLib's repo
+         box and is now the SOLE floated lib-height writer; the
+         nest-body max-height is CSS-owned (APOC-V187). */
       if (body.style.maxHeight !== "none") body.style.maxHeight = "none";
     } else {
       var br = body.getBoundingClientRect();
@@ -15005,7 +15003,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   #artLibrary .nest-body .nest-body .nest-head,
   #artLibrary .lib-panel > .nest > .nest-head,
   #artLibrary .nest-body .nest-body .mr-folder-head{
-    min-height:11px;padding:2px 5px;font-size:.8rem;line-height:1.15;text-align:left}
+    min-height:22px;padding:4px 6px;font-size:.85rem;line-height:1.15;text-align:left /* APOC-V243: halved spec (11px/2px/.8rem, APOC-V204) un-halved — sub-heads were crammed at the doubled 224px width; readability wins */}
 }
 #mapDdPanel .mapdd-subhead{font-size:.72rem;padding:5px 8px 1px 18px;color:#59637a;text-transform:none;letter-spacing:.02em}
 </style>
@@ -17629,6 +17627,43 @@ return module.exports; })();</script>
     if (head && (e.target === head || head.contains(e.target))) { e.stopPropagation(); e.preventDefault(); }
   }, true);
 })();
+</script>
+<script>
+/* APOC-V243 — Art Library "crammed together and glitchy" (Shaun, live on
+   v2.42, 2026-11-09 ~12:10). Evidence: his own blink recorder
+   (apocVttBlinkLog, fresh laptop grab 2026-11-09) — on open the Library
+   stepped 738 -> 553 -> 503 within 500ms, then 533/530/600/571 over two
+   minutes; the 12:07 session repeated 738 -> 553 -> 503 three minutes
+   before he reported it. Reproduced seeded with his CURRENT records
+   under network-paced loads (probe275): the CP2/CP5 open-height FREEZE
+   (window.__apocLibBox, closing pass v2.37) snapshots the box ~250ms
+   after open — mid-stream, while the repo is still growing — and then
+   PINS the Library at that partial height indefinitely (measured:
+   lib frozen at 524 inside a 768 box; in the default-layout float,
+   lib frozen at 758 inside a 744 box). Every later step in his log is
+   a freeze clear (window resize — including the width-clamp's own
+   dispatched resize — or close) followed by a refill and a recapture
+   at another transient, with two more geometry owners joining in:
+   the free-layout per-repo size (224x534) re-applied against the
+   perimeter float (position) and apocVttLibBoxH (closed height 571).
+   Fixes: (1) the freeze is RETIRED — capture, force and both consumer
+   overrides removed; the open Library's height chain is single-target
+   again (anchorLib: repo bottom = screen bottom; V196/libTick: lib
+   fills to repo bottom - 2), with the v2.30 scroll-quiet stand-down
+   kept as the anti-strobe gate. (2) The free-layout register no longer
+   applies ANY size to .map-repo — perimeter + LibBoxH own it.
+   (2b) The APOC-V196 200ms tick's floated fill is stood down: its
+   absolute rect formula raced libTick's delta fill and limit-cycled
+   the unfrozen box +/-6px (seen the moment the freeze came off) —
+   libTick is the sole floated lib-height writer now.
+   (3) Crammed: the APOC-V204 halved sub-head spec (min-height 11px,
+   padding 2px, .8rem) is un-halved to 22px/4px/.85rem — at the doubled
+   224px width the halved heads were the squished rows; censuses showed
+   zero clipped labels at 224 in every state, so the "crammed" feel was
+   the frozen two-thirds box plus these heads. The blink recorder
+   stays on watch. Seeded verification: probe274/275 re-run on this
+   build — open settles at the full fill with no post-open steps, the
+   recorder gains no entries, closed inline height holds one value. */
 </script>
 </body>
 </html>
