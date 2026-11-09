@@ -14708,12 +14708,22 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
          growth defect in a new coat; caught by probe272e's growth
          watch on this build's first candidate (368px -> 492px). */
       else if (set.scrollHeight > set.clientHeight + 4) { var want240 = Math.min(set.scrollHeight + 4, cap240); if (want240 > parseInt(hs, 10)) { hs = pinFrozen[set.id] = want240 + "px"; } }
+      if (parseInt(hs, 10) > cap240) { hs = pinFrozen[set.id] = cap240 + "px"; } /* APOC-V244: a shrunken window clamps the frozen height to the new cap instead of re-measuring */
       if (set.style.top !== ts) set.style.top = ts;
       if (set.style.height !== hs) set.style.height = hs;
     });
   }
   setInterval(pinSets, 200);
-  window.addEventListener("resize", function(){ pinFrozen = {}; pinSets(); });
+  /* APOC-V244: frozen heights SURVIVE resize. The old blanket reset
+     re-measured scrollHeight against the box's own inline height —
+     scrollHeight reads clientHeight at the boundary, so every resize
+     event re-froze the open set +2px taller. One synthetic-resize
+     source firing on a loop (the grip guard below) turned that into
+     an endless +2px climb on any open dropdown (probe278/279:
+     Draw 380px -> 512px in 30s). Cleanup of closed sets already
+     happens per-tick above; window growth is served by the ratchet,
+     window shrink by the cap clamp. */
+  window.addEventListener("resize", function(){ pinSets(); });
 
   /* ===== (6) control page: per-screen DM view choice =====
      Two toggle buttons ride with the Push to TV / Screen 2 cluster.
@@ -15505,6 +15515,13 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     else if (gr.right > window.innerWidth - 4) dx = Math.round(window.innerWidth - 4 - gr.right);
     if (gr.top < 4) dy = Math.round(4 - gr.top);
     else if (gr.bottom > window.innerHeight - 4) dy = Math.round(window.innerHeight - 4 - gr.bottom);
+    /* APOC-V244: while the page is scrolled, a grip above the fold is
+       the SCROLL's doing — the float is panel-relative and rides the
+       page; it is not lost, and "rescuing" it fights the scroll
+       forever. The downward rescue stands down until the page is back
+       at rest. (Shaun's live report, 2026-11-09: open a dropdown,
+       scroll down, and the page churns — scroll up and it stops.) */
+    if (dy > 0 && window.scrollY > 2) dy = 0;
     if (!dx && !dy) return;
     var pr = pn.getBoundingClientRect();
     var st = loadJ(PKEY), fl = st.repo && st.repo.float;
@@ -15514,7 +15531,15 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     var nx = Math.round(curX + dx), ny = Math.max(0, Math.round(curY + dy));
     /* APOC-V228: record write removed — see G1. The follow-up
        inline assertion below keeps this session's grip reachable. */
-    window.dispatchEvent(new Event("resize"));
+    /* APOC-V244: the synthetic resize dispatch is GONE. It existed to
+       make the perimeter clamp re-apply after this correction, but
+       the clamp's record write was removed in V228 — the dispatch
+       only produced side effects (pinSets froze-reset, map refits,
+       bubbleFill/libTick re-arms), and this guard's own resize
+       listener re-armed the guard 450ms later: a self-sustaining
+       resize storm at ~450ms cadence for as long as the grip read
+       out of view (probe279: 66 dispatches, all from this line).
+       The follow-up below asserts the correction inline itself. */
     /* The perimeter clamp is panel-relative and can re-park the
        panel outside a smaller viewport (wide-panel geometry): if
        the grip is still out after the page's own apply, assert the
@@ -15527,6 +15552,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       else if (g2.right > window.innerWidth - 4) ddx = Math.round(window.innerWidth - 4 - g2.right);
       if (g2.top < 4) ddy = Math.round(4 - g2.top);
       else if (g2.bottom > window.innerHeight - 4) ddy = Math.round(window.innerHeight - 4 - g2.bottom);
+      if (ddy > 0 && window.scrollY > 2) ddy = 0; /* APOC-V244: same scroll stand-down as the guard body */
       if (!ddx && !ddy) return;
       var cl = parseFloat(el.style.left) || 0, ct = parseFloat(el.style.top) || 0;
       el.style.left = Math.round(cl + ddx) + "px";
