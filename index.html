@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#14171f">
 <meta name="description" content="APOC VTT — the APOC Survival table's shared virtual tabletop: maps, tokens, fog, drawing, dice and initiative on the same shared state as the campaign tracker.">
 <title>APOC VTT</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
 <style>
 :root{
@@ -1607,7 +1608,7 @@ setInterval(loadSharedEntries, 60000);
          never sees them either. */
       if (mk.gm && !effectiveGm()) continue;
       const kind = KINDS.includes(mk.kind) ? mk.kind : "place";
-      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: true, icon: iconFor(kind, mk.name, false, mk._under) }).addTo(layer);
+      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting(), icon: iconFor(kind, mk.name, false, mk._under) }).addTo(layer);
       m.on("click", () => {
         const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
@@ -1615,6 +1616,7 @@ setInterval(loadSharedEntries, 60000);
         openEditor({ mode: "edit", mk });
       });
       m.on("dragend", async () => {
+        if (isProjecting()) { loadMarkers(true); return; } /* APOC-CP1: the TV copy is a pure reader */
         const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
         setStatus(`Saving ${mk.name}'s new position\u2026`);
         const ok = await saveMarkers();
@@ -2171,6 +2173,7 @@ setInterval(loadSharedEntries, 60000);
     gridOn = ev.target.checked;
     drawGrid();
     if (gridOn) gridLayer.addTo(map); else map.removeLayer(gridLayer);
+    saveVttSettings();
   });
   map.on("moveend zoomend", () => { if (gridOn && gridType === "hex") drawGrid(); });
   $("gridType").addEventListener("change", async () => {
@@ -2188,6 +2191,7 @@ setInterval(loadSharedEntries, 60000);
       if (Number(data.value.feetPerSquare) > 0) feetPerSquare = Number(data.value.feetPerSquare);
       if (data.value.unit === "mi" || data.value.unit === "ft") scaleUnit = data.value.unit;
       if (data.value.gridType === "hex" || data.value.gridType === "square") gridType = data.value.gridType;
+      if (typeof data.value.gridOn === "boolean" && data.value.gridOn !== gridOn) { gridOn = data.value.gridOn; $("gridToggle").checked = gridOn; drawGrid(); if (gridOn) gridLayer.addTo(map); else map.removeLayer(gridLayer); } /* APOC-CP1: grid state is shared (Phase 3 #4) */
       const rotIn = Number(data.value.rotation);
       if ([0, 1, 2, 3].includes(rotIn) && rotIn !== mapRot) { mapRot = rotIn; applyMapRotation(); }
       if (document.activeElement !== $("scaleFeet")) $("scaleFeet").value = scaleInputVal();
@@ -2198,7 +2202,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveVttSettings(){
     const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, rotation: mapRot }, updated_at: new Date().toISOString() },
+      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
     return !error;
@@ -2262,7 +2266,7 @@ setInterval(loadSharedEntries, 60000);
     for (const tk of tokens) {
       if (tk.gm && !effectiveGm()) continue;
       if (tk.light > 0 && !window.__apocLightOn) tokenLayer.addLayer(L.circle(toLatLng(tk.x, tk.y), { pane: "layerTokens", radius: tk.light / feetPerSquare * CELL, color: "#e8a33d", weight: 1, dashArray: "4 4", fillColor: "#e8a33d", fillOpacity: 0.08, interactive: false }));
-      const m = L.marker(toLatLng(tk.x, tk.y), { pane: "layerTokens", draggable: !tk.lock, icon: tokenIcon(tk) }).addTo(tokenLayer);
+      const m = L.marker(toLatLng(tk.x, tk.y), { pane: "layerTokens", draggable: !tk.lock && !isProjecting(), icon: tokenIcon(tk) }).addTo(tokenLayer);
       tokenMarkers[tk.id] = m;
       m.on("click", () => {
         if (isProjecting() || document.body.classList.contains("map-expanded")) {
@@ -2272,6 +2276,7 @@ setInterval(loadSharedEntries, 60000);
         openTokenEditor({ mode: "edit", tk });
       });
       m.on("dragend", async () => {
+        if (isProjecting()) { drawTokens(); return; } /* APOC-CP1: pure reader */
         let p = toXY(m.getLatLng());
         if (gridOn && gridType === "hex") {
           const lng = p.x / 100 * MW, lat = MH * (1 - p.y / 100);
@@ -2622,6 +2627,7 @@ setInterval(loadSharedEntries, 60000);
      vanish on the next load - the same lockout by another door. */
   if (gmArmed200 && !new URLSearchParams(location.search).get("display")) { try { localStorage.setItem("apocVttDM", "1"); } catch(e) {} } /* APOC-V234: a ?display copy on the DM's own laptop shares localStorage (apocGm=1) — it must not arm or stamp; the TV stays clean. */
   $("gmBtn").hidden = !gmArmed200;
+  try { var cpGenBtn = $("genBtn"), cpGmBtn = $("gmBtn"); if (cpGenBtn && cpGmBtn && cpGenBtn.getClientRects().length && cpGenBtn.parentNode) cpGenBtn.parentNode.insertBefore(cpGmBtn, cpGenBtn.nextSibling); } catch(e) {} /* APOC-CP1: DM button beside Generate Map */
   if (gmArmed200) {
     gmView = true;
     $("gmBtn").setAttribute("aria-pressed", "true");
@@ -3292,11 +3298,19 @@ setInterval(loadSharedEntries, 60000);
     loadPlaces(true);
     loadTokens(true);
     loadVttSettings(true);
+    fogState = { enabled: false, revealed: [] };
+    drawItems = [];
+    renderFog();
+    renderDraw();
+    loadFog(true);
+    loadDraw(true); /* APOC-CP1: fog/draw belong to the incoming map from this instant — never the previous map's state under the new key */
     setStatus(`Map loaded: ${def.name}.`);
   }
-  async function saveActiveMap(){
+  async function saveActiveMap(){ /* APOC-CP1: merge — a send must not erase the screens' gm flag (Phase 2 A1 / Phase 3 #7) */
+    let prevA = {};
+    try { const prA = await db.from(SETTINGS_TABLE).select("value").eq("key", ACTIVE_KEY).maybeSingle(); if (prA.data && prA.data.value && typeof prA.data.value === "object") prevA = prA.data.value; } catch(e) {}
     await db.from(SETTINGS_TABLE).upsert(
-      { key: ACTIVE_KEY, value: { mapId: currentMapId }, updated_at: new Date().toISOString() },
+      { key: ACTIVE_KEY, value: Object.assign({}, prevA, { mapId: currentMapId }), updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
   }
@@ -4231,6 +4245,7 @@ setInterval(loadSharedEntries, 60000);
       if (opt.value.startsWith("drop-") && !localOnlyIds.has(opt.value) && !list.some(m => m.id === opt.value)) { opt.remove(); delete MAPS[opt.value]; }
     }
     if (currentMapId.startsWith("drop-") && !MAPS[currentMapId]) switchMap("faerun");
+    try { if (typeof loadActiveMap === "function") loadActiveMap(); } catch(e) {} /* APOC-CP1: a just-registered map becomes switchable immediately (Phase 3 #6b) */
   }
   async function saveDropRegistry(){
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: DROP_REG_KEY, value: { maps: dropMaps }, updated_at: new Date().toISOString() }, { onConflict: "key" });
@@ -5248,7 +5263,7 @@ setInterval(loadSharedEntries, 60000);
     window.__apocLightOn = lightState.enabled;
     const playerView = !effectiveGm() || lightPreview;
     /* GM material: wall + door lines and light-source handles (layer 3). */
-    if (!isProjecting() && gmView && !lightPreview) {
+    if (effectiveGm() && !lightPreview) { /* APOC-CP1: a DM-flagged screen sees the wall/light material too (Phase 3 #5) */
       for (const w of lightState.walls) {
         const a = toLatLng(w.a[0], w.a[1]), b = toLatLng(w.b[0], w.b[1]);
         if (w.kind === "door") wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }));
@@ -6760,6 +6775,7 @@ function floorConnected(L, cols, rows){
     const t = GEN_TYPES[$("genType").value];
     if (t && GEN_THEMES[t.theme]) $("genTheme").value = t.theme;
   });
+  try { window.runGeneration = runGeneration; window.genKey = genKey; } catch(e) {} /* APOC-CP1: the Levels story re-roll probes these via eval() and could never see inside this closure (Phase 2 D4) */
   $("genBtn").addEventListener("click", async () => {
     if (isProjecting()) return;
     const btn = $("genBtn"); btn.disabled = true;
@@ -7866,7 +7882,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-2127";
+        var BUILD_STAMP = "2026-11-08-2154";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -8033,7 +8049,7 @@ function floorConnected(L, cols, rows){
   if (btn) btn.addEventListener('click', function(){ on = !on; apply(); });
   if (on) { document.body.classList.add('bg-animated'); if (btn) { btn.setAttribute('aria-pressed','true'); btn.textContent='🔊 Ambience on'; }
     var arm = function(){ startAudio(); window.removeEventListener('pointerdown', arm); window.removeEventListener('keydown', arm); };
-    window.addEventListener('pointerdown', arm); window.addEventListener('keydown', arm); }
+    if (!document.body.classList.contains('displaying')) { window.addEventListener('pointerdown', arm); window.addEventListener('keydown', arm); } /* APOC-CP1: a TV copy never auto-starts sound (Phase 3 #8) */ }
 })();
 </script>
 
@@ -9126,7 +9142,7 @@ function floorConnected(L, cols, rows){
       sets[n].hidden = !on;
       tabs[n].setAttribute("aria-expanded", String(on));
     });
-    if (name) sets[name].scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (name && sets[name]) sets[name].scrollIntoView({ block: "nearest", behavior: "smooth" }); /* APOC-CP2: unknown set names no-op instead of throwing */
   }
   window.ctlOpen = openSet;
   window.ctlCloseAll = function () { openSet(null); };
@@ -10808,7 +10824,7 @@ function floorConnected(L, cols, rows){
     if (!push || !push.parentNode || document.getElementById("screen2SendBtn")) return;
     var send = document.createElement("button");
     send.type = "button"; send.className = "btn"; send.id = "screen2SendBtn";
-    send.textContent = "Screen 2: Send current map";
+    send.textContent = "Screen 2: Send map";
     var mir = document.createElement("button");
     mir.type = "button"; mir.className = "btn"; mir.id = "screen2MirrorBtn";
     mir.textContent = "Screen 2: Mirror";
@@ -10819,12 +10835,14 @@ function floorConnected(L, cols, rows){
       if (!id) return;
       send.disabled = true;
       try {
+        var prevS2 = {};
+        try { var prS2 = await db.from(SETTINGS_TABLE).select("value").eq("key", KEY2).maybeSingle(); if (prS2.data && prS2.data.value && typeof prS2.data.value === "object") prevS2 = prS2.data.value; } catch (e) {}
         await db.from(SETTINGS_TABLE).upsert(
-          { key: KEY2, value: { mapId: id }, updated_at: new Date().toISOString() },
+          { key: KEY2, value: Object.assign({}, prevS2, { mapId: id }), updated_at: new Date().toISOString() },
           { onConflict: "key" });
         send.textContent = "Screen 2: Sent ✓";
       } catch (e) { send.textContent = "Screen 2: Send failed"; }
-      setTimeout(function(){ send.textContent = "Screen 2: Send current map"; send.disabled = false; }, 2200);
+      setTimeout(function(){ send.textContent = "Screen 2: Send map"; send.disabled = false; }, 2200);
     });
     mir.addEventListener("click", async function(){
       mir.disabled = true;
@@ -11083,7 +11101,7 @@ function floorConnected(L, cols, rows){
     rb.textContent = "Reset layout";
     rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
     rb.addEventListener("click", function(){
-      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1", "apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1", "apocVttLibBoxH", "apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     titleBubble.appendChild(rb);
@@ -11511,7 +11529,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     rl.addEventListener("click", function(){
       var b = document.getElementById("layoutResetBtn");
       if (b) { b.click(); return; }
-      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1","apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1","apocVttLibBoxH","apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
@@ -11914,6 +11932,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     repo.classList.add("lib187-open");
     var want = Math.round(B - top); /* APOC-V229: top is already the VIEWPORT top, so B - top IS the distance to the current screen bottom. The v2.19 form (minus scrollY) anchored the box to the UNSCROLLED screen bottom: scrolled down, the floated Library (in the stage-row flow) grew past the visible bottom and extended the document by the scroll offset, feeding the bottom-scroll blink loop. */
     var rr2 = rect(repo);
+    if (window.__apocLibBox) want = window.__apocLibBox.repoH; /* APOC-CP2: open-height freeze */
     if (Math.abs(rr2.height - want) > 1) repo.style.height = want + "px";
   }
 
@@ -12078,6 +12097,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     buildHandles();
     if (!lb.classList.contains("open")) {
       if (libFilled) { lb.style.height = ""; if (lb.style.marginBottom) lb.style.marginBottom = ""; libFilled = false; }
+      window.__apocLibBox = null; window.__apocLibBoxT = 0; /* APOC-CP2: open-height freeze ends */
       var ov0 = lb.querySelector(":scope > .nest-body");
       if (ov0 && ov0.dataset.v188) { ov0.style.height = ""; ov0.style.maxHeight = ""; delete ov0.dataset.v188; }
       applySavedH();
@@ -12088,8 +12108,10 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (rp.classList.contains("per-float")) {
       /* the APOC-V187 anchor (re-pointed at the screen bottom in
          this build) sizes the box; the inner library fills it. */
+      if (!window.__apocLibBox) { window.__apocLibBoxT = window.__apocLibBoxT || Date.now(); if (Date.now() - window.__apocLibBoxT > 250) { var frzR = rect(rp), frzL = rect(lb); if (frzR && frzL && frzR.height > 0) window.__apocLibBox = { repoH: Math.round(frzR.height), libH: Math.round(frzL.height) }; } } /* APOC-CP5: capture BEFORE the scroll-quiet stand-down and sooner — the pre-capture window was the residual creep (BLINK3 on close3: steps only until capture, then still) */
       if (window.__apocLibQuietUntil && Date.now() < window.__apocLibQuietUntil) return; /* APOC-V230: scroll-quiet — stand down while Shaun scrolls inside the Library */
       var lr = rect(lb), rr = rect(rp);
+      if (window.__apocLibBox && lr) { if (Math.abs(lr.height - window.__apocLibBox.libH) > 1) { lb.style.height = window.__apocLibBox.libH + "px"; libFilled = true; } if (lb.style.marginBottom) lb.style.marginBottom = ""; return; } /* APOC-CP2: frozen — content inside scrolls, the box does not chase it */
       if (lr && rr && rr.height > 0) {
         var lh = Math.round(lr.height + (rr.bottom - 2 - lr.bottom));
         if (lh > 80 && Math.abs(lr.height - lh) > 1) { lb.style.height = lh + "px"; libFilled = true; }
@@ -13282,10 +13304,10 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var d = lvDb(); if (!d) { sayAr("Not connected yet — try again in a second."); return; }
     var id = "drop-" + Date.now().toString(36) + Math.floor(Math.random() * 999);
     var rec = { id: id, name: grp.name + " — Story " + (grp.mapIds.length + 1), w: srcRec.w, h: srcRec.h, cell: srcRec.cell, path: srcRec.path };
-    var kinds = ["draw", "tokens", "light", "fog", "settings"];
+    var kinds = ["draw", "tokens", "light", "fog", "settings", "markers", "places", "ping", "gen"];
     var copies = kinds.map(function(kind){
-      return d.from(lvTable()).select("value").eq("key", keyFor(kind, srcId)).maybeSingle().then(function(res){
-        if (res.data && res.data.value) return d.from(lvTable()).upsert({ key: keyFor(kind, id), value: res.data.value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+      return d.from(lvTable()).select("value").eq("key", keyFor2(kind, srcId)).maybeSingle().then(function(res){
+        if (res.data && res.data.value) return d.from(lvTable()).upsert({ key: keyFor2(kind, id), value: res.data.value, updated_at: new Date().toISOString() }, { onConflict: "key" });
         return null;
       }).catch(function(){});
     });
@@ -13339,7 +13361,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var jobs = [];
     if (sh) { sh.setRecs((sh.recs() || []).filter(function(r){ return r.id !== id; })); jobs.push(sh.saveRegistry()); if (sh.delDef) sh.delDef(id); }
     var ms = $("mapSelect"); if (ms) { var opt = ms.querySelector("option[value=\"" + id + "\"]"); if (opt) opt.remove(); }
-    if (d) ["draw", "tokens", "light", "fog", "settings"].forEach(function(kind){ jobs.push(d.from(lvTable()).delete().eq("key", keyFor(kind, id))); });
+    if (d) ["draw", "tokens", "light", "fog", "settings", "markers", "places", "ping", "gen"].forEach(function(kind){ jobs.push(d.from(lvTable()).delete().eq("key", keyFor2(kind, id))); });
     jobs.push(saveLevels());
     Promise.all(jobs).then(function(){
       lvSig = ""; renderLevels();
@@ -13371,6 +13393,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   "use strict";
   function G(name){ try { return eval(name); } catch(e){ return undefined; } }
   function keyFor(kind, id){ return id === "faerun" ? "vtt_" + kind : "vtt_" + kind + "_" + id; }
+  function keyFor2(kind, id){ if (kind === "markers") return id === "faerun" ? "map_markers" : "map_markers_" + id; if (kind === "places") return "vtt_places_" + id; if (kind === "ping") return id === "faerun" ? "vtt_ping" : "vtt_ping_" + id; if (kind === "gen") return "vtt_gen_" + id; return keyFor(kind, id); } /* APOC-CP1: kinds whose real keys break the vtt_<kind> pattern (Phase 2 C6) */
   var lastRootRef = null, lastSig = "", building = false, levelsCache = null, levelsAt = 0;
   function storyH(){ var fps = G("feetPerSquare") || 5; return 10 / fps; } /* world units per story: walls stand 10 ft */
   function frameUnits(){
@@ -13843,6 +13866,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       var rr = repo.getBoundingClientRect(), lr = lib.getBoundingClientRect();
       if (rr.height < 50 || lr.height < 10) return;
       var want = Math.round(rr.bottom - 2 - lr.top);
+      if (window.__apocLibBox) want = window.__apocLibBox.libH; /* APOC-CP2: open-height freeze */
       if (want > 80 && Math.abs(lr.height - want) > 1) lib.style.height = want + "px";
       if (body.style.maxHeight !== "none") body.style.maxHeight = "none";
     } else {
@@ -14149,8 +14173,8 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (push.classList.contains("btn-roam")) return; /* APOC-V230: cluster parked by Shaun - do not chase it */
     var b1 = document.getElementById("tvDm1Btn"), b2 = document.getElementById("tvDm2Btn");
     if (!b1) {
-      b1 = mkTvBtn("tvDm1Btn", "TV: DM view", "vtt_active");
-      b2 = mkTvBtn("tvDm2Btn", "Screen 2: DM view", "vtt_active_2");
+      b1 = mkTvBtn("tvDm1Btn", "TV: DM", "vtt_active");
+      b2 = mkTvBtn("tvDm2Btn", "Screen 2: DM", "vtt_active_2");
     }
     var anchor = document.getElementById("screen2MirrorBtn") || document.getElementById("screen2SendBtn") || push;
     if (anchor.nextSibling !== b1) anchor.parentNode.insertBefore(b1, anchor.nextSibling);
@@ -15338,6 +15362,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       btn = findByKey(keys[i]);
       if (!btn || btn.classList.contains("btn-roam")) continue;
       detach(btn, Math.max(0, Math.min(rec.x, window.innerWidth - 40)), Math.max(0, Math.min(rec.y, window.innerHeight - 24)), keys[i]);
+      try { var rr9 = btn.getBoundingClientRect(); if (rr9.height > 0) { var ny9 = Math.min(parseInt(btn.style.top, 10) || 0, Math.max(0, window.innerHeight - Math.round(rr9.height))); if (ny9 !== (parseInt(btn.style.top, 10) || 0)) btn.style.top = ny9 + "px"; } if (rr9.width > 0) { var nx9 = Math.min(parseInt(btn.style.left, 10) || 0, Math.max(0, window.innerWidth - Math.round(rr9.width))); if (nx9 !== (parseInt(btn.style.left, 10) || 0)) btn.style.left = nx9 + "px"; } } catch(e) {} /* APOC-CP1: the reload rescue keeps the WHOLE button on screen — the old 24px top-edge allowance visibly moved near-bottom parks (probeCP DRAG) */
       /* APOC-V228: menu-set state rides the same record — width
          multiplier and hidden survive reloads like the position does. */
       if (typeof rec.wmult === "number" && rec.wmult !== 1 && rec.bw) btn.style.width = Math.max(24, Math.round(rec.bw * rec.wmult)) + "px";
@@ -16111,5 +16136,693 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
   }, 250);
 })();
 </script>
+
+<style id="APOC-CP1">
+/* APOC-CP1 (closing pass): the initiative strip is player-facing shared
+   state — it must survive on the TV copy even though every other Leaflet
+   control stays hidden there (Phase 3 #2). */
+body.displaying .leaflet-control-container{display:block !important}
+body.displaying .leaflet-control-container .leaflet-control{display:none !important}
+body.displaying .leaflet-control-container .leaflet-control.init-strip{display:block !important}
+</style>
+<script>
+/* APOC-CP1 (closing pass) — Reset-hook repair + shared camera view. */
+(function(){
+  "use strict";
+  /* P14: two Reset hooks (place-card position, perimeter) were bound at
+     parse time to a #layoutResetBtn that does not exist yet that early —
+     they never fired (Phase 2 D1). Delegation fires at any binding age. */
+  document.addEventListener("click", function(e){
+    var b = e.target && e.target.closest ? e.target.closest("#layoutResetBtn") : null;
+    if (!b) return;
+    try { localStorage.removeItem("apocvtt:placecard-pos"); } catch(err) {}
+    try { localStorage.removeItem("apocVttLibBoxH"); } catch(err) {}
+    var card = document.getElementById("placeCard");
+    if (card) { card.classList.remove("floating"); card.style.left = ""; card.style.top = ""; card.style.width = ""; }
+  }, true);
+  /* P19: shared camera view (Phase 3 #1 — the other side mirrors the map,
+     tokens, fog and lighting, but the CAMERA was per-device). The control
+     page publishes {mapId, lat, lng, zoom} to vtt_view on moveend
+     (debounced); display copies follow it for the map they are showing,
+     yielding for 12s after anyone touches the TV's own view. */
+  var TABLE = "site_settings", VKEY = "vtt_view";
+  function getDb(){ try { return (typeof db !== "undefined" && db) ? db : null; } catch(e) { return null; } }
+  function isDisp(){ try { return !!new URLSearchParams(location.search).get("display"); } catch(e) { return false; } }
+  function curId(){ var s = document.getElementById("mapSelect"); return s ? s.value : ""; }
+  function start(){
+    var d = getDb(), m = window.map;
+    if (!d || !m || !m.on) { setTimeout(start, 1500); return; }
+    if (!isDisp()) {
+      var t = null;
+      m.on("moveend", function(){
+        clearTimeout(t);
+        t = setTimeout(function(){
+          try {
+            var c = m.getCenter();
+            d.from(TABLE).upsert({ key: VKEY, value: { mapId: curId(), lat: c.lat, lng: c.lng, zoom: m.getZoom(), ts: Date.now() }, updated_at: new Date().toISOString() }, { onConflict: "key" }).then(function(){}, function(){});
+          } catch(e) {}
+        }, 450);
+      });
+    } else {
+      var lastLocal = 0, applying = false;
+      m.on("movestart", function(){ if (!applying) lastLocal = Date.now(); });
+      var poll = function(){
+        d.from(TABLE).select("value").eq("key", VKEY).maybeSingle().then(function(res){
+          try {
+            var v = res && res.data && res.data.value;
+            if (!v || typeof v.lat !== "number" || v.mapId !== curId()) return;
+            if (Date.now() - lastLocal < 12000) return;
+            var c = m.getCenter();
+            if (Math.abs(c.lat - v.lat) < 1e-7 && Math.abs(c.lng - v.lng) < 1e-7 && m.getZoom() === v.zoom) return;
+            applying = true;
+            m.setView([v.lat, v.lng], v.zoom, { animate: false });
+            setTimeout(function(){ applying = false; }, 80);
+          } catch(e) {}
+        }, function(){});
+      };
+      setInterval(poll, 4000); setTimeout(poll, 2500);
+    }
+  }
+  setTimeout(start, 1200);
+})();
+</script>
+
+<style id="APOC-CP2">
+/* APOC-CP2 (closing pass) — shortening round, from the CEN2 census of 336
+   controls: bar tabs carry the same padding as the bar buttons (33 -> ~30
+   tall); buttons inside sets stop stretching to the set's full width;
+   the Library's per-folder move/delete buttons shrink 36 -> 26 so folder
+   names stop clipping at the doubled 224 width; a Library sub-head whose
+   label wraps is tagged by the CP2 script and its nest spans the row —
+   Shaun's standing rule that long labels span the full row. */
+.ctl-tab{padding-top:2px;padding-bottom:2px}
+.ctl-set .btn{align-self:flex-start}
+.map-repo .mr-move,.map-repo .mr-del{width:26px!important;height:26px!important;min-width:26px!important;padding:0!important;font-size:.8rem;line-height:1}
+#artLibrary .nest.cp-wide-head{grid-column:1/-1}
+</style>
+<script>
+/* APOC-CP2 (closing pass) — freeze release on resize + Library head tagging. */
+(function(){
+  "use strict";
+  window.addEventListener("resize", function(){ window.__apocLibBox = null; window.__apocLibBoxT = 0; });
+  function tagLibHeads(){
+    try {
+      document.querySelectorAll("#artLibrary .mr-folder").forEach(function(f){
+        var fh = f.querySelector(".mr-folder-head"); if (!fh) return;
+        if (fh.scrollWidth > fh.clientWidth + 2) f.classList.add("cp-wide-head"); /* APOC-CP5: a clipped folder head spans the row */
+      });
+      document.querySelectorAll("#artLibrary .nest").forEach(function(n){
+        var h = n.querySelector(":scope > .nest-head"); if (!h) return;
+        if (h.offsetHeight > 34) n.classList.add("cp-wide-head"); else n.classList.remove("cp-wide-head");
+        if (h.scrollWidth > h.clientWidth + 2 && !h.title) h.title = (h.textContent || "").replace(/\s+/g, " ").trim();
+      });
+    } catch(e) {}
+  }
+  setInterval(tagLibHeads, 1500); setTimeout(tagLibHeads, 2500);
+})();
+</script>
+
+<style id="APOC-CP3">
+/* APOC-CP3 (closing pass): the TV/display copy's height chain — #mapPanel
+   is fixed full-screen, but .stage-row had no definite height, so the
+   100% heights below it (map-stage, map-side, the map itself) resolved
+   against an auto-height row whose only sized child is display:none on
+   a display copy: the map collapsed to 2px and a fresh TV browser got a
+   black screen (probeCP2 DISP2 / probeCP3 DISP3 chain trace). */
+body.displaying .stage-row{height:100%}
+</style>
+
+<script>window.__damV2 = (function(){ var module = { exports: {} }; var exports = module.exports; var Buffer = { from: function(s, enc){ var u = new Uint8Array(0); if (enc === "base64") { var bin = ""; try { bin = atob(String(s || "").replace(/\s+/g, "")); } catch(e) { bin = ""; } u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); } u.readUInt32BE = function(o){ return (((u[o] << 24) | (u[o + 1] << 16) | (u[o + 2] << 8) | u[o + 3]) >>> 0); }; u.readUInt16BE = function(o){ return ((u[o] << 8) | u[o + 1]); }; var rawSlice = u.slice.bind(u); u.slice = function(a, b){ var v = rawSlice(a, b); v.readUInt32BE = u.readUInt32BE; v.readUInt16BE = u.readUInt16BE; v.toString = function(e2){ if (e2 === "hex") { var h = ""; for (var j = 0; j < v.length; j++) h += ("0" + v[j].toString(16)).slice(-2); return h; } return ""; }; return v; }; return u; } }; /* APOC-CP7: browser shim for the converter's Buffer use */
+"use strict";
+/* dam-import-v2.js — APOC-VTT: Dungeon Alchemist native .dam → VTT (v2 rebuild)
+ *
+ * Rebuild of work/da3d/dam-convert.js against the REAL .dam schema, per the
+ * failure analysis in work/dam-conversion-report.md (F1–F6). The OUTPUT
+ * OBJECT SHAPE is unchanged from v1 (integration contract):
+ *   { ok, meta:{w,h,origin,name,...}, lighting:{enabled, walls:[{id,kind,a,b,open,h?}], lights:[...]},
+ *     rooms:[{x,y,w,h,tiles}], stamps:[{prop,gx,gy,fw,fh,rot,...}], report:{...} }
+ * Additive fields only: output.floors, output.images, output.guidTable,
+ * extra keys on stamps/walls/report. Nothing the page reads was renamed.
+ *
+ * WHAT THE REAL SCHEMA ACTUALLY IS (measured over all 18 source files,
+ * 13,106 instances / 1,358 walls / 5,431 floors / 1,455 pillars / 4,912 objects):
+ *
+ *  - Coordinates: ONE 0-based map space for tiles, wallSection endpoints,
+ *    and instance positions (floor tile {5,2} ↔ its instance at {5.5,2.5};
+ *    wall "16 14 17 14" ↔ its instance at the midpoint {16.5,14}).
+ *    `origin` is the map pivot (≈ centre), NOT an offset. v1 subtracted it
+ *    from every coordinate (a full-map room landed at x=-10.5 on a 21-wide
+ *    map); v2 does not. Percent conversion is x/W*100, y/H*100.
+ *  - Instances partition EXACTLY by join role (no overlaps, no orphans):
+ *    floors[].buildingBlockInstanceId → floor tile (5,381; +50 floors in
+ *    Wizbang-Despair.dam carry buildingBlockInstanceId:null and convert via
+ *    floorBlockId), walls[].buildingBlockInstanceId → wall segment (1,358),
+ *    pillars[].buildingBlockInstanceId → pillar (1,455),
+ *    objects[].buildingBlockInstanceId → placed prop (4,912; objects[] also
+ *    carries roomInstanceId, so room membership survives). The 740 distinct
+ *    blockId GUIDs are likewise role-disjoint: 30 floor / 69 wall /
+ *    15 pillar / 626 object. ROLE — not height — is the discriminator v1
+ *    lacked. Instance `height` is elevation (floor/pillar/wall instances
+ *    hold ≤5 distinct values per role; object instances 1,458 distinct,
+ *    continuous) and is never used for typing. Instance `scale` is a single
+ *    scalar (visual variance, 0.14–16.7 on objects; exactly 1 on
+ *    floor/pillar/wall) — no footprint exists in the file (objects[]
+ *    removedTiles is null in 4,897 records and [] in 15, non-empty in 0),
+ *    so stamps are fw=fh=1 with the scalar preserved as stamp.scale.
+ *  - Walls (fixes F1): the segment lives in `wallSection` ("x1 y1 x2 y2").
+ *    `wallBlockIds` keys decompose as "[x1,y1 -> x2,y2] / dx,dy" = one UNIT
+ *    sub-segment × one FACE normal: a length-L record has L units × 2 faces
+ *    (lengths measured: 1×1,320, 2×36, 4×2 → 1,400 units, 2,800 faces).
+ *    The two faces are the wall's two material finishes (the wall instance's
+ *    cutoutFrontBlockId / cutoutBackBlockId / backWallBlockId mirror exactly
+ *    those two GUIDs on all 1,358 records).
+ *  - Doors/windows: see parseWalls() — the wallBlockIds divergence signal
+ *    was tested at unit level and yields ZERO candidates (evidence in the
+ *    v2 report); the only defensible in-data signal found is
+ *    RotationAxisModifierRenderer on wall instances (3 records).
+ *  - Lights (fixes F6, partially): object instances carrying
+ *    EnableLightModifierRenderer === true/"true" (3 in the corpus) become
+ *    VTT lights, coloured by ChangeLightColorModifierRenderer when present.
+ *    ChangeLight alone (25) or EnableLight false (21) does NOT make a light
+ *    — those stay stamps flagged lightCapable. Scene lighting
+ *    (lightingType + customLightingData) converts into meta.sceneLighting.
+ *  - binaryData (fixes F5, partially): embedded raster images (magic bytes:
+ *    PNG ×11, JPEG ×2; 13 entries in 4 maps), referenced by
+ *    CustomImageModifierRenderer* values on 21 object instances. They are
+ *    converted to output.images (format/dimensions/data URI) and linked
+ *    from their stamps. `terrain` is a DA binary splat map (base64 →
+ *    binary, length-prefixed keys "splats"/"size"/"1000"…): DA-internal
+ *    texture-index data with no VTT consumer and no texture atlas in the
+ *    file — identified, measured, NOT converted (see report.terrain).
+ */
+
+let _uid = 0;
+function uid(p) { return p + "-" + (++_uid).toString(36) + Date.now().toString(36); }
+function num(v, d) { const n = Number(v); return Number.isFinite(n) ? n : (d || 0); }
+function shortId(g) { return g ? String(g).slice(0, 8) : "none"; }
+
+function parseOrigin(o) {
+  if (!o) return { x: 0, y: 0 };
+  if (Array.isArray(o)) return { x: num(o[0]), y: num(o[1]) };
+  return { x: num(o.x), y: num(o.y) };
+}
+function tileXY(t, w) {
+  if (t == null) return null;
+  if (typeof t === "number") return { x: t % w, y: Math.floor(t / w) };
+  if (Array.isArray(t)) return { x: num(t[0]), y: num(t[1]) };
+  if (typeof t === "string") { const p = t.trim().split(/\s+/).map(Number); if (p.length >= 2 && p.every(Number.isFinite)) return { x: p[0], y: p[1] }; return null; }
+  if (typeof t === "object") return { x: num(t.x), y: num(t.y) };
+  return null;
+}
+function parseSegString(s) {
+  if (typeof s !== "string") return null;
+  const p = s.trim().split(/\s+/).map(Number);
+  if (p.length >= 4 && p.slice(0, 4).every(Number.isFinite)) return { a: [p[0], p[1]], b: [p[2], p[3]] };
+  return null;
+}
+/* wall segment: real shape first (wallSection), then every v1 shape as fallback */
+function wallSeg(w) {
+  if (typeof w === "string") { const r = parseSegString(w); return r ? { ...r, raw: w } : null; }
+  if (w && typeof w === "object") {
+    const cand = w.wallSection || w.segment || w.coords || w.line || w.points;
+    if (typeof cand === "string") { const r = parseSegString(cand); if (r) return { ...r, raw: cand }; }
+    if (Array.isArray(cand) && cand.length >= 2) { const A = tileXY(cand[0], 1e9), B = tileXY(cand[1], 1e9); if (A && B) return { a: [A.x, A.y], b: [B.x, B.y] }; }
+    if ("x1" in w) return { a: [num(w.x1), num(w.y1)], b: [num(w.x2), num(w.y2)] };
+    if (w.a && w.b) { const A = tileXY(w.a, 1e9), B = tileXY(w.b, 1e9); if (A && B) return { a: [A.x, A.y], b: [B.x, B.y] }; }
+  }
+  return null;
+}
+/* wallBlockIds → [{unit:[ax,ay,bx,by], normal:[dx,dy], guid}] */
+const WALLKEY_RE = /^\[\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*->\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\]\s*\/\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*$/;
+function parseWallBlockIds(wallBlockIds) {
+  const out = [];
+  for (const [k, guid] of Object.entries(wallBlockIds || {})) {
+    const m = WALLKEY_RE.exec(k);
+    if (m) out.push({ unit: [num(m[1]), num(m[2]), num(m[3]), num(m[4])], normal: [num(m[5]), num(m[6])], guid, key: k });
+    else out.push({ unit: null, normal: null, guid, key: k });
+  }
+  return out;
+}
+function instPos(inst) {
+  const p = inst.position || inst.pos || inst.location;
+  if (!p) return ("x" in inst) ? { x: num(inst.x), y: num(inst.y) } : null;
+  if (Array.isArray(p)) return { x: num(p[0]), y: num(p[1]) };
+  return { x: num(p.x), y: num(p.y) };
+}
+function parseModifierJson(v) {
+  if (v == null) return null;
+  if (typeof v === "object") return v;
+  try { return JSON.parse(String(v)); } catch (e) { return null; }
+}
+function truthyMod(v) { return v === true || v === "true"; }
+/* "#RRGGBBAA" (DA) → "#RRGGBB" (VTT light colour) */
+function daColor(c) {
+  if (typeof c !== "string") return null;
+  const m = /^#([0-9a-fA-F]{6})([0-9a-fA-F]{2})?$/.exec(c.trim());
+  return m ? ("#" + m[1].toLowerCase()) : c;
+}
+function jpegSize(buf) {
+  let i = 2;
+  while (i + 9 < buf.length) {
+    if (buf[i] !== 0xff) { i++; continue; }
+    const marker = buf[i + 1];
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { i += 2; continue; }
+    const len = buf.readUInt16BE(i + 2);
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+    }
+    i += 2 + len;
+  }
+  return { width: null, height: null };
+}
+function imageInfo(base64) {
+  const buf = Buffer.from(String(base64 || ""), "base64");
+  if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return { format: "png", mime: "image/png", bytes: buf.length, width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+  }
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xd8) {
+    const s = jpegSize(buf);
+    return { format: "jpeg", mime: "image/jpeg", bytes: buf.length, width: s.width, height: s.height };
+  }
+  return { format: "unknown", mime: "application/octet-stream", bytes: buf.length, width: null, height: null, headHex: buf.slice(0, 8).toString("hex") };
+}
+
+function damToVtt(dam, guidMap) {
+  guidMap = guidMap || {};
+  const W = num(dam.width), H = num(dam.height);
+  const org = parseOrigin(dam.origin);
+  const rep = {
+    wallsIn: 0, wallsOut: 0, floors: 0, pillars: 0, rooms: 0, instances: 0, objects: 0,
+    guidKnown: 0, guidFallback: 0, doorsHeuristic: [], lightsFromGuid: 0, notes: [],
+    // v2 accounting
+    floorsIn: 0, floorTilesConverted: 0, floorGroups: 0, floorsWithoutInstance: 0,
+    pillarsIn: 0, pillarsOut: 0, stampsOut: 0, placeholders: 0, lightsOut: 0,
+    lightsFromModifiers: 0, lightCapableNotEnabled: 0,
+    instancesByRole: { floor: 0, wall: 0, pillar: 0, object: 0, unroled: 0 },
+    instancesAccounted: 0,
+    doorDiagnostics: { unitsChecked: 0, facesChecked: 0, divergentFaces: 0, dualMaterialUnits: 0, unitCandidates: 0, rotationAxisCandidates: 0, segmentsWithDivergentFace: 0 },
+    imagesFound: 0, imagesReferenced: 0, customImageStamps: 0,
+    sceneLighting: null, terrain: null, drops: []
+  };
+  if (!W || !H) { rep.notes.push("width/height missing or zero — cannot convert"); return { ok: false, report: rep }; }
+  const PX = x => (x / W) * 100, PY = y => (y / H) * 100;
+
+  const instances = dam.buildingBlockInstances || [];
+  const instById = new Map();
+  for (const i of instances) if (i && i.id) instById.set(i.id, i);
+  rep.instances = instances.length;
+
+  /* ---- role joins (the discriminator): instanceId → role + link record ---- */
+  const roleOf = new Map();   // instanceId -> "floor"|"wall"|"pillar"|"object"
+  const objectLink = new Map(); // instanceId -> objects[] record (room membership)
+  for (const f of (dam.floors || [])) if (f.buildingBlockInstanceId && instById.has(f.buildingBlockInstanceId)) roleOf.set(f.buildingBlockInstanceId, "floor");
+  for (const w of (dam.walls || [])) if (w.buildingBlockInstanceId && instById.has(w.buildingBlockInstanceId)) roleOf.set(w.buildingBlockInstanceId, "wall");
+  for (const p of (dam.pillars || [])) if (p.buildingBlockInstanceId && instById.has(p.buildingBlockInstanceId)) roleOf.set(p.buildingBlockInstanceId, "pillar");
+  for (const o of (dam.objects || [])) if (o.buildingBlockInstanceId && instById.has(o.buildingBlockInstanceId)) { roleOf.set(o.buildingBlockInstanceId, "object"); objectLink.set(o.buildingBlockInstanceId, o); }
+  rep.objects = (dam.objects || []).length;
+  for (const i of instances) rep.instancesByRole[roleOf.get(i.id) || "unroled"]++;
+
+  /* ---- rooms → cell bboxes (v1 shape; coordinates NOT origin-shifted) ---- */
+  const rooms = [];
+  const roomIndexByInstanceId = new Map();
+  for (const r of (dam.rooms || [])) {
+    const tiles = r.tiles || r.cells || r.positions || [];
+    let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9, n = 0;
+    for (const t of tiles) { const p = tileXY(t, W); if (!p) continue; n++; mnx = Math.min(mnx, p.x); mny = Math.min(mny, p.y); mxx = Math.max(mxx, p.x); mxy = Math.max(mxy, p.y); }
+    if (n) {
+      const idx = rooms.length;
+      rooms.push({ x: mnx, y: mny, w: mxx - mnx + 1, h: mxy - mny + 1, tiles: n, damRoomId: r.roomId || null, damRoomInstanceId: r.id || null });
+      if (r.id) roomIndexByInstanceId.set(r.id, idx);
+    }
+  }
+  rep.rooms = rooms.length;
+
+  /* ---- floors → geometry: tile rects grouped by room + floor block GUID ---- */
+  rep.floorsIn = (dam.floors || []).length; rep.floors = rep.floorsIn;
+  const floorGroups = new Map(); // roomInstanceId|floorBlockId -> group
+  for (const f of (dam.floors || [])) {
+    const t = tileXY(f.tile, W);
+    if (!t) { rep.drops.push({ kind: "floor", reason: "floor record without a parseable tile", record: f.id || null }); continue; }
+    if (!f.buildingBlockInstanceId) rep.floorsWithoutInstance++;
+    const key = (f.roomInstanceId || "?") + "|" + (f.floorBlockId || "?");
+    if (!floorGroups.has(key)) floorGroups.set(key, { damRoomInstanceId: f.roomInstanceId || null, roomIndex: roomIndexByInstanceId.has(f.roomInstanceId) ? roomIndexByInstanceId.get(f.roomInstanceId) : null, guid: f.floorBlockId || null, tiles: [] });
+    floorGroups.get(key).tiles.push({ x: t.x, y: t.y, h: (f.height == null ? null : num(f.height)) });
+    rep.floorTilesConverted++;
+  }
+  const floors = [];
+  for (const g of floorGroups.values()) {
+    // merge each row's consecutive tiles into rects
+    const rows = new Map();
+    for (const t of g.tiles) { if (!rows.has(t.y)) rows.set(t.y, []); rows.get(t.y).push(t.x); }
+    const rects = [];
+    for (const [y, xs] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
+      xs.sort((a, b) => a - b);
+      let start = xs[0], prev = xs[0];
+      for (let i = 1; i <= xs.length; i++) {
+        if (i < xs.length && xs[i] === prev + 1) { prev = xs[i]; continue; }
+        rects.push({ x: start, y, w: prev - start + 1, h: 1 });
+        if (i < xs.length) { start = xs[i]; prev = xs[i]; }
+      }
+    }
+    floors.push({ damRoomInstanceId: g.damRoomInstanceId, roomIndex: g.roomIndex, guid: g.guid, tiles: g.tiles, rects, tileCount: g.tiles.length });
+  }
+  rep.floorGroups = floors.length;
+
+  /* ---- walls → lighting segments + door/window heuristic ----
+   * Prescribed check (task): a sub-position whose block GUID differs from
+   * the segment's majority/plain-wall GUID marks a door candidate.
+   * Granularity correction, from the data: a wallBlockIds entry is one
+   * FACE of one UNIT, and a wall legitimately carries TWO face materials
+   * (front/back finishes — mirrored by the instance's cutoutFront/cutoutBack).
+   * A single divergent face is therefore a finish, not an opening. A door/
+   * window candidate requires the whole UNIT sub-span (both faces) to be a
+   * single block differing from the record's plain-wall context. Measured
+   * over the corpus that yields 0 — see rep.doorDiagnostics for every count.
+   * Second signal: RotationAxisModifierRenderer occurs ONLY on wall
+   * instances (3 corpus-wide) — a pivoting wall panel; those segments are
+   * emitted as door candidates flagged heuristic:"door-or-window". */
+  const walls = [];
+  for (const w of (dam.walls || [])) {
+    const s = wallSeg(w);
+    if (!s) { rep.notes.push("unparseable wall entry skipped: " + JSON.stringify(w).slice(0, 60)); rep.drops.push({ kind: "wall", reason: "no wallSection/segment shape matched", record: (w && w.id) || null }); continue; }
+    rep.wallsIn++;
+    const win = instById.get(w.buildingBlockInstanceId) || null;
+    const faces = parseWallBlockIds(w.wallBlockIds);
+    // diagnostics: majority face GUID of the record
+    const cnt = {}; for (const f of faces) cnt[f.guid] = (cnt[f.guid] || 0) + 1;
+    const majority = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
+    const majorityGuid = majority ? majority[0] : null;
+    let segDivergent = false;
+    const byUnit = new Map();
+    for (const f of faces) {
+      rep.doorDiagnostics.facesChecked++;
+      if (majorityGuid && f.guid !== majorityGuid) { rep.doorDiagnostics.divergentFaces++; segDivergent = true; }
+      const uk = f.unit ? f.unit.join(",") : f.key;
+      if (!byUnit.has(uk)) byUnit.set(uk, []);
+      byUnit.get(uk).push(f.guid);
+    }
+    if (segDivergent) rep.doorDiagnostics.segmentsWithDivergentFace++;
+    for (const guids of byUnit.values()) {
+      rep.doorDiagnostics.unitsChecked++;
+      const uniq = [...new Set(guids)];
+      if (uniq.length === 2) rep.doorDiagnostics.dualMaterialUnits++;
+      if (uniq.length === 1 && majorityGuid && uniq[0] !== majorityGuid && !(win && uniq[0] === win.blockId)) {
+        rep.doorDiagnostics.unitCandidates++;
+        rep.doorsHeuristic.push({ kind: "door", heuristic: "door-or-window", signal: "wallBlockIds unit replaced on both faces", at: null, guid: uniq[0], wallRecordId: w.id || null });
+      }
+    }
+    const mv = (win && win.modifierValues) || {};
+    const hasRotationAxis = Object.prototype.hasOwnProperty.call(mv, "RotationAxisModifierRenderer");
+    const entry = {
+      id: uid("w"), kind: "wall",
+      a: [PX(s.a[0]), PY(s.a[1])], b: [PX(s.b[0]), PY(s.b[1])], open: false,
+      damGuid: win ? (win.blockId || null) : null, damWallId: w.id || null,
+      damFaces: [...new Set(faces.map(f => f.guid))]
+    };
+    if (hasRotationAxis) {
+      entry.kind = "door"; entry.h = 8; entry.heuristic = "door-or-window"; entry.signal = "RotationAxisModifierRenderer on wall instance";
+      rep.doorDiagnostics.rotationAxisCandidates++;
+      rep.doorsHeuristic.push({ kind: "door", heuristic: "door-or-window", signal: "RotationAxisModifierRenderer on wall instance", at: [s.a[0], s.a[1]], guid: entry.damGuid, wallRecordId: w.id || null });
+    }
+    walls.push(entry);
+  }
+  rep.wallsOut = walls.length;
+
+  /* ---- binaryData → embedded images ---- */
+  const images = [];
+  const imageKeys = new Set();
+  for (const [key, v] of Object.entries(dam.binaryData || {})) {
+    const b64 = (v && v.base64) || "";
+    const info = imageInfo(b64);
+    imageKeys.add(key);
+    images.push({ key, format: info.format, mime: info.mime, bytes: info.bytes, width: info.width, height: info.height, dataUri: "data:" + info.mime + ";base64," + b64, referencedBy: [] });
+  }
+  rep.imagesFound = images.length;
+  const imageByKey = new Map(images.map(im => [im.key, im]));
+
+  /* ---- instances → lights / stamps, by role ---- */
+  const stamps = [], lights = [];
+  const guidAgg = new Map(); // guid -> {guid, role, placements, representation, placeholder}
+  const agg = (guid, role, representation, placeholder) => {
+    if (!guid) return;
+    if (!guidAgg.has(guid)) guidAgg.set(guid, { guid, short: shortId(guid), role, placements: 0, representation, placeholder: !!placeholder });
+    guidAgg.get(guid).placements++;
+  };
+
+  for (const inst of instances) {
+    const role = roleOf.get(inst.id) || "unroled";
+    const guid = inst.blockId || null;
+    const cat = guid ? guidMap[guid] : null;
+    if (role === "floor") { agg(guid, "floor", "floor tile geometry (floors[])", false); rep.instancesAccounted++; continue; }
+    if (role === "wall") { agg(guid, "wall", "lighting wall segment (lighting.walls[])", false); rep.instancesAccounted++; continue; }
+    if (role === "pillar") continue; // emitted from pillar records below (real positions + capstone)
+    if (role === "unroled") { rep.drops.push({ kind: "instance", reason: "instance referenced by no floor/wall/pillar/object record — no role, no placement context", record: inst.id }); continue; }
+    // role === "object": a placed prop; position comes from the instance,
+    // room membership from the objects[] join record.
+    const pos = instPos(inst);
+    if (!pos) { rep.drops.push({ kind: "instance", reason: "object instance without position", record: inst.id }); continue; }
+    rep.instancesAccounted++;
+    const link = objectLink.get(inst.id) || {};
+    const mv = inst.modifierValues || {};
+    const changeLight = parseModifierJson(mv.ChangeLightColorModifierRenderer);
+    const hasEnable = Object.prototype.hasOwnProperty.call(mv, "EnableLightModifierRenderer");
+    const lightEnabled = hasEnable && truthyMod(mv.EnableLightModifierRenderer);
+    const customImageKey = ["CustomImageModifierRenderer", "CustomImageModifierRenderer_0", "CustomImageModifierRenderer_1"]
+      .map(k => { let v = mv[k]; if (typeof v === "string") { const p = parseModifierJson(v); if (typeof p === "string") v = p; } return v; })
+      .find(v => typeof v === "string" && imageByKey.has(v)) || null;
+    if (customImageKey) { imageByKey.get(customImageKey).referencedBy.push(inst.id); rep.customImageStamps++; }
+
+    if (cat && cat.type === "light") {
+      rep.guidKnown++; rep.lightsFromGuid++;
+      lights.push({ id: uid("lt"), name: cat.name || "Imported light", x: PX(pos.x), y: PY(pos.y), bright: num(cat.bright, 10), dim: num(cat.dim, 20), color: cat.color || "#ffb46b", flame: !!cat.flame, damGuid: guid });
+      agg(guid, "object", "light (GUID catalog)", false);
+      continue;
+    }
+    if (lightEnabled) {
+      const intensity = changeLight && Number.isFinite(Number(changeLight.intensity)) ? Number(changeLight.intensity) : 1;
+      const color = (changeLight && changeLight.useCustomColor && daColor(changeLight.color)) || "#ffb46b";
+      rep.lightsFromModifiers++;
+      lights.push({ id: uid("lt"), name: "Imported light (" + shortId(guid) + ")", x: PX(pos.x), y: PY(pos.y), bright: Math.round(10 * intensity), dim: Math.round(20 * intensity), color, flame: false, damGuid: guid, damSignal: "EnableLightModifierRenderer=true" });
+      agg(guid, "object", "light (EnableLightModifierRenderer=true)", false);
+      continue;
+    }
+    if (changeLight || hasEnable) rep.lightCapableNotEnabled++;
+    let prop, known = false, placeholder = false, representation;
+    if (cat && cat.prop) { prop = cat.prop; known = true; rep.guidKnown++; representation = "prop '" + prop + "' (GUID catalog)"; }
+    else {
+      prop = "dam-" + shortId(guid); placeholder = true; rep.guidFallback++;
+      representation = customImageKey ? "placeholder stamp + custom image " + customImageKey.slice(0, 8) : "placeholder stamp (no discriminating field in .dam)";
+    }
+    const stamp = {
+      prop, gx: pos.x, gy: pos.y, fw: 1, fh: 1, rot: num(inst.rotation),
+      damGuid: guid, damSrc: "object", known, placeholder,
+      damInstanceId: inst.id, scale: (typeof inst.scale === "number" ? inst.scale : null),
+      elevation: (inst.height == null ? null : num(inst.height)),
+      damRoomInstanceId: link.roomInstanceId || null,
+      roomIndex: link.roomInstanceId && roomIndexByInstanceId.has(link.roomInstanceId) ? roomIndexByInstanceId.get(link.roomInstanceId) : null
+    };
+    if (inst.attachedWall) { const seg = parseSegString(inst.attachedWall); stamp.wallAttached = true; stamp.attachedWall = seg ? { a: seg.a, b: seg.b } : inst.attachedWall; }
+    if (inst.parentInstanceId) stamp.damParentInstanceId = inst.parentInstanceId;
+    if (inst.variantId) stamp.variantId = inst.variantId;
+    if (customImageKey) stamp.customImage = customImageKey;
+    if (changeLight || hasEnable) { stamp.lightCapable = true; stamp.lightEnabled = false; if (changeLight) stamp.lightColor = daColor(changeLight.color); }
+    stamps.push(stamp);
+    agg(guid, "object", representation, placeholder);
+  }
+
+  /* ---- pillars → stamps from the pillar records (real corner positions) ---- */
+  rep.pillarsIn = (dam.pillars || []).length; rep.pillars = rep.pillarsIn;
+  for (const p of (dam.pillars || [])) {
+    const inst = instById.get(p.buildingBlockInstanceId) || null;
+    const corner = p.position && p.position.position ? p.position.position : (inst ? instPos(inst) : null);
+    if (!corner) { rep.drops.push({ kind: "pillar", reason: "pillar record without position and without resolvable instance", record: p.id || null }); continue; }
+    const guid = inst ? (inst.blockId || null) : null;
+    const cap = inst ? parseModifierJson((inst.modifierValues || {}).PillarCapstoneRenderer) : null;
+    stamps.push({
+      prop: "pillar", gx: num(corner.x), gy: num(corner.y), fw: 1, fh: 1, rot: 0,
+      damGuid: guid, damSrc: "pillar", known: true, placeholder: false,
+      damInstanceId: inst ? inst.id : null,
+      capstoneOffset: p.position && p.position.offset ? { x: num(p.position.offset.x), y: num(p.position.offset.y) } : null,
+      capstoneEnabled: cap ? !!cap.capstoneEnabled : null
+    });
+    rep.pillarsOut++;
+    if (inst) { agg(guid, "pillar", "pillar stamp (prop 'pillar', role-proven)", false); rep.instancesAccounted++; }
+  }
+  rep.stampsOut = stamps.length;
+  rep.placeholders = stamps.filter(s => s.placeholder).length;
+  rep.lightsOut = lights.length;
+  rep.imagesReferenced = images.filter(im => im.referencedBy.length).length;
+
+  /* ---- scene lighting + terrain (identification) ---- */
+  const cld = dam.customLightingData || null;
+  rep.sceneLighting = {
+    lightingType: (dam.lightingType == null ? null : num(dam.lightingType)),
+    custom: !!cld,
+    intensity: cld ? num(cld.intensity) : null,
+    mainLight: cld && cld.colorSwatch ? daColor(cld.colorSwatch.mainLight) : null,
+    backLight: cld && cld.colorSwatch ? daColor(cld.colorSwatch.backLight) : null,
+    mainLightAngle: cld ? num(cld.mainLightAngle) : null,
+    mainLightHeightAngle: cld ? num(cld.mainLightHeightAngle) : null
+  };
+  const terrainStr = typeof dam.terrain === "string" ? dam.terrain : null;
+  rep.terrain = terrainStr == null ? { present: false } : {
+    present: true, format: "DA binary splat map (base64-encoded binary; length-prefixed keys 'splats'/'size'/'1000'…)",
+    base64Chars: terrainStr.length, decodedBytes: Buffer.from(terrainStr, "base64").length, converted: false,
+    reason: "per-tile DA splat texture indices; the splat texture atlas is not in the .dam file and the VTT output shape has no terrain-splat consumer"
+  };
+
+  const guidTable = [...guidAgg.values()].sort((a, b) => b.placements - a.placements);
+  return {
+    ok: true,
+    meta: { w: W, h: H, origin: org, name: dam.name || dam.title || "Dungeon Alchemist import", sceneLighting: rep.sceneLighting, terrain: rep.terrain },
+    lighting: { enabled: true, walls, lights },
+    rooms, floors, stamps, images, guidTable,
+    report: rep
+  };
+}
+
+/* Corpus-level GUID table: aggregate per-map guidTables into one row per GUID. */
+function mergeGuidTables(outputs) {
+  const agg = new Map();
+  for (const out of outputs) {
+    for (const row of (out.guidTable || [])) {
+      if (!agg.has(row.guid)) agg.set(row.guid, { guid: row.guid, short: row.short, role: row.role, placements: 0, maps: 0, representation: row.representation, placeholder: row.placeholder });
+      const a = agg.get(row.guid);
+      a.placements += row.placements; a.maps++;
+    }
+  }
+  return [...agg.values()].sort((a, b) => b.placements - a.placements);
+}
+
+module.exports = { damToVtt, mergeGuidTables, _internals: { wallSeg, parseWallBlockIds, parseSegString, imageInfo } };
+
+return module.exports; })();</script>
+<script>
+/* APOC-CP4 (closing pass) — Dungeon Alchemist .dam import. See
+   dam-conversion-report-v2.md for the conversion evidence: walls
+   1,358/1,358, floors 5,431/5,431, pillars 1,455/1,455 across Shaun's
+   18 maps; object placeholders are honest (GUID-named generated tiles),
+   never the v1 height-guessed props. */
+(function(){
+  "use strict";
+  function $(id){ return document.getElementById(id); }
+  var btn = document.createElement("button");
+  btn.type = "button"; btn.className = "btn"; btn.id = "damImportBtn";
+  btn.textContent = "Import DA map (.dam)";
+  btn.title = "Import a Dungeon Alchemist .dam file: floors become the map image, walls land in the lighting layer, objects land as draw stamps (placeholders named by their DA id until a catalog maps them).";
+  var inp = document.createElement("input");
+  inp.type = "file"; inp.id = "damFileInput"; inp.accept = ".dam,.json,application/json"; inp.hidden = true;
+  var host = $("set-map") || $("mapDdPanel") || document.body;
+  host.appendChild(btn); host.appendChild(inp);
+  var damStatusEl = document.createElement("span"); damStatusEl.id = "damImportStatus"; damStatusEl.className = "hint"; host.appendChild(damStatusEl);
+  function damStatus(m){ damStatusEl.textContent = m; } /* APOC-CP8: engine drop-flow helpers are closure-wrapped; this block carries its own (same stores/shapes) */
+  function idbPutDam(rec){ return new Promise(function(res){ try { var rq = indexedDB.open("apoc-vtt", 1); rq.onupgradeneeded = function(){ rq.result.createObjectStore("maps", { keyPath: "id" }); }; rq.onsuccess = function(){ try { rq.result.transaction("maps", "readwrite").objectStore("maps").put(rec); } catch(e) {} res(); }; rq.onerror = function(){ res(); }; } catch(e) { res(); } }); }
+  async function readSetting(key){ try { var r = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle(); return (r && r.data && r.data.value) ? r.data.value : null; } catch(e) { return null; } }
+  async function writeSetting(key, value){ await db.from(SETTINGS_TABLE).upsert({ key: key, value: value, updated_at: new Date().toISOString() }, { onConflict: "key" }); } /* APOC-CP7: the page has no reachable status line (setStatus is closure-scoped and stubbed) — the import reports beside its own button */
+  btn.addEventListener("click", function(){ inp.click(); });
+  inp.addEventListener("change", function(){ if (inp.files && inp.files[0]) importDam(inp.files[0]); inp.value = ""; });
+
+  function guidTile(guid, label){
+    var cv = document.createElement("canvas"); cv.width = 64; cv.height = 64;
+    var g = cv.getContext("2d");
+    var hsh = 0; var s = String(guid || label || "?");
+    for (var i = 0; i < s.length; i++) hsh = (hsh * 31 + s.charCodeAt(i)) % 360;
+    g.fillStyle = "hsl(" + hsh + ",25%,26%)"; g.fillRect(0, 0, 64, 64);
+    g.strokeStyle = "hsl(" + hsh + ",35%,52%)"; g.lineWidth = 3; g.strokeRect(2, 2, 60, 60);
+    g.fillStyle = "#e8ecf3"; g.font = "bold 11px monospace"; g.textAlign = "center";
+    g.fillText("DA", 32, 28);
+    g.font = "9px monospace"; g.fillText(String(label || "").slice(0, 8), 32, 44);
+    return cv.toDataURL("image/png");
+  }
+  function renderGround(out){
+    var W = out.meta.w, H = out.meta.h;
+    var S = (W * 96 <= 4096 && H * 96 <= 4096) ? 96 : Math.max(24, Math.floor(4096 / Math.max(W, H)));
+    var cv = document.createElement("canvas"); cv.width = W * S; cv.height = H * S;
+    var g = cv.getContext("2d");
+    g.fillStyle = "#101114"; g.fillRect(0, 0, cv.width, cv.height);
+    (out.floors || []).forEach(function(grp){
+      var hsh = 0; var s = String(grp.guid || grp.roomIndex || "");
+      for (var i = 0; i < s.length; i++) hsh = (hsh * 31 + s.charCodeAt(i)) % 360;
+      g.fillStyle = "hsl(" + hsh + ",20%,30%)";
+      (grp.tiles || []).forEach(function(t){ g.fillRect(t[0] * S, t[1] * S, S, S); });
+    });
+    g.strokeStyle = "rgba(255,255,255,0.06)"; g.lineWidth = 1;
+    for (var x = 0; x <= W; x++) { g.beginPath(); g.moveTo(x * S + .5, 0); g.lineTo(x * S + .5, cv.height); g.stroke(); }
+    for (var y = 0; y <= H; y++) { g.beginPath(); g.moveTo(0, y * S + .5); g.lineTo(cv.width, y * S + .5); g.stroke(); }
+    return { canvas: cv, cell: S };
+  }
+  function importDam(file){
+    var rd = new FileReader();
+    rd.onload = async function(){
+      try {
+        var dam = JSON.parse(String(rd.result || ""));
+        var out = window.__damV2.damToVtt(dam);
+        if (!out || !out.ok) throw new Error("the converter rejected the file");
+        var W = out.meta.w, H = out.meta.h;
+        if (!(W > 0 && H > 0)) throw new Error("no map dimensions in the file");
+        var name = (file.name || out.meta.name || "DA import").replace(/\.dam$/i, "").slice(0, 60) || "DA import";
+        var id = "drop-dam-" + Date.now().toString(36);
+        var ground = renderGround(out);
+        var blob = await new Promise(function(res){ ground.canvas.toBlob(res, "image/png"); });
+        if (!blob) throw new Error("could not render the map ground");
+        var path = "vtt-maps/" + id + ".png";
+        await idbPutDam({ id: id, name: name, w: ground.canvas.width, h: ground.canvas.height, blob: blob });
+        /* APOC-CP8: upload FIRST — nothing registers unless the whole table can load the ground image */
+        var shared = false;
+        try { var up = await db.storage.from("cody-artwork").upload(path, blob, { contentType: "image/png", upsert: false }); shared = !up.error; } catch(e) { shared = false; }
+        if (!shared) throw new Error("the shared image upload didn't go through — nothing was registered");
+        await writeSetting("vtt_light_" + id, { enabled: !!(out.lighting && out.lighting.enabled), walls: (out.lighting && out.lighting.walls) || [], lights: (out.lighting && out.lighting.lights) || [] });
+        var imgByKey = {}; (out.images || []).forEach(function(im){ imgByKey[im.key] = im.dataUri; });
+        var tileByGuid = {};
+        var items = (out.stamps || []).map(function(st){
+          var img = "";
+          if (st.customImage && imgByKey[st.customImage]) img = imgByKey[st.customImage];
+          else { var gd = st.damGuid || st.prop || "?"; if (!tileByGuid[gd]) tileByGuid[gd] = guidTile(gd, String(st.prop || gd).replace(/^dam-/, "")); img = tileByGuid[gd]; }
+          return { type: "stamp", x: Math.round(st.gx / W * 10000) / 100, y: Math.round(st.gy / H * 10000) / 100, size: st.fw || 1, rot: st.rot || 0, img: img, prop: st.prop || "", fw: st.fw || 1, fh: st.fh || 1, steam: 0, layer: "shared", gm: false };
+        });
+        if (items.length) await writeSetting("vtt_draw_" + id, { items: items });
+        var rec = { id: id, name: name, w: ground.canvas.width, h: ground.canvas.height, cell: ground.cell, path: path };
+        var reg = await readSetting("vtt_dropmaps");
+        var regMaps = (reg && Array.isArray(reg.maps)) ? reg.maps.filter(function(m){ return m.id !== id; }) : [];
+        regMaps.push(rec);
+        await writeSetting("vtt_dropmaps", { maps: regMaps });
+        var act = await readSetting("vtt_active");
+        var actObj = (act && typeof act === "object") ? act : {};
+        actObj.mapId = id;
+        await writeSetting("vtt_active", actObj); /* read-merged, per the CP1 pattern */
+        var rp = out.report || {};
+        damStatus("Imported \"" + name + "\": " + (rp.wallsOut || 0) + " walls, " + ((rp.doorDiagnostics && rp.doorDiagnostics.rotationAxisCandidates) || 0) + " door candidates, " + (rp.stampsOut || 0) + " objects (" + (rp.placeholders || 0) + " placeholders), " + (rp.floors || 0) + " floor tiles" + " — reopening on it now.");
+        setTimeout(function(){ location.reload(); }, 900);
+      } catch(e) {
+        damStatus("That .dam didn't import: " + (e && e.message || e));
+      }
+    };
+    rd.readAsText(file);
+  }
+  window.importDamFile = importDam;
+})();
+</script>
+
+<style id="APOC-CP5">
+/* APOC-CP5 (closing pass): folder heads that would clip span the Library
+   grid row (tagged by the CP2 tagger's CP5 extension), and the folder
+   move/delete buttons cap at the head height they serve. */
+#artLibrary .mr-folder.cp-wide-head{grid-column:1/-1}
+#artLibrary .mr-move, #artLibrary .mr-del{height:26px!important;min-height:0!important}
+</style>
+
+<style id="APOC-CP6">
+/* APOC-CP6 (closing pass): Library folder heads were forced onto one
+   line with an ellipsis (white-space:nowrap) — at the doubled 224px
+   Library width the longest names still clipped ("The sphere
+   cosmotalogy", "Statted NPCs — the Hundred"). Let them wrap onto a
+   second line instead, the same pattern the Artwork sub-head already
+   uses unclipped; the full name also sits on the head's title (CP2
+   tagger). Nothing is cut off. (Reinstated on the v2.36 rebase: the
+   v2.36 white-space:normal rule loses the cascade to the nowrap rule
+   in the seeded state — CEN2 on the rebased candidate still measured
+   the same 4 clipped heads.) */
+#artLibrary .mr-folder-head{white-space:normal;overflow:visible;text-overflow:clip;height:auto;min-height:24px}
+</style>
 </body>
 </html>
