@@ -1522,6 +1522,7 @@ setInterval(loadSharedEntries, 60000);
   }
   let bounds = [[0, 0], [MH, MW]];
   let baseOverlay = L.imageOverlay("assets/maps/faerun-3e.webp", bounds, { pane: "layerMap" }).addTo(map);
+  try { applyMapLayerVis(); } catch(e) {} /* APOC-V242 */
   map.fitBounds([[MH * (1 - 0.34), MW * 0.02], [MH * (1 - 0.005), MW * 0.38]]);
   map.setMaxBounds([[-MH, -MW], [MH * 2, MW * 2]]); /* v1.88: padded a full image-size on every side — the +-8% bounds were smaller than the viewport when zoomed out, so Leaflet force-centred the view and every pan snapped back to the middle (Shaun, 2026-11-07 ~19:02) */
   const layer = L.layerGroup().addTo(map);
@@ -2542,7 +2543,7 @@ setInterval(loadSharedEntries, 60000);
      layer, the rest in the Player layer — but the layer list the DM
      works with is exactly the four. Old items only carrying a gm flag
      map through layerOf() as before, so nothing already drawn changes. */
-  const DEFAULT_DRAW_LAYERS = [{ id: "shared", name: "Player", gm: false, hidden: false }, { id: "gm", name: "DM", gm: true, hidden: false }, { id: "fg", name: "Foreground", gm: false, hidden: false }];
+  const DEFAULT_DRAW_LAYERS = [{ id: "shared", name: "Player", gm: false, hidden: false }, { id: "gm", name: "DM", gm: true, hidden: false }, { id: "fg", name: "Foreground", gm: false, hidden: false }, { id: "map", name: "Map", gm: false, hidden: false, opacity: 1 }]; /* APOC-V242: the Map layer is a real layer (eye + opacity for the base image). It stays LAST so drawLayerDef's [0] fallback remains the Player layer, and it is never a draw target (drawLayerSel keeps its three options) */
   let drawLayers = DEFAULT_DRAW_LAYERS.map(l => ({ ...l }));
   const layerOf = it => it.layer || (it.gm ? "gm" : "shared");
   const drawLayerDef = id => drawLayers.find(l => l.id === id) || drawLayers[0];
@@ -2550,11 +2551,16 @@ setInterval(loadSharedEntries, 60000);
   const curDrawWidth = () => parseInt($("drawWidth").value, 10) || 3;
   const curDrawFill = () => $("drawFillMode").value !== "outline";
   function curLayerPatch(){ const def = drawLayerDef($("drawLayerSel").value); return { layer: def.id, gm: !!def.gm, fg: def.id === "fg" }; }
-  const LAYER_NAMES = { map: "Map layer", gm: "DM layer", shared: "Player layer", fg: "Foreground layer" };
+  const LAYER_NAMES = { map: "Map layer", gm: "DM layer", shared: "Player layer", fg: "Foreground layer", light: "Light layer" }; /* APOC-V242: light */
   function ensureLayerDefs(){
     if (!drawLayers.some(l => l.id === "shared")) drawLayers.unshift({ id: "shared", name: "Player", gm: false, hidden: false });
     if (!drawLayers.some(l => l.id === "gm")) drawLayers.push({ id: "gm", name: "DM", gm: true, hidden: false });
     if (!drawLayers.some(l => l.id === "fg")) drawLayers.push({ id: "fg", name: "Foreground", gm: false, hidden: false });
+    if (!drawLayers.some(l => l.id === "map")) drawLayers.push({ id: "map", name: "Map", gm: false, hidden: false, opacity: 1 }); /* APOC-V242 */
+  }
+  /* APOC-V242: the Map layer's eye/opacity drive the base map image itself */
+  function applyMapLayerVis(){
+    try { const def = drawLayers.find(l => l.id === "map"); if (!def || !baseOverlay) return; baseOverlay.setOpacity(def.hidden ? 0 : (typeof def.opacity === "number" ? def.opacity : 1)); } catch(e) {}
   }
   function buildLayerUi(){
     ensureLayerDefs();
@@ -2563,11 +2569,20 @@ setInterval(loadSharedEntries, 60000);
     sel.innerHTML = ["shared", "gm", "fg"].map(id => `<option value="${id}">${LAYER_NAMES[id]}</option>`).join("");
     sel.value = ["shared", "gm", "fg"].includes(cur) ? cur : "shared";
     const chip = id => { const l = drawLayerDef(id); return `<span class="layer-chip">${LAYER_NAMES[id]} <button type="button" class="chip-eye" data-layer="${id}" aria-pressed="${!l.hidden}" title="Show or hide the ${LAYER_NAMES[id]} for the whole table">${l.hidden ? "hidden" : "shown"}</button></span>`; };
-    $("drawLayerChips").innerHTML = `<span class="layer-chip layer-chip-map" title="The map itself — always on">${LAYER_NAMES.map}</span>` + chip("gm") + chip("shared") + chip("fg");
+    const lightChip = () => { const lh = !!((window.__apocLightLayer && window.__apocLightLayer.hidden())); return `<span class="layer-chip">${LAYER_NAMES.light} <button type="button" class="chip-eye" data-layer="light" aria-pressed="${!lh}" title="Show or hide the Light layer for the whole table">${lh ? "hidden" : "shown"}</button></span>`; };
+    $("drawLayerChips").innerHTML = chip("map") + chip("gm") + chip("shared") + chip("fg") + lightChip(); /* APOC-V242: the Map chip carries a real eye like every other row (it was a dead span — Shaun: "the map layer button doesn't have a shown to it and I'm clicking it and nothing happens"); the Light layer joins the row */
     $("drawLayerChips").querySelectorAll(".chip-eye").forEach(b => b.addEventListener("click", async () => {
+      if (b.dataset.layer === "light") { /* APOC-V242: Light layer eye — the DM's master switch for every light on the map; state rides the shared light record, so players and the TV follow */
+        const br = window.__apocLightLayer; if (!br) return;
+        const okL = await br.toggle();
+        buildLayerUi();
+        drawStatusEl.textContent = okL ? `Light layer ${br.hidden() ? "hidden" : "shown"} for the whole table.` : "Light layer change didn't save — refreshed.";
+        return;
+      }
       const l = drawLayerDef(b.dataset.layer);
       l.hidden = !l.hidden;
       buildLayerUi(); renderDraw();
+      if (l.id === "map") applyMapLayerVis(); /* APOC-V242 */
       const ok = await saveDraw();
       drawStatusEl.textContent = ok ? `${LAYER_NAMES[l.id] || l.name} ${l.hidden ? "hidden" : "shown"} for the whole table.` : "Layer change didn't save — refreshed.";
       if (!ok) loadDraw(true);
@@ -3301,6 +3316,7 @@ setInterval(loadSharedEntries, 60000);
     map.setMaxBounds([[-MH, -MW], [MH * 2, MW * 2]]); /* v1.88: padded a full image-size on every side — the +-8% bounds were smaller than the viewport when zoomed out, so Leaflet force-centred the view and every pan snapped back to the middle (Shaun, 2026-11-07 ~19:02) */
     map.removeLayer(baseOverlay);
     baseOverlay = L.imageOverlay(def.img, bounds, { pane: "layerMap" }).addTo(map);
+    try { applyMapLayerVis(); } catch(e) {} /* APOC-V242 */
     baseOverlay.bringToBack();
     drawVeil();
     $("mapSelect").value = id;
@@ -3387,6 +3403,7 @@ setInterval(loadSharedEntries, 60000);
       if (baseOverlay._url !== url) {
         map.removeLayer(baseOverlay);
         baseOverlay = L.imageOverlay(url, bounds, { pane: "layerMap" }).addTo(map);
+        try { applyMapLayerVis(); } catch(e) {} /* APOC-V242 */
         baseOverlay.bringToBack();
       } else baseOverlay.setBounds(bounds);
     }
@@ -3609,19 +3626,23 @@ setInterval(loadSharedEntries, 60000);
   $("drawWidth").addEventListener("change", () => { $("drawWidthRange").value = $("drawWidth").value; });
 
   /* ---- Layer tabs: the chips are the tabs — tap a name to draw on it ---- */
+  let layerTabOverride = null; /* APOC-V242: "map" / "light" while their chip is the active tab — neither is a draw target, so drawLayerSel never holds them */
+  function layerTabOpacity(id){
+    if (id === "light") return (window.__apocLightLayer && typeof window.__apocLightLayer.opacity === "function") ? window.__apocLightLayer.opacity() : 1;
+    const d = drawLayerDef(id); return typeof d.opacity === "number" ? d.opacity : 1;
+  }
   function refreshLayerTabs(){
-    const cur = $("drawLayerSel").value;
+    const cur = layerTabOverride || $("drawLayerSel").value;
     $("drawLayerChips").querySelectorAll(".layer-chip").forEach(chip => {
       const eye = chip.querySelector(".chip-eye");
       const on = !!eye && eye.dataset.layer === cur;
       chip.classList.toggle("active", on);
       chip.setAttribute("aria-selected", on ? "true" : "false");
     });
-    const def = drawLayerDef(cur);
-    $("layerOpacity").value = typeof def.opacity === "number" ? def.opacity : 1;
+    $("layerOpacity").value = layerTabOpacity(cur);
   }
   new MutationObserver(refreshLayerTabs).observe($("drawLayerChips"), { childList: true });
-  $("drawLayerSel").addEventListener("change", refreshLayerTabs);
+  $("drawLayerSel").addEventListener("change", () => { layerTabOverride = null; refreshLayerTabs(); }); /* APOC-V242 */
   refreshLayerTabs();
   $("drawLayerChips").addEventListener("click", ev => {
     if (ev.target.closest("button")) return;
@@ -3629,16 +3650,23 @@ setInterval(loadSharedEntries, 60000);
     if (!chip) return;
     const eye = chip.querySelector(".chip-eye");
     if (!eye) return;
+    if (eye.dataset.layer === "map" || eye.dataset.layer === "light") { layerTabOverride = eye.dataset.layer; refreshLayerTabs(); return; } /* APOC-V242: Map + Light chips are tabs for the opacity slider too */
+    layerTabOverride = null;
     const sel = $("drawLayerSel");
     if (sel.value !== eye.dataset.layer) { sel.value = eye.dataset.layer; sel.dispatchEvent(new Event("change")); }
     refreshLayerTabs();
   });
   $("layerOpacity").addEventListener("input", () => {
+    const v = parseFloat($("layerOpacity").value) || 1;
+    if (layerTabOverride === "light") { if (window.__apocLightLayer) window.__apocLightLayer.setOpacityLive(v); return; } /* APOC-V242 */
+    if (layerTabOverride === "map") { const md = drawLayerDef("map"); md.opacity = v; applyMapLayerVis(); return; } /* APOC-V242 */
     const def = drawLayerDef($("drawLayerSel").value);
-    def.opacity = parseFloat($("layerOpacity").value) || 1;
+    def.opacity = v;
     renderDraw();
   });
   $("layerOpacity").addEventListener("change", async () => {
+    if (layerTabOverride === "light") { const okL = window.__apocLightLayer ? await window.__apocLightLayer.setOpacity(parseFloat($("layerOpacity").value) || 1) : false; drawStatusEl.textContent = okL ? "Light layer opacity saved for the table." : "Light layer opacity didn't save — refreshed."; return; } /* APOC-V242 */
+    if (layerTabOverride === "map") { const okM = await saveDraw(); drawStatusEl.textContent = okM ? "Map layer opacity saved for the table." : "Map layer opacity didn't save — refreshed."; if (!okM) loadDraw(true); return; } /* APOC-V242 */
     const ok = await saveDraw();
     drawStatusEl.textContent = ok ? "Layer opacity saved for the table." : "Layer opacity didn't save — refreshed.";
     if (!ok) loadDraw(true);
@@ -5665,7 +5693,8 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
      polygons in the light pane, so pan/zoom reproject for free and
      recomputes happen only on data change (plus the flicker timer). */
   const lightKey = () => currentMapId === "faerun" ? "vtt_light" : `vtt_light_${currentMapId}`;
-  let lightState = { enabled: false, walls: [], lights: [] };
+  let lightState = { enabled: false, walls: [], lights: [], layerHidden: false, layerOpacity: 1 }; /* APOC-V242: Light layer state (additive fields on the shared light record) */
+  window.__apocLightLayer = { hidden: () => lightState.layerHidden === true, opacity: () => (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1), setOpacityLive: v => { lightState.layerOpacity = v; renderLighting(); }, setOpacity: async v => { lightState.layerOpacity = v; renderLighting(); return saveLighting(); }, toggle: async () => { lightState.layerHidden = !(lightState.layerHidden === true); renderLighting(); const ok = await saveLighting(); if (!ok) loadLighting(true); return ok; } }; /* APOC-V242: bridge for the Layers-row Light chip + slider (the draw section builds chips before this state exists) */
   let lightPreview = false, lightEditingId = null, lightSegStart = null, lightFlickerTimer = null;
   const wallFx = L.layerGroup().addTo(map);
   const lightFx = L.layerGroup().addTo(map);
@@ -5745,10 +5774,11 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", lightKey()).maybeSingle();
     if (error) return;
     const v = (data && data.value && typeof data.value === "object") ? data.value : {};
-    lightState = { enabled: !!v.enabled, walls: Array.isArray(v.walls) ? v.walls : [], lights: Array.isArray(v.lights) ? v.lights : [] };
+    lightState = { enabled: !!v.enabled, walls: Array.isArray(v.walls) ? v.walls : [], lights: Array.isArray(v.lights) ? v.lights : [], layerHidden: v.layerHidden === true, layerOpacity: (typeof v.layerOpacity === "number" ? v.layerOpacity : 1) }; /* APOC-V242: walls/lights arrays pass through untouched — the layer fields are additive, so no saved light can be lost by the migration */
     $("lightEnabled").checked = lightState.enabled;
     window.__apocLightOn = lightState.enabled;
     renderLighting();
+    try { buildLayerUi(); } catch(e) {} /* APOC-V242: chips reflect the loaded Light layer state */
   }
   async function saveLighting(){
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: lightKey(), value: lightState, updated_at: new Date().toISOString() }, { onConflict: "key" });
@@ -5764,6 +5794,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     flickerTints = []; /* v2.14: rebuilt below; the flicker tick styles only these */
     window.__apocLightOn = lightState.enabled;
     const playerView = !effectiveGm() || lightPreview;
+    const lightOpF = (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1); /* APOC-V242: Light layer opacity */
     /* GM material: wall + door lines and light-source handles (layer 3). */
     if (effectiveGm() && !lightPreview) { /* APOC-CP1: a DM-flagged screen sees the wall/light material too (Phase 3 #5) */
       for (const w of lightState.walls) {
@@ -5786,7 +5817,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
         });
       }
     }
-    if (!lightState.enabled) {
+    if (!lightState.enabled || lightState.layerHidden === true) { /* APOC-V242: Light layer hidden — no tints, no shade, no token culling; the GM handles/walls above still render (they live on the GM layer, not the Light layer) */
       for (const tk of tokens) { const m = tokenMarkers[tk.id]; if (m && !tokenLayer.hasLayer(m)) tokenLayer.addLayer(m); }
       manageFlicker(false);
       return;
@@ -5815,13 +5846,13 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     const rect = [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]];
     if (!playerView) {
       /* GM sees everything: tints only, no darkness. */
-      for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10 * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.10, src: t.src }); } /* v2.01: the flame shimmer lives in this tint alpha only — geometry never moves. v2.14: the layer is collected so the flicker tick can re-style it WITHOUT re-rendering the scene (see flickerTick). */
+      for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10 * lightOpF * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.10 * lightOpF, src: t.src }); /* APOC-V242: layer opacity */ } /* v2.01: the flame shimmer lives in this tint alpha only — geometry never moves. v2.14: the layer is collected so the flicker tick can re-style it WITHOUT re-rendering the scene (see flickerTick). */
       manageFlicker(lightState.lights.some(s => s.flame && s.on !== false));
       return;
     }
-    for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16 * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.16, src: t.src }); } /* v2.01: tint-alpha shimmer only. v2.14: collected for the non-destructive flicker tick. */
-    if (brightPolys.length) maskedShade(lightFx, rect, brightPolys.map(toLL), 0.38, "apocBrightMask"); /* v2.01: mask-union shades — overlapping lights can no longer darken each other */
-    maskedShade(lightFx, rect, dimPolys.map(toLL), 0.93, "apocDimMask");
+    for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16 * lightOpF * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.16 * lightOpF, src: t.src }); /* APOC-V242: layer opacity */ } /* v2.01: tint-alpha shimmer only. v2.14: collected for the non-destructive flicker tick. */
+    if (brightPolys.length) maskedShade(lightFx, rect, brightPolys.map(toLL), 0.38 * lightOpF, "apocBrightMask"); /* APOC-V242: layer opacity */ /* v2.01: mask-union shades — overlapping lights can no longer darken each other */
+    maskedShade(lightFx, rect, dimPolys.map(toLL), 0.93 * lightOpF, "apocDimMask"); /* APOC-V242: layer opacity */
     const visibleAt = (x, y) => { const [ux, uy] = toUnits({ x, y }); return dimPolys.some(p => pointInPolyU(ux, uy, p)); };
     for (const tk of tokens) {
       const m = tokenMarkers[tk.id];
@@ -7688,7 +7719,7 @@ function floorConnected(L, cols, rows){
       const inside = fogState.revealed.some(r => tk.x >= r.x && tk.x <= r.x + r.w && tk.y >= r.y && tk.y <= r.y + r.h);
       if (!inside) return false;
     }
-    if (lightState.enabled) {
+    if (lightState.enabled && lightState.layerHidden !== true) { /* APOC-V242: Light layer hidden — tokens are not light-culled in 3D either */
       const segs = lightBlockers(); const ftU = ftToUnits(1);
       const [ux, uy] = toUnits({ x: tk.x, y: tk.y });
       const lit = lightState.lights.some(src => { if (src.on === false) return false; /* v2.01: doused lights light nothing, 3D included */ const [sx, sy] = toUnits({ x: src.x, y: src.y }); return pointInPolyU(ux, uy, visPoly(sx, sy, (src.dim || 0) * ftU, segs)); })
@@ -7720,7 +7751,7 @@ function floorConnected(L, cols, rows){
       for (const r of fogState.revealed) { const a = fp(...toUnits({ x: r.x, y: r.y })), b = fp(...toUnits({ x: r.x + r.w, y: r.y + r.h })); g.rect(Math.min(a[0], b[0]) * sx, Math.min(a[1], b[1]) * sy, Math.abs(b[0] - a[0]) * sx, Math.abs(b[1] - a[1]) * sy); }
       g.fill("evenodd");
     }
-    if (lightState.enabled) {
+    if (lightState.enabled && lightState.layerHidden !== true) { /* APOC-V242: no light-darkness while the Light layer is hidden (fog darkening above is separate) */
       const segs = lightBlockers(); const ftU = ftToUnits(1);
       const dimP = [], brightP = [];
       for (const src of lightState.lights) { if (src.on === false) continue; /* v2.01: doused */
@@ -8013,7 +8044,7 @@ function floorConnected(L, cols, rows){
       const mkPts = (n, gen, color, size, opacity) => { const pos = new Float32Array(n * 3), base = new Float32Array(n * 3), phase = new Float32Array(n); for (let i = 0; i < n; i++) { const p = gen(i); pos.set(p, i * 3); base.set(p, i * 3); phase[i] = Math.random() * 6.283; } const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(pos, 3)); const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color, size, transparent: true, opacity, depthWrite: false })); TD.root.add(pts); return { pts, base, phase }; };
       const dust = mkPts(220, () => [(Math.random() - 0.5) * Wu, 0.25 + Math.random() * 2.1, (Math.random() - 0.5) * Hu], 0xffe9b8, 0.045, 0.5);
       TD.dustPts = dust.pts; TD.dustBase = dust.base; TD.dustPhase = dust.phase;
-      const flames = lightState.lights.filter(l => l.flame && l.on !== false).slice(0, 6);
+      const flames = lightState.lights.filter(l => l.flame && l.on !== false && lightState.layerHidden !== true).slice(0, 6); /* APOC-V242 */
       if (flames.length) { const per = 12; const emb = mkPts(flames.length * per, (i) => { const fl = flames[Math.floor(i / per)]; const [lx, lz] = tdW(fl.x, fl.y); return [lx + (Math.random() - 0.5) * 0.2, 0.35, lz + (Math.random() - 0.5) * 0.2]; }, 0xff9a3c, 0.05, 0.85); TD.emberPts = emb.pts; TD.emberBase = emb.base; TD.emberPhase = emb.phase; }
     }
     /* APOC-DA3D P2: auto-clutter — DA-style surface dressing as a
@@ -8050,10 +8081,11 @@ function floorConnected(L, cols, rows){
     /* light sources as real lights (first N) + a visible flame marker */
     let li = 0;
     for (const src of lightState.lights) {
+      if (lightState.layerHidden === true) break; /* APOC-V242: Light layer hidden — no 3D point lights */
       if (src.on === false) continue; /* v2.01: doused lights get no 3D point light */
       if (li >= TD_CAPS.pointLights) break;
       const [lx, lz] = tdW(src.x, src.y);
-      const pl = new THREE.PointLight(new THREE.Color(src.color || "#ffb347"), 0.85, Math.max(2, (src.dim || 20) / feetPerSquare), 1.6);
+      const pl = new THREE.PointLight(new THREE.Color(src.color || "#ffb347"), 0.85 * (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1), Math.max(2, (src.dim || 20) / feetPerSquare), 1.6); /* APOC-V242: layer opacity scales the 3D lights */
       pl.position.set(lx, 1.1, lz); pl.userData.flame = !!src.flame; pl.userData.seed = li * 1.37;
       if (li < 3 && TD.prefs.quality !== "performance") { pl.castShadow = true; pl.shadow.mapSize.set(512, 512); pl.shadow.camera.near = 0.1; pl.shadow.camera.far = Math.max(4, (src.dim || 20) / feetPerSquare); pl.shadow.bias = -0.004; } /* APOC-V200 */
       TD.root.add(pl); li++;
@@ -8099,7 +8131,7 @@ function floorConnected(L, cols, rows){
     TD.counts.tokens = n;
   }
   function tdSignature(){
-    return JSON.stringify([currentMapId, tokens.map(t => [t.id, t.x, t.y, t.gm ? 1 : 0, t.img || t.sym || ""]), lightState.enabled, lightState.walls.map(w => w.open ? 1 : 0), lightState.lights.map(s => [s.x, s.y, s.dim, s.on === false ? 0 : 1]), /* v2.01: douse/relight rebuilds the 3D scene */
+    return JSON.stringify([currentMapId, tokens.map(t => [t.id, t.x, t.y, t.gm ? 1 : 0, t.img || t.sym || ""]), lightState.enabled, lightState.walls.map(w => w.open ? 1 : 0), lightState.lights.map(s => [s.x, s.y, s.dim, s.on === false ? 0 : 1]), lightState.layerHidden ? 1 : 0, (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1), /* v2.01: douse/relight rebuilds the 3D scene. APOC-V242: Light layer state joins the hash so toggling it rebuilds too */
       fogState.enabled, fogState.revealed.length, drawItems.filter(i => i.type === "stamp").map(i => [i.x, i.y, i.prop || ""]), effectiveGm(), lightPreview, gridOn]);
   }
   async function tdLoadGenData(){
@@ -8384,7 +8416,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-2349";
+        var BUILD_STAMP = "2026-11-09-0026";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10200,7 +10232,7 @@ function floorConnected(L, cols, rows){
       if (man.h) h = Math.max(380, Math.min(man.h, 1600)); /* v1.70: floor is the CSS min-height (380) — v1.68's 240 rendered at 380 anyway */
     }
     el.style.width = w + "px";
-    el.style.height = h + "px";
+    if (Math.abs(h - el.getBoundingClientRect().height) > 2 || !el.style.height) el.style.height = h + "px"; /* APOC-V242: dead band — sub-2px deltas are not written, so the fit cannot churn the inline height against bubbleFill/V179 between their passes */
     /* v1.70: manual left/top insets (set by the left/top edge and
        corner drags) ride along with the size override — the window
        keeps the position its left/top edges were dragged to, and
@@ -10369,7 +10401,8 @@ function floorConnected(L, cols, rows){
     else img.addEventListener("load", function(){ schedule(isNew); }, { once: true });
   }
   new MutationObserver(watch).observe(el, { childList: true, subtree: true });
-  new MutationObserver(function(){ schedule(false); }).observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  var __clsSig = document.body.className.split(/\s+/).filter(function(c){ return c.indexOf("leaflet-") !== 0; }).join(" ");
+  new MutationObserver(function(){ var s = document.body.className.split(/\s+/).filter(function(c){ return c.indexOf("leaflet-") !== 0; }).join(" "); if (s === __clsSig) return; __clsSig = s; schedule(false); }).observe(document.body, { attributes: true, attributeFilter: ["class"] }); /* APOC-V242: Leaflet flips body.leaflet-dragging at every dragstart/dragend — the old observer ran a full refit on both, so every map pan re-measured the fill against live geometry and rewrote the map height mid-interaction */
   window.addEventListener("resize", function(){ schedule(false); });
   document.addEventListener("fullscreenchange", function(){ schedule(false); });
   watch();
@@ -10405,15 +10438,27 @@ function floorConnected(L, cols, rows){
   if (!bar || !slider || !grip || !el || !side) return;
   var KEY = "apocVttZoomBarV1";
   var mq = window.matchMedia("(min-width: 821px)");
+  /* APOC-V242: the zoom park is PHONE-scoped at <=820px — v2.41
+     removed the under-821px hide but left one shared record, so a
+     phone drag rewrote Shaun's laptop spot ({851,0} -> {81,40},
+     phone-verify241 Q2, stack saveJ <- endZbDrag). Phone reads its
+     own key first, falls back to the desktop record (sync() clamps
+     it into the phone stage), and never writes the desktop key. */
+  var PKEY242 = "apocVttZoomBarPhoneV1";
+  function phoneMq(){ return window.matchMedia("(max-width: 820px)").matches; }
   function loadPos(){
     try {
+      if (phoneMq()) {
+        var pp = JSON.parse(localStorage.getItem(PKEY242) || "null");
+        if (pp && typeof pp.l === "number" && typeof pp.t === "number") return pp;
+      }
       var p = JSON.parse(localStorage.getItem(KEY) || "null");
       if (p && typeof p.l === "number" && typeof p.t === "number") return p;
     } catch(e) {}
     return null;
   }
   function savePos(p){
-    try { if (p) localStorage.setItem(KEY, JSON.stringify(p)); } catch(e) {}
+    try { if (p) localStorage.setItem(phoneMq() ? PKEY242 : KEY, JSON.stringify(p)); } catch(e) {}
   }
   function blocked(){
     /* APOC-V241: the under-821px term is gone — on phones the zoom bar
@@ -11483,7 +11528,7 @@ function floorConnected(L, cols, rows){
     if (slack >= -2) return; /* APOC-V235: dead band — bubbleFill owns slack >= 1 and this guard owns slack <= -3 only; trimming at exact fit made the pair oscillate the whole bottom section on Shaun's page */
     var am = document.getElementById("apocMap"); if (!am) return;
     var cur = am.getBoundingClientRect().height;
-    var nh = Math.max(240, Math.round(cur - (-1 - slack))); /* APOC-V235: trim to slack -1, inside the dead band */
+    var nh = Math.max(240, Math.round(cur - (-slack + 18))); /* APOC-V242: trim to the SAME 18px slack the v1.54 fit targets (was slack -1: fit regrew the 17px difference on its next pass and the writers alternated the map height — Shaun's bottom-section jump) */
     if (nh >= cur) return;
     am.style.height = nh + "px";
     window.__v179.trimmed += Math.round(cur - nh);
@@ -12314,6 +12359,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 
   /* ================= (1b) zoom bar grip drag + (3) row de-overlap ================= */
   var zbDrag = null;
+  function zKey242(){ return window.matchMedia("(max-width: 820px)").matches ? "apocVttZoomBarPhoneV1" : ZKEY; } /* APOC-V242: see the V173 note — phone zoom parks never touch the desktop record */
   function zbBlocked(){
     return !!document.fullscreenElement || /* APOC-V241: no mq term — the zoom grip must drag on phones too (see blocked() above) */
       document.body.classList.contains("displaying") ||
@@ -12350,7 +12396,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (!zbDrag) return;
     zbDrag = null;
     var bar = document.getElementById("zoomBar"); if (!bar) return;
-    saveJ(ZKEY, { l: bar.offsetLeft, t: bar.offsetTop });
+    saveJ(zKey242(), { l: bar.offsetLeft, t: bar.offsetTop });
     setTimeout(deOverlap, 120);
   }
   window.addEventListener("pointerup", endZbDrag, true);
@@ -12358,6 +12404,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 
   function deOverlap(){
     if (zbDrag) return;
+    if (!mqOk()) return; /* APOC-V242: the row-clear nudge is a desktop layout guard; at phone width the bar's spot is the user's own phone park */
     var bar = document.getElementById("zoomBar");
     var row = document.getElementById("ctlRow") || document.querySelector(".ctl-row");
     if (!bar || !row || bar.hidden) return;
@@ -12376,7 +12423,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var newT = Math.max(0, bar.offsetTop - shift);
     if (newT === bar.offsetTop) return;
     bar.style.top = newT + "px";
-    saveJ(ZKEY, { l: bar.offsetLeft, t: newT });
+    saveJ(zKey242(), { l: bar.offsetLeft, t: newT });
   }
   var settleN = 0;
   var settleTimer = setInterval(function(){ deOverlap(); if (++settleN >= 15) clearInterval(settleTimer); }, 800);
@@ -12596,16 +12643,17 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
        A taller-than-screen page is simply not bubbleFill's case. */
     if (document.documentElement.scrollHeight > ih + 2) return;
     var gap = Math.floor(ih - (page.getBoundingClientRect().bottom + window.scrollY)) - 1; /* APOC-V219: document-space bottom — a viewport-relative bottom grows the map by exactly the scroll offset on every 2.5s pass */
-    if (gap <= 0) return;
+    if (gap <= 20) return; /* APOC-V242: the v1.54 fit's fixed point is an 18px page slack — growing past it to the viewport edge (the old gap target) handed fit a lower below-measurement that it undid on its next pass; the pair alternated the map height by ~17px and the whole bottom section jumped with it, worst while Shaun panned (a fit fires on every drag boundary) */
+    var grow = gap - 18;
     var cur = am.getBoundingClientRect().height;
-    am.style.height = Math.round(cur + gap) + "px";
+    am.style.height = Math.round(cur + grow) + "px";
     var over = document.documentElement.scrollHeight - ih;
     /* APOC-V229: never shrink the map. With a dropdown open, the set's
        overlay extends the scrollable overflow past .page's bottom, so
        gap>0 and over>0 hold at once and this correction shrank the map
        — a grow/shrink feedback against the scroll clamp at the bottom
        of the page (the Library blink's engine). Growth only. */
-    if (over > 0) { var nh = Math.round(cur + gap - over); if (nh >= Math.round(cur)) am.style.height = nh + "px"; }
+    if (over > 0) { var nh = Math.round(cur + grow - over); if (nh >= Math.round(cur)) am.style.height = nh + "px"; } /* APOC-V242: grow, not gap */
     try { if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false }); } catch(e) {}
   }
 
@@ -15649,7 +15697,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
 @media (max-width:820px){
   #repoTab{padding:10px 5px;min-height:0;font-size:.8rem}
   #mapPanel .map-repo{width:min(224px,70vw)}
-  #mapPanel .map-repo.lib-open{width:min(224px,70vw) !important;padding:8px}
+  #mapPanel .map-repo.lib-open{width:min(var(--libPhoneW,224px),86vw) !important;padding:8px}
   .map-repo .nest-head{min-height:24px;padding:3px 6px;font-size:.85rem;line-height:1.15;border-radius:7px}
   #artLibrary #mapsNest > .nest-head{min-height:24px;padding:3px 6px;font-size:.85rem;line-height:1.15}
   #monsterNest > .nest-head, #npcNest > .nest-head{padding:3px 6px}
@@ -15923,6 +15971,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
        it stays draggable by its .btn-roam class alone */
     if (!b || (!b.classList.contains("btn-roam") && !isTarget(b))) return;
     candB = { btn: b, x: e.clientX, y: e.clientY, id: e.pointerId,
+              homeIdx: (function(){ try { return b.parentElement ? Array.prototype.indexOf.call(b.parentElement.children, b) : -1; } catch(e){ return -1; } })(), /* APOC-V242: the button's slot index in its home parent, for the parked re-slot test below */
               parked: b.classList.contains("btn-roam"),
               parent: b.parentElement, next: b.nextSibling, gx: 0, gy: 0, key: null, pdesc: null,
               slot: (function(){ var r = b.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; })() };
@@ -15978,12 +16027,33 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
          a drop inside the home parent's rect (+/-10px) sends it home
          and the branch below deletes the record via delKey. */
       if (!overHome && dragB.parked && home && typeof e.clientX === "number") {
-        var hr9 = home.getBoundingClientRect();
-        if (e.clientX >= hr9.left - 10 && e.clientX <= hr9.right + 10 && e.clientY >= hr9.top - 10 && e.clientY <= hr9.bottom + 10) overHome = true;
+        /* APOC-V242: the V239 test above uses the WHOLE home bar's
+           rect. On desktop the bar is one row, so "over the bar" and
+           "over its slot" are nearly the same drop. On PHONE the bar
+           wraps into a block covering the lower third of the screen
+           (579-830 of 844 in the seeded layout), so any short
+           repositioning drag of a parked button landed "in the bar"
+           and DOCKED instead of re-parking (phone-verify241 Q1c:
+           drop (173,631), slot at (11,579) — docked, record
+           deleted). When the park record carries the button's home
+           slot index (written by the park branch below since
+           V242), the test is the SLOT's rect (+/-10px) — Shaun's
+           V230 rule: putting it back exactly where it came from
+           sends it home; everywhere else the drop parks and stays.
+           Legacy records without homeIdx keep the V239 test. */
+        var hi242 = (load()[key] || {}).homeIdx;
+        if (typeof hi242 === "number" && hi242 >= 0 && home.children.length) {
+          var sib242 = home.children[Math.min(hi242, home.children.length - 1)];
+          if (sib242) { var sr242 = sib242.getBoundingClientRect();
+            if (e.clientX >= sr242.left - 10 && e.clientX <= sr242.right + 10 && e.clientY >= sr242.top - 10 && e.clientY <= sr242.bottom + 10) overHome = true; }
+        } else {
+          var hr9 = home.getBoundingClientRect();
+          if (e.clientX >= hr9.left - 10 && e.clientX <= hr9.right + 10 && e.clientY >= hr9.top - 10 && e.clientY <= hr9.bottom + 10) overHome = true;
+        }
       }
       if (overHome && home) {
         undetach(b);
-        var nx = dragB.parked ? null : dragB.next;
+        var nx = dragB.parked ? (function(){ var hi2 = (load()[key] || {}).homeIdx; return (typeof hi2 === "number" && hi2 >= 0 && home.children[hi2]) ? home.children[hi2] : null; })() : dragB.next; /* APOC-V242: a slotted parked button returns to its slot */
         if (nx && nx.parentElement === home) home.insertBefore(b, nx); else home.appendChild(b);
         var st = load(); delete st[key]; save(st, key); /* APOC-V234: deliberate un-park */
       } else {
@@ -16008,6 +16078,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
         /* APOC-V228: merge, never replace — lock/wmult/hidden set via
            the right-click menu must survive re-drags. */
         st2[key] = Object.assign({}, st2[key] || {}, { x: nx2, y: ny2,
+                     homeIdx: (typeof dragB.homeIdx === "number" && dragB.homeIdx >= 0 && !dragB.parked) ? dragB.homeIdx : (st2[key] || {}).homeIdx, /* APOC-V242 */
                      pdesc: dragB.parked ? (st2[key] || {}).pdesc : dragB.pdesc });
         save(st2);
       }
@@ -16537,7 +16608,7 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
     var u = t.closest("button, .layer-chip, label.atlas-toggle, .field, .nest-head");
     if (!u || !set.contains(u)) return null;
     if (u.closest("form")) return null; /* editing forms keep their own behaviour */
-    if (t.closest("select, textarea, input[type=text], input[type=number], input[type=search]")) return null;
+    if (t.closest("select, textarea, input")) return null; /* APOC-V242: ANY form control keeps its own gesture — a press on the Layers opacity slider (input[type=range]) was captured as a .field unit drag, so the slider itself could never be dragged (probe273: the slider attempt parked the field -51px and the value never moved) */
     return u;
   }
   function keyOf(u){
@@ -17478,5 +17549,86 @@ return module.exports; })();</script>
    set's height is auto, so it grows to fit the wrapped lines. */
 #set-layers{flex-wrap:wrap !important}
 </style>
+
+<style id="APOC-V242">
+/* APOC-V242 — phone tightening, second pass (on v2.41). Behaviour
+   only, all widths: the remaining touch-cancellation surface. The
+   v2.41 phone block covered .ctl-tab and .ctl-bar .btn, but a roam
+   drag starting on a button inside an open SET (.ctl-set .btn)
+   still computed touch-action:auto — the browser stole the gesture
+   (pointercancel) and the PanelPark drag died mid-flight, leaving
+   the button panel-parked OFF-SCREEN (phone-verify241 Q1b:
+   #roomDrawBtn at -53,-23, record dx:-68,dy:-271). Parked floats
+   (.btn-roam) take the same rule. Mouse is unaffected. */
+.ctl-set .btn,.btn-roam{touch-action:none}
+@media (max-width:820px){
+  /* the armed-DM pill is fixed at the top-right; on v2.41 it lay ON
+     the map panel, the title bubble and the zoom bar (census Q3:
+     12 non-design pairs, buttons overlapping by 63-86x36). The
+     armed state reserves a 50px band at the top of the PHONE page
+     and the pill lives in it, over nothing. Desktop: no band. */
+  body.vtt-dm-armed{padding-top:50px}
+  /* last sub-36 targets (Q6): the Library pill measured 35 wide,
+     the zoom grip 26 tall, the pinch label thin, the Library
+     perimeter grip 24x15 — it is the drawer width handle now. */
+  #repoTab{min-width:38px}
+  #zoomBar .zb-grip{min-height:36px;display:flex;align-items:center}
+  #zoomBar .zb-pinch{padding:8px 4px}
+  #zoomBar .zb-pinch input{width:20px;height:20px}
+  .map-repo .per-grip{min-width:36px;min-height:36px}
+}
+</style>
+<script>
+/* APOC-V242 — phone Library drawer width drag. On phone the Library
+   is the fixed right-side drawer and BOTH its handles were inert
+   (phone-verify241 Q4: grip and head drags moved nothing, zero
+   perimeter writes — every drag system that owns the grip is
+   desktop-gated or float-only). At phone width the perimeter grip
+   now drags the drawer's WIDTH: left widens, right narrows (150px
+   floor, 86vw ceiling), persisted PHONE-SCOPED in apocVttLibPhoneW
+   and applied through the --libPhoneW custom property — Shaun's
+   desktop float record (apocVttPerimeterV2) is never touched. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var mq = window.matchMedia("(max-width: 820px)");
+  var WKEY = "apocVttLibPhoneW";
+  function savedW(){ try { var w = parseInt(localStorage.getItem(WKEY) || "", 10); return (w >= 150 && w <= 1200) ? w : null; } catch(e){ return null; } }
+  function applyW(w){ if (w) document.documentElement.style.setProperty("--libPhoneW", w + "px"); }
+  applyW(savedW());
+  var drag = null, movedEnd = 0;
+  function grip(){ var r = document.querySelector(".map-repo"); return r ? r.querySelector(".per-grip") : null; }
+  function repo(){ return document.querySelector(".map-repo"); }
+  window.addEventListener("pointerdown", function(e){
+    if (!mq.matches || drag || (e.button !== undefined && e.button > 0)) return;
+    var g = grip(), rp = repo();
+    if (!g || !rp || !rp.classList.contains("lib-open")) return;
+    if (e.target !== g && !g.contains(e.target)) return;
+    var r = rp.getBoundingClientRect();
+    drag = { x: e.clientX, w: Math.round(r.width), moved: false };
+    e.preventDefault(); e.stopPropagation();
+    try { g.setPointerCapture(e.pointerId); } catch(err){}
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!drag) return;
+    var w = Math.max(150, Math.min(Math.floor(window.innerWidth * 0.86), drag.w + (drag.x - e.clientX)));
+    if (Math.abs(w - drag.w) > 2) drag.moved = true;
+    applyW(w); drag.cur = w;
+  }, true);
+  function end(){
+    if (!drag) return;
+    if (drag.moved && drag.cur) { try { localStorage.setItem(WKEY, String(drag.cur)); } catch(e){} movedEnd = Date.now(); }
+    drag = null;
+  }
+  window.addEventListener("pointerup", end, true);
+  window.addEventListener("pointercancel", end, true);
+  /* a real width drag must not also toggle the Library head */
+  window.addEventListener("click", function(e){
+    if (Date.now() - movedEnd >= 400) return;
+    var head = document.querySelector("#artLibrary .artlib-head");
+    if (head && (e.target === head || head.contains(e.target))) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
+})();
+</script>
 </body>
 </html>
