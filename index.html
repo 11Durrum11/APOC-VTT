@@ -8790,14 +8790,15 @@ function floorConnected(L, cols, rows){
          FLOAT, where it sits in the flow, at the squeezed 184px width.
          A saved float (his own drag) always wins over this default. */
       var erD = el.getBoundingClientRect();
-      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 112 } }; /* APOC-V214: halved default */
+      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 224 } }; /* APOC-V230: doubled default (supersedes the APOC-V214 halved 112) */
     }
     /* APOC-V214: Library footprint halved — hard cap 112px (half the
        v2.00 docked 224px). A wider saved rect clamps down and keeps
        its RIGHT edge: x shifts by the shaved amount before the park
        clamps run. */
-    var wRaw214 = park.float.w ? Math.round(park.float.w) : 112;
-    var w = Math.min(Math.max(72, wRaw214), Math.min(112, Math.max(72, pr.width - 12)));
+    var wRaw214 = park.float.w ? Math.round(park.float.w) : 224;
+    if (wRaw214 < 224) wRaw214 = 224; /* APOC-V230: doubled standard — widths saved under the old 112 cap adopt 224; the park anchor (x, y) is untouched */
+    var w = Math.min(Math.max(72, wRaw214), Math.min(224, Math.max(72, pr.width - 12)));
     var x = Math.max(-Math.round(w * 0.6), Math.min((Math.round(park.float.x) || 0) + Math.max(0, wRaw214 - w), Math.round(pr.width - w * 0.4)));
     var y = Math.max(0, Math.round(park.float.y) || 0);
     el.classList.add("per-float");
@@ -9985,12 +9986,14 @@ function floorConnected(L, cols, rows){
     var r = btn.getBoundingClientRect();
     var w = Math.max(r.width, 460);
     panel.style.width = Math.min(w, window.innerWidth - 16) + "px";
-    panel.style.maxHeight = Math.min(window.innerHeight * 0.55, 520) + "px";
+    panel.style.maxHeight = (window.innerHeight - 16) + "px"; /* APOC-V230: measured at full screen height; the directional screen-edge cap is applied in openPanel below */
     var left = Math.min(r.left, window.innerWidth - w - 8);
     panel.style.left = Math.max(8, left) + "px";
     var below = r.bottom + 6, ph = panel.offsetHeight || 300;
-    panel.style.top = (below + ph > window.innerHeight - 8 && r.top - ph - 6 > 8)
-      ? (r.top - ph - 6) + "px" : below + "px";
+    var above230 = (below + ph > window.innerHeight - 8 && r.top - ph - 6 > 8);
+    panel.style.maxHeight = Math.max(120, above230 ? (r.top - 14) : (window.innerHeight - below - 8)) + "px"; /* APOC-V230: extends as far as the screen allows in its opening direction — no artificial cap */
+    var ph2 = panel.offsetHeight || ph;
+    panel.style.top = above230 ? (r.top - ph2 - 6) + "px" : below + "px";
   }
   function convert(id){
     var sel = document.getElementById(id);
@@ -10527,7 +10530,7 @@ function floorConnected(L, cols, rows){
     var row = document.querySelector(".ctl-row");
     if (!row) return;
     var rb = row.getBoundingClientRect();
-    set.style.maxHeight = Math.max(120, window.innerHeight - Math.round(rb.bottom + 6) - 8) + "px";
+    set.style.maxHeight = Math.max(120, window.innerHeight - Math.round(rb.bottom + 6) - 4) + "px"; /* APOC-V230: +4 slack — the Visuals set measured 2px short of its content on v2.29 */
   }
   function watchSets(){
     document.querySelectorAll(".ctl-set").forEach(function(set){
@@ -11061,14 +11064,15 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       /* APOC-V205: no saved float — default free float at its in-flow
          spot, squeezed 184px width (see applyRepoPark). */
       var erD = el.getBoundingClientRect();
-      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 112 } }; /* APOC-V214: halved default */
+      park = { float: { x: Math.round(erD.left - pr.left), y: Math.round(erD.top - pr.top), w: 224 } }; /* APOC-V230: doubled default (supersedes the APOC-V214 halved 112) */
     }
     /* APOC-V214: Library footprint halved — hard cap 112px (half the
        v2.00 docked 224px). A wider saved rect clamps down and keeps
        its RIGHT edge: x shifts by the shaved amount before the park
        clamps run. */
-    var wRaw214 = park.float.w ? Math.round(park.float.w) : 112;
-    var w = Math.min(Math.max(72, wRaw214), Math.min(112, Math.max(72, pr.width - 12)));
+    var wRaw214 = park.float.w ? Math.round(park.float.w) : 224;
+    if (wRaw214 < 224) wRaw214 = 224; /* APOC-V230: doubled standard — widths saved under the old 112 cap adopt 224; the park anchor (x, y) is untouched */
+    var w = Math.min(Math.max(72, wRaw214), Math.min(224, Math.max(72, pr.width - 12)));
     var x = Math.max(-Math.round(w * 0.6), Math.min((Math.round(park.float.x) || 0) + Math.max(0, wRaw214 - w), Math.round(pr.width - w * 0.4)));
     var y = Math.max(0, Math.round(park.float.y) || 0);
     el.classList.add("per-float");
@@ -11302,6 +11306,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       return;
     }
     if (!floated || repo.classList.contains("per-dragging")) return;
+    if (window.__apocLibQuietUntil && Date.now() < window.__apocLibQuietUntil) return; /* APOC-V230: scroll-quiet — the box does not resize while Shaun is scrolling inside it */
     var mr = rect(am); if (!mr || mr.height < 50) return;
     var B = window.innerHeight; /* v1.88: the opened floated Library runs to the SCREEN bottom, floating over the buttons (Shaun's consolidated order) — the v1.87 anchor stopped at the map's bottom edge */
     if (!snap) snap = { top: repo.style.top, height: repo.style.height };
@@ -11416,6 +11421,20 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   var MQ = window.matchMedia("(min-width: 821px)");
   var PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1",
       HKEY = "apocVttLibBoxH", VKEY = "apocVttViewV1";
+  /* APOC-V230: scroll-quiet. Probes on v2.29 caught the floated
+     Library box strobing (filled height <-> a shorter height at
+     the height-writer cadences) in the seconds after scrolling
+     inside the Library, while Maps rows were still lazy-building.
+     While any scroll is happening inside the repo (and for 1.5s
+     after), every height writer stands down. The flag lives on
+     window because the writers sit in three separate scripts. */
+  window.__apocLibQuietUntil = 0;
+  document.addEventListener("scroll", function (ev) {
+    var t = ev && ev.target;
+    if (!t || t.nodeType !== 1) return;
+    var rp = document.querySelector(".map-repo");
+    if (rp && rp.contains(t)) window.__apocLibQuietUntil = Date.now() + 1500;
+  }, true);
   function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
   function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
   function rect(el){ return el ? el.getBoundingClientRect() : null; }
@@ -11477,6 +11496,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (rp.classList.contains("per-float")) {
       /* the APOC-V187 anchor (re-pointed at the screen bottom in
          this build) sizes the box; the inner library fills it. */
+      if (window.__apocLibQuietUntil && Date.now() < window.__apocLibQuietUntil) return; /* APOC-V230: scroll-quiet — stand down while Shaun scrolls inside the Library */
       var lr = rect(lb), rr = rect(rp);
       if (lr && rr && rr.height > 0) {
         var lh = Math.round(lr.height + (rr.bottom - 2 - lr.bottom));
@@ -11530,7 +11550,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var rp = repo(); if (!rp) return;
     var pn = document.getElementById("mapPanel");
     var pw = pn ? pn.getBoundingClientRect().width : 2600;
-    if (rsz.mode.indexOf("r") >= 0) rp.style.width = Math.round(Math.max(72, Math.min(rsz.w + (e.clientX - rsz.sx), 112, pw - 12))) + "px"; /* APOC-V214 cap */
+    if (rsz.mode.indexOf("r") >= 0) rp.style.width = Math.round(Math.max(72, Math.min(rsz.w + (e.clientX - rsz.sx), 224, pw - 12))) + "px"; /* APOC-V230: doubled cap (was APOC-V214) */
     if (rsz.mode.indexOf("b") >= 0) rp.style.height = Math.round(Math.max(60, Math.min(rsz.h + (e.clientY - rsz.sy), window.innerHeight))) + "px";
   }, true);
   function endRsz(){
@@ -13223,6 +13243,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       return;
     }
     wasOpen = true;
+    if (window.__apocLibQuietUntil && Date.now() < window.__apocLibQuietUntil) return; /* APOC-V230: scroll-quiet */
     if (!body) return;
     var ih = window.innerHeight;
     if (repo.classList.contains("per-float")) {
@@ -13394,7 +13415,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   /* (3) Squeeze: the dock narrows 300px -> 224px, hard right; the freed
      76px flows to .map-stage (flex:1 1 auto), so the map box opens
      closer to the Library. Floated Libraries keep their saved width. */
-  #mapPanel .stage-row > .map-repo{flex:0 0 112px;width:112px} /* APOC-V214: halved */
+  #mapPanel .stage-row > .map-repo{flex:0 0 224px;width:224px} /* APOC-V230: doubled (was APOC-V214 halved) */
   /* (1) Single column: the opened Library body and every sub-grid that
      stacked buttons three-abreast go one-across, so the buttons form
      one vertical stack. Content grids (tiles, map entries) unchanged. */
@@ -13484,7 +13505,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
          Shaun watched expand and follow him down the page (measured
          +57px per 57px scroll step in his saved layout, probe229). */
       var hs = pinFrozen[set.id];
-      if (hs === undefined) { hs = pinFrozen[set.id] = Math.max(80, Math.round(window.innerHeight - tr.bottom)) + "px"; }
+      if (hs === undefined) { hs = pinFrozen[set.id] = Math.max(80, Math.round(window.innerHeight - tr.bottom) + 4) + "px"; } /* APOC-V230: +4 slack, same Visuals fix */
       if (set.style.top !== ts) set.style.top = ts;
       if (set.style.height !== hs) set.style.height = hs;
     });
@@ -14243,8 +14264,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   pill.addEventListener("click", function(){
     var el = repoEl(), pn = panelEl(); if (!el || !pn) return;
     var pr = pn.getBoundingClientRect();
-    var w = Math.round(el.getBoundingClientRect().width) || 112;
-    if (w < 72 || w > 112) w = 112; /* APOC-V214: halved footprint standard */
+    var w = Math.round(el.getBoundingClientRect().width) || 224;
+    if (w < 72 || w > 224) w = 224; /* APOC-V230: doubled standard (was APOC-V214 halved) */
     var x = Math.max(0, Math.round(pr.width - w - 12)), y = 10;
     var st = loadJ(PKEY);
     st.repo = { float: { x: x, y: y, w: w } };
@@ -14392,8 +14413,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
    half the v2.00 squeeze (224px). Desktop-scoped like APOC-V200; the
    phone drawer is untouched. */
 @media (min-width:821px){
-  #mapPanel .stage-row > .map-repo{flex-basis:112px !important;width:112px !important}
-  .map-repo.per-float{max-width:112px}
+  #mapPanel .stage-row > .map-repo{flex-basis:224px !important;width:224px !important}
+  .map-repo.per-float{max-width:224px}
 }
 </style>
 <script>
@@ -14409,7 +14430,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   "use strict";
   if (new URLSearchParams(location.search).get("display")) return;
   var MQ = window.matchMedia("(min-width: 821px)");
-  var PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1", CAP = 112;
+  var PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1", CAP = 224; /* APOC-V230: doubled width clamp */
   function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
   function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
   function repoEl(){ return document.querySelector(".map-repo"); }
@@ -14423,9 +14444,11 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   function capRecords(){
     var st = loadJ(PKEY), fl = st.repo && st.repo.float, changed = false;
     if (fl && fl.w && fl.w > CAP) { fl.x = (Math.round(fl.x) || 0) + (Math.round(fl.w) - CAP); fl.w = CAP; changed = true; }
+    if (fl && fl.w && fl.w < CAP) { fl.w = CAP; changed = true; } /* APOC-V230: adopt the doubled width; anchor x untouched */
     if (changed) saveJ(PKEY, st);
     var fp = loadJ(FKEY), rp = fp["per-repo"];
     if (rp && rp.w && rp.w > CAP) { rp.w = CAP; saveJ(FKEY, fp); }
+    if (rp && rp.w && rp.w < CAP) { rp.w = CAP; saveJ(FKEY, fp); } /* APOC-V230: adopt the doubled width */
   }
   function clampLib(){
     if (!MQ.matches || pressing) return;
@@ -15459,5 +15482,51 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
 })();
 </script>
 
+
+<style id="APOC-V230">
+/* APOC-V230 (Shaun, 2026-11-08 ~18:38, on v2.29) —
+   (1) the Art Library footprint DOUBLES to 224px so every button
+   inside reads fully (the width machinery itself is patched in
+   place: APOC-V214 CSS + guard, both applyFloat copies, the
+   resize drag, the rescue pill); the top head's APOC-V227 shrink
+   — made only to survive 112px — stands down here.
+   (2) the map-name dropdown's 62vh cap lifts to the screen edge.
+   (3) blink: the scroll-quiet gates live in the height writers
+   themselves (search APOC-V230 in the scripts); the recorder
+   below keeps evidence on this device. */
+#artLibrary > .nest-head.artlib-head{font-size:1rem;padding:6px 9px!important;gap:8px}
+#mapDdPanel{max-height:calc(100dvh - 16px)}
+</style>
+<script>
+/* APOC-V230 blink recorder — evidence, not a fix. While the Art
+   Library is open in a floated repo, sample its height every
+   250ms; a jump of more than 2px between samples is logged
+   (time, from, to) to localStorage apocVttBlinkLog (last 80
+   entries) with the running count in apocVttBlinkCount, so a
+   blink on Shaun's own machine leaves a record that can be read
+   back. No UI, no shared writes. */
+(function(){
+  "use strict";
+  var lastH = -1;
+  setInterval(function(){
+    try {
+      var repo = document.querySelector(".map-repo");
+      var lib = document.getElementById("artLibrary");
+      if (!repo || !lib || !repo.classList.contains("per-float") || !lib.classList.contains("open")) { lastH = -1; return; }
+      var h = Math.round(lib.getBoundingClientRect().height);
+      if (lastH > 0 && Math.abs(h - lastH) > 2) {
+        var log = [];
+        try { log = JSON.parse(localStorage.getItem("apocVttBlinkLog") || "[]"); } catch(e) { log = []; }
+        if (!Array.isArray(log)) log = [];
+        log.push({ t: new Date().toISOString(), from: lastH, to: h });
+        while (log.length > 80) log.shift();
+        localStorage.setItem("apocVttBlinkLog", JSON.stringify(log));
+        localStorage.setItem("apocVttBlinkCount", String(log.length));
+      }
+      lastH = h;
+    } catch(e) {}
+  }, 250);
+})();
+</script>
 </body>
 </html>
