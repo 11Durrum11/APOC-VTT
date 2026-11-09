@@ -7291,7 +7291,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1607";
+        var BUILD_STAMP = "2026-11-08-1821";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10488,7 +10488,7 @@ function floorConnected(L, cols, rows){
     rb.textContent = "Reset layout";
     rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
     rb.addEventListener("click", function(){
-      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1", "apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     titleBubble.appendChild(rb);
@@ -10916,7 +10916,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     rl.addEventListener("click", function(){
       var b = document.getElementById("layoutResetBtn");
       if (b) { b.click(); return; }
-      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1","apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
       location.reload();
     });
     var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
@@ -11315,7 +11315,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var dTop = Math.round(top - rr.top);
     if (dTop) repo.style.top = (repo.offsetTop + dTop) + "px";
     repo.classList.add("lib187-open");
-    var want = Math.round(B - top - window.scrollY); /* APOC-V219: B/top are viewport coords; the height lives in panel space — net out the scroll offset or the floated box grows by it while open */
+    var want = Math.round(B - top); /* APOC-V229: top is already the VIEWPORT top, so B - top IS the distance to the current screen bottom. The v2.19 form (minus scrollY) anchored the box to the UNSCROLLED screen bottom: scrolled down, the floated Library (in the stage-row flow) grew past the visible bottom and extended the document by the scroll offset, feeding the bottom-scroll blink loop. */
     var rr2 = rect(repo);
     if (Math.abs(rr2.height - want) > 1) repo.style.height = want + "px";
   }
@@ -11437,12 +11437,24 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var page = document.querySelector(".page"), am = document.getElementById("apocMap");
     if (!page || !am) return;
     var ih = window.innerHeight;
+    /* APOC-V229: bubbleFill's job is a NON-scrolling page whose bottom
+       stops short of the screen. When the document is already taller
+       than the viewport its growth arithmetic (and the over-correction
+       below) fights the scroll clamp — the page breathed at the bottom
+       and every screen-bottom Library tick re-resized on each pass.
+       A taller-than-screen page is simply not bubbleFill's case. */
+    if (document.documentElement.scrollHeight > ih + 2) return;
     var gap = Math.floor(ih - (page.getBoundingClientRect().bottom + window.scrollY)) - 1; /* APOC-V219: document-space bottom — a viewport-relative bottom grows the map by exactly the scroll offset on every 2.5s pass */
     if (gap <= 0) return;
     var cur = am.getBoundingClientRect().height;
     am.style.height = Math.round(cur + gap) + "px";
     var over = document.documentElement.scrollHeight - ih;
-    if (over > 0) am.style.height = Math.round(cur + gap - over) + "px";
+    /* APOC-V229: never shrink the map. With a dropdown open, the set's
+       overlay extends the scrollable overflow past .page's bottom, so
+       gap>0 and over>0 hold at once and this correction shrank the map
+       — a grow/shrink feedback against the scroll clamp at the bottom
+       of the page (the Library blink's engine). Growth only. */
+    if (over > 0) { var nh = Math.round(cur + gap - over); if (nh >= Math.round(cur)) am.style.height = nh + "px"; }
     try { if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false }); } catch(e) {}
   }
 
@@ -15243,6 +15255,207 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
       e.preventDefault(); open(e.clientX, e.clientY, "Piece", pieceItems(piece, pid)); return;
     }
   });
+})();
+</script>
+
+
+<style id="APOC-V229-CSS">
+/* v2.29 — ITEM 2 (minimum footprints inside the dropdown sets + the
+   surviving 44px floors) and ITEM 3a (the Layers line). Desktop scope
+   like APOC-V216; the phone drawer keeps its touch metrics. */
+@media (min-width:821px){
+  /* The sets become wrapping flex rows: every control sizes to its
+     content and packs up against its neighbours (Shaun: minimum
+     footprint, pushed up together, no leftover gaps). Panels, forms
+     and other full-width blocks keep the full row. */
+  .ctl-set{display:flex;flex-wrap:wrap;align-items:flex-start;align-content:flex-start;gap:6px 8px}
+  .ctl-set>.vtt-panel,.ctl-set>.map-tools,.ctl-set>form,.ctl-set>#tplLib{flex:1 1 100%;min-width:0}
+  .ctl-set>.field{flex:0 0 auto!important;min-width:0;margin:0}
+  .ctl-set>button,.ctl-set>.btn{flex:0 0 auto}
+  .ctl-set>.nest{flex:0 1 auto;min-width:0}
+  .ctl-set .nest-head{min-height:0;padding:4px 8px;line-height:1.25}
+  /* compact metrics reach INTO the sets (the v1.60 relocation orphaned
+     them from the .map-tools-scoped rules) */
+  .ctl-set .atlas-toggle{min-height:0;padding:4px 6px;line-height:1.25}
+  .ctl-set input[type=range]{height:24px;min-height:0}
+  .ctl-set select{min-height:0}
+  /* the 44px floors come off the Layers chips and their eye buttons */
+  .layer-chip{min-height:0;padding:2px 6px 2px 10px;align-items:center}
+  .layer-chip .chip-eye{min-height:0;height:auto;padding:2px 6px;line-height:1.2}
+  /* Library heads: one line each inside the 112px float — the label
+     ellipsizes instead of wrapping the head to 3-4 lines tall */
+  #artLibrary .nest-head{white-space:nowrap;min-height:0!important;padding:4px 8px!important;line-height:1.25!important}
+  #artLibrary .nest-head>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  #artLibrary .mr-folder-head{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #artLibrary .artlib-head .per-grip{min-height:0;padding:0 2px;line-height:1}
+  /* zoom bar Pinch label compacts to its content */
+  #zoomBar{align-items:center}
+  #zoomBar .zb-pinch{min-height:0;padding:2px 4px;line-height:1.2}
+  /* ITEM 3a — the Layers set is ONE line: the four layer chips, Remove,
+     the sliding bar and the checkers all sit on the layer buttons' line */
+  #set-layers{flex-wrap:nowrap;overflow:auto;align-items:center;height:auto!important}
+  #set-layers>*{flex:0 0 auto}
+  #set-layers .field{flex-direction:row;align-items:center;gap:6px}
+  #set-layers .field>label{white-space:nowrap}
+  /* the Map set's own base grid (repeat(3,1fr)) stretched its buttons
+     to the column — columns size to content instead */
+  #set-map{grid-template-columns:repeat(3,max-content);justify-content:start}
+  /* the Generate nest rides a full-width row — it sizes to its head */
+  #genNest{flex:0 1 auto;width:fit-content;max-width:100%}
+  /* the zoom bar's checkbox carried the base inputs' 44px floor */
+  #zoomBar input[type=checkbox]{min-height:0;height:16px;width:16px}
+  #zoomBar .zb-pinch{height:auto}
+  /* Library section nests span the body's full row (their heads are
+     single-line labels, not two-across buttons) */
+  #artLibrary > .nest-body > .nest{grid-column:1/-1}
+}
+/* PanelPark-dragged units ride above their panel while held */
+.panel-parked{position:relative;z-index:6}
+.panel-dragging{outline:2px solid rgba(30,64,175,.65);outline-offset:1px;cursor:grabbing}
+</style>
+<script>
+/* APOC-V229b — PanelPark: in-panel controls stay where Shaun puts them.
+   Every control unit inside a bottom dropdown set (.ctl-set) — buttons,
+   layer chips, checker labels, fields (the Layers opacity slider's
+   field included) — can be dragged by its body with the same 7px
+   threshold the roam system uses: a plain press still clicks / toggles /
+   slides exactly as before; a real drag moves the unit by translation,
+   snaps to a sibling's line within 26px (Shaun's snap-to-line), restores
+   any value the drag disturbed (slider position, checkbox state), and
+   suppresses the click the release would otherwise deliver. Positions
+   persist per device in apocVttPanelParkV1 and are restored across
+   reloads and after the Layers chips rebuild. The V216 roam path stands
+   down for these units — its over-home re-slot rule (a set button's
+   home is the whole set) was why in-panel button drags never held, and
+   sliders/labels were never BUTTONs for it to see at all. Per-device
+   only; display copies get none of it; form internals keep their own
+   behaviour. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var KEY = "apocVttPanelParkV1", THRESH = 7;
+  function load(){ try { var v = JSON.parse(localStorage.getItem(KEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function save(s){ try { localStorage.setItem(KEY, JSON.stringify(s)); } catch(e){} }
+  function slug(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "unit"; }
+  function unitOf(t){
+    if (!t || !t.closest) return null;
+    var set = t.closest(".ctl-set");
+    if (!set) return null;
+    var u = t.closest("button, .layer-chip, label.atlas-toggle, .field, .nest-head");
+    if (!u || !set.contains(u)) return null;
+    if (u.closest("form")) return null; /* editing forms keep their own behaviour */
+    if (t.closest("select, textarea, input[type=text], input[type=number], input[type=search]")) return null;
+    return u;
+  }
+  function keyOf(u){
+    var set = u.closest(".ctl-set");
+    var pre = (set && set.id ? set.id : "set") + "/";
+    if (u.id) return pre + "#" + u.id;
+    if (u.classList.contains("layer-chip")) {
+      var eye = u.querySelector(".chip-eye");
+      return pre + "chip:" + (eye && eye.dataset.layer ? eye.dataset.layer : slug(u.textContent));
+    }
+    var inp = u.querySelector("input, select");
+    if (inp && inp.id) return pre + "fld:#" + inp.id;
+    var base = pre + slug(typeof u.className === "string" ? u.className.split(/\s+/)[0] : "") + "/" + slug(u.textContent);
+    var p = u.parentElement, n = 0;
+    if (p) for (var i = 0; i < p.children.length; i++) { if (p.children[i] === u) break; if (p.children[i].className === u.className && slug(p.children[i].textContent) === slug(u.textContent)) n++; }
+    return n ? base + "~" + (n + 1) : base;
+  }
+  function applyRec(u, rec){
+    if (!rec) return;
+    u.classList.add("panel-parked");
+    u.style.transform = "translate(" + (rec.dx || 0) + "px," + (rec.dy || 0) + "px)";
+  }
+  function restore(){
+    var st = load();
+    document.querySelectorAll(".ctl-set").forEach(function(set){
+      set.querySelectorAll("button, .layer-chip, label.atlas-toggle, .field, .nest-head").forEach(function(u){
+        if (u.closest("form")) return;
+        var rec = st[keyOf(u)];
+        if (rec && (rec.dx || rec.dy)) applyRec(u, rec);
+      });
+    });
+  }
+  var cand = null, drag = null, supUnit = null, supUntil = 0;
+  document.addEventListener("pointerdown", function(e){
+    if (e.button !== undefined && e.button !== 0) return;
+    var u = unitOf(e.target);
+    if (!u) return;
+    /* claim the nomination: V216's roam listener (document, bubble
+       phase) never sees this pointerdown, so its over-home re-slot
+       cannot fire for set units. The click event is a separate event
+       and still fires normally for plain presses. */
+    e.stopPropagation();
+    var st = load(), rec = st[keyOf(u)] || {};
+    cand = { u: u, key: keyOf(u), x: e.clientX, y: e.clientY, id: e.pointerId,
+             dx: rec.dx || 0, dy: rec.dy || 0,
+             range: u.querySelector ? u.querySelector("input[type=range]") : null,
+             check: u.querySelector ? u.querySelector("input[type=checkbox]") : null };
+    if (cand.range) cand.rangeVal = cand.range.value;
+    if (cand.check) cand.checkVal = cand.check.checked;
+    if (e.target && e.target.type === "range") { cand.range = e.target; cand.rangeVal = e.target.value; }
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!cand || e.pointerId !== cand.id) return;
+    var dx = e.clientX - cand.x, dy = e.clientY - cand.y;
+    if (!drag) {
+      if (dx * dx + dy * dy < THRESH * THRESH) return;
+      drag = cand;
+      drag.u.classList.add("panel-parked", "panel-dragging");
+    }
+    if (e.cancelable) e.preventDefault();
+    drag.u.style.transform = "translate(" + (drag.dx + dx) + "px," + (drag.dy + dy) + "px)";
+  }, { passive: false });
+  function endDrag(e){
+    if (!cand || (e.pointerId !== undefined && e.pointerId !== cand.id)) return;
+    if (drag) {
+      var dx = drag.dx + (e.clientX - drag.x), dy = drag.dy + (e.clientY - drag.y);
+      /* snap-to-line (26px): align with the panel origin or a sibling
+         unit's current offset, horizontally or vertically */
+      try {
+        var sibX = [0], sibY = [0];
+        drag.u.parentElement.querySelectorAll("button, .layer-chip, label.atlas-toggle, .field, .nest-head").forEach(function(o){
+          if (o === drag.u) return;
+          var r = (load()[keyOf(o)] || {});
+          if (typeof r.dx === "number") sibX.push(r.dx);
+          if (typeof r.dy === "number") sibY.push(r.dy);
+        });
+        var bestX = null, bestY = null;
+        sibX.forEach(function(v){
+          if (Math.abs(dx - v) <= 26 && (bestX === null || Math.abs(dx - v) < Math.abs(dx - bestX))) bestX = v;
+        });
+        sibY.forEach(function(v){
+          if (Math.abs(dy - v) <= 26 && (bestY === null || Math.abs(dy - v) < Math.abs(dy - bestY))) bestY = v;
+        });
+        if (bestX !== null) dx = bestX;
+        if (bestY !== null) dy = bestY;
+      } catch(err){}
+      var st = load();
+      st[drag.key] = { dx: Math.round(dx), dy: Math.round(dy) };
+      save(st);
+      drag.u.style.transform = "translate(" + Math.round(dx) + "px," + Math.round(dy) + "px)";
+      drag.u.classList.remove("panel-dragging");
+      if (drag.range && drag.range.value !== drag.rangeVal) drag.range.value = drag.rangeVal;
+      if (drag.check && drag.check.checked !== drag.checkVal) drag.check.checked = drag.checkVal;
+      supUnit = drag.u; supUntil = Date.now() + 800;
+      drag = null;
+    }
+    cand = null;
+  }
+  window.addEventListener("pointerup", endDrag);
+  window.addEventListener("pointercancel", endDrag);
+  document.addEventListener("click", function(e){
+    if (!supUnit || Date.now() > supUntil) return;
+    var u = unitOf(e.target);
+    if (u && u === supUnit) { e.stopPropagation(); e.preventDefault(); supUnit = null; }
+  }, true);
+  [600, 1500, 3000, 6000, 10000].forEach(function(ms){ setTimeout(restore, ms); });
+  var moT = null;
+  new MutationObserver(function(){
+    if (drag || moT) return;
+    moT = setTimeout(function(){ moT = null; restore(); }, 400);
+  }).observe(document.body, { childList: true, subtree: true });
 })();
 </script>
 
