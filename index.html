@@ -6926,6 +6926,10 @@ function floorConnected(L, cols, rows){
     if (TD.renderer) TD.renderer.setPixelRatio(TD.prefs.quality === "performance" ? 1 : Math.min(window.devicePixelRatio || 1, 2));
   }
   function tdBuildStatic(){
+    /* APOC-ANIM: carry live door angles across rebuilds, so a swing in
+       progress continues instead of snapping when the scene rebuilds */
+    TD._doorCarry = {};
+    if (TD.doorHinges) for (const _h of TD.doorHinges) TD._doorCarry[_h.id] = _h.g.rotation.y;
     if (TD.root) { TD.scene.remove(TD.root); tdDispose(TD.root); }
     TD.root = new THREE.Group(); TD.scene.add(TD.root);
     TD.rot = (((mapRot | 0) % 4) + 4) % 4; /* v1.64: build in the rotated frame the 2D table shows */
@@ -7022,6 +7026,8 @@ function floorConnected(L, cols, rows){
           ring.position.set(leafLen * 0.86, hU * 0.45, 0.06); hinge.add(ring);
           if (w.open) hinge.rotation.y += (flip ? -1 : 1) * THREE.MathUtils.degToRad(100);
           wallsGrp.add(hinge);
+          if (TD._doorCarry && TD._doorCarry[w.id] != null) hinge.rotation.y = TD._doorCarry[w.id]; /* APOC-ANIM */
+          (wallsGrp.userData.hinges = wallsGrp.userData.hinges || []).push({ g: hinge, id: w.id, flip, base: -ang + (flip ? Math.PI : 0), open0: !!w.open }); /* APOC-ANIM: the render loop swings these */
         };
         if (len >= 1.6) { mkLeaf(ax, az, len / 2, false); mkLeaf(bx, bz, len / 2, true); }
         else mkLeaf(ax, az, len, false);
@@ -7042,6 +7048,7 @@ function floorConnected(L, cols, rows){
         const mullMat = tdMat(0x3a332a, { roughness: .8 });
         const mv = new THREE.Mesh(new THREE.BoxGeometry(0.05, hU * 0.5, 0.075), mullMat); mv.position.set(len / 2, hU * 0.57, 0); winHinge.add(mv);
         const mh = new THREE.Mesh(new THREE.BoxGeometry(len, 0.05, 0.075), mullMat); mh.position.set(len / 2, hU * 0.57, 0); winHinge.add(mh);
+        const mfr = new THREE.Mesh(new THREE.BoxGeometry(len, 0.07, 0.075), mullMat); mfr.position.set(len / 2, hU * 0.82, 0); winHinge.add(mfr); /* APOC-DA3D d-fix: head-frame rail inside the window hinge */
         winHinge.userData.tdWindowId = w.id; winHinge.userData.tdOpen = !!w.open;
         if (w.open) winHinge.rotation.y = -ang + THREE.MathUtils.degToRad(100);
         wallsGrp.add(winHinge);
@@ -7052,6 +7059,7 @@ function floorConnected(L, cols, rows){
       }
     }
     wallsGrp.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } }); /* APOC-V200 */
+    TD.doorHinges = (wallsGrp.userData && wallsGrp.userData.hinges) || []; /* APOC-ANIM */
     TD.counts.walls = wallCount;
     /* APOC-DA3D P1: roof — a toggleable cap over the walled area.
        Like DA, it hides itself when you go inside (first-person) or
@@ -7093,6 +7101,17 @@ function floorConnected(L, cols, rows){
       propsGrp.add(node);
     }
     TD.counts.props = propCount; TD.counts.propsSkipped = skipped;
+    /* APOC-ANIM: ambient particles — dust motes drifting through the
+       air, embers rising off flame lights. View-only ambience;
+       Performance quality skips them entirely */
+    TD.dustPts = null; TD.emberPts = null;
+    if (TD.prefs.quality !== "performance") {
+      const mkPts = (n, gen, color, size, opacity) => { const pos = new Float32Array(n * 3), base = new Float32Array(n * 3), phase = new Float32Array(n); for (let i = 0; i < n; i++) { const p = gen(i); pos.set(p, i * 3); base.set(p, i * 3); phase[i] = Math.random() * 6.283; } const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.BufferAttribute(pos, 3)); const pts = new THREE.Points(geo, new THREE.PointsMaterial({ color, size, transparent: true, opacity, depthWrite: false })); TD.root.add(pts); return { pts, base, phase }; };
+      const dust = mkPts(220, () => [(Math.random() - 0.5) * Wu, 0.25 + Math.random() * 2.1, (Math.random() - 0.5) * Hu], 0xffe9b8, 0.045, 0.5);
+      TD.dustPts = dust.pts; TD.dustBase = dust.base; TD.dustPhase = dust.phase;
+      const flames = lightState.lights.filter(l => l.flame && l.on !== false).slice(0, 6);
+      if (flames.length) { const per = 12; const emb = mkPts(flames.length * per, (i) => { const fl = flames[Math.floor(i / per)]; const [lx, lz] = tdW(fl.x, fl.y); return [lx + (Math.random() - 0.5) * 0.2, 0.35, lz + (Math.random() - 0.5) * 0.2]; }, 0xff9a3c, 0.05, 0.85); TD.emberPts = emb.pts; TD.emberBase = emb.base; TD.emberPhase = emb.phase; }
+    }
     /* APOC-DA3D P2: auto-clutter — DA-style surface dressing as a
        per-device VIEW toggle. Deterministic per stamp (seeded by the
        stamp id), so the GM, the players and the TV dress identically.
@@ -7223,9 +7242,34 @@ function floorConnected(L, cols, rows){
       if (!TD.active) return;
       TD.raf = requestAnimationFrame(loop);
       const t = performance.now() / 1000;
+      const dt = Math.min(0.05, t - (TD._lastT == null ? t : TD._lastT)); TD._lastT = t; /* APOC-ANIM */
       TD.root.traverse(m => { if (m.name === "flame") { const s = 1 + 0.16 * Math.sin(t * 11 + m.position.x * 3.1) + 0.07 * Math.sin(t * 23 + m.position.z * 5.3); m.scale.set(s, 1 + 0.22 * Math.sin(t * 13 + m.position.x), s); } });
-      if (TD.tokGrp) for (const k in TD.tokenObjs) { const g = TD.tokenObjs[k]; g.rotation.y = Math.atan2(TD.camera.position.x - g.position.x, TD.camera.position.z - g.position.z); } /* APOC-V200: standees face the camera */
+      if (TD.tokGrp) for (const k in TD.tokenObjs) { const g = TD.tokenObjs[k]; g.rotation.y = Math.atan2(TD.camera.position.x - g.position.x, TD.camera.position.z - g.position.z); if (!(TD.drag && TD.drag.grp === g)) { let ph = 0; for (let ci = 0; ci < k.length; ci++) ph += k.charCodeAt(ci); g.position.y = 0.03 * (1 + Math.sin(t * 1.5 + (ph % 6.28))); } } /* APOC-V200: standees face the camera — APOC-ANIM: plus a subtle idle bob (never while dragged) */
       TD.scene.traverse(m => { if (m.isPointLight && m.userData.flame) m.intensity = 0.85 + 0.14 * Math.sin(t * 9.3 + m.userData.seed * 7.0) + 0.06 * Math.sin(t * 21.7 + m.userData.seed * 3.0); });
+      /* APOC-ANIM: doors swing to their shared open/closed state (never
+         teleport); the displayed camera glides to a new view preset
+         instead of cutting; dust drifts; embers rise off flame lights;
+         Gloom fog breathes. All view-only — the shared state is read,
+         never written */
+      if (TD.doorHinges && TD.doorHinges.length) {
+        const k7 = Math.min(1, dt * 6.5);
+        for (const h of TD.doorHinges) {
+          let open = h.open0;
+          if (typeof lightState !== "undefined" && lightState.walls) { const lw = lightState.walls.find(x => x.id === h.id); if (lw) open = lw.open; }
+          const target = h.base + (open ? (h.flip ? -1 : 1) * 1.7453 : 0);
+          h.g.rotation.y += (target - h.g.rotation.y) * k7;
+        }
+      }
+      if (TD._lv !== TD.view) { TD._lv = TD.view; TD._glide = 0.7; if (!TD.camCur) TD.camCur = { tx: TD.cam.tx, tz: TD.cam.tz, az: TD.cam.az, el: TD.cam.el, dist: TD.cam.dist }; }
+      if (TD._glide > 0 && TD.camCur) {
+        TD._glide -= dt; const gf = Math.min(1, dt * 6);
+        for (const kf of ["tx", "tz", "el", "dist"]) TD.camCur[kf] += (TD.cam[kf] - TD.camCur[kf]) * gf;
+        let daz = TD.cam.az - TD.camCur.az; while (daz > Math.PI) daz -= 2 * Math.PI; while (daz < -Math.PI) daz += 2 * Math.PI; TD.camCur.az += daz * gf;
+        if (TD._glide <= 0) TD.camCur = null;
+      }
+      if (TD.dustPts) { const pa = TD.dustPts.geometry.attributes.position, pb = TD.dustBase, pp = TD.dustPhase; for (let i3 = 0; i3 < pp.length; i3++) { pa.array[i3 * 3 + 1] = pb[i3 * 3 + 1] + 0.12 * Math.sin(t * 0.35 + pp[i3]); pa.array[i3 * 3] = pb[i3 * 3] + 0.15 * Math.sin(t * 0.22 + pp[i3] * 1.7); } pa.needsUpdate = true; }
+      if (TD.emberPts) { const ea = TD.emberPts.geometry.attributes.position, eb = TD.emberBase, ep = TD.emberPhase; for (let j3 = 0; j3 < ep.length; j3++) { const cyc = (t * 0.25 * (0.7 + (ep[j3] % 0.6)) + ep[j3]) % 1; ea.array[j3 * 3 + 1] = eb[j3 * 3 + 1] + cyc * 1.1; ea.array[j3 * 3] = eb[j3 * 3] + 0.06 * Math.sin(t * 2 + ep[j3] * 9.0) * cyc; } ea.needsUpdate = true; }
+      if (TD.scene && TD.scene.fog && TD.prefs && TD.prefs.mood === "gloom") { TD.scene.fog.near = 26 + 3.5 * Math.sin(t * 0.11); TD.scene.fog.far = 85 + 7 * Math.sin(t * 0.11 + 0.6); }
       tdUpdateCamera();
       TD.renderer.render(TD.scene, TD.camera);
     };
@@ -7267,7 +7311,7 @@ function floorConnected(L, cols, rows){
       TD.camera.lookAt(TD.fp.x + Math.sin(TD.fp.yaw) * cp, eye + Math.sin(TD.fp.pitch), TD.fp.z - Math.cos(TD.fp.yaw) * cp);
       return;
     }
-    const c = TD.cam;
+    const c = (TD._glide > 0 && TD.camCur) ? TD.camCur : TD.cam; /* APOC-ANIM: glide while a view transition runs */
     const cx = c.tx + c.dist * Math.cos(c.el) * Math.cos(c.az);
     const cz = c.tz + c.dist * Math.cos(c.el) * Math.sin(c.az);
     const cy = c.dist * Math.sin(c.el);
@@ -7436,7 +7480,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1927";
+        var BUILD_STAMP = "2026-11-08-1939";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
