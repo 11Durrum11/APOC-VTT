@@ -745,6 +745,20 @@ body.map-expanded .stage-row{display:contents}
               <button type="button" class="btn td-view-btn" data-tdview="iso" aria-pressed="false">Isometric</button>
               <button type="button" class="btn td-view-btn" data-tdview="fp" aria-pressed="false">First-person</button>
             </span>
+            <span class="td-views" role="group" aria-label="3D scene options" style="display:flex;align-items:center;gap:4px">
+              <button type="button" class="btn" id="tdRoofBtn" aria-pressed="false" title="Roof over the walled area — hides itself in first-person and top-down">Roof</button>
+              <button type="button" class="btn" id="tdClutterBtn" aria-pressed="false" title="Auto-clutter: set tables and desks (view only — never saved to the map)">Clutter</button>
+              <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;font-weight:700;letter-spacing:.04em;color:#cfd3da">Mood
+                <select id="tdMoodSel" aria-label="3D lighting mood" style="background:#10131a;color:#ffffff;border:1px solid #1e40af;border-radius:6px;padding:2px 4px">
+                  <option value="day">Day</option>
+                  <option value="torch" selected>Torchlit</option>
+                  <option value="night">Night</option>
+                  <option value="gloom">Gloom</option>
+                </select>
+              </label>
+              <button type="button" class="btn" id="tdQualityBtn" title="High / performance quality">Quality: High</button>
+              <button type="button" class="btn" id="tdShotBtn" title="Save the current 3D view as a PNG">Save image</button>
+            </span>
             <span class="td-hint" id="tdStatus"></span>
           </div>
         </div>
@@ -6368,6 +6382,10 @@ function floorConnected(L, cols, rows){
       const r = await runGeneration({ type: $("genType").value, theme: $("genTheme").value, size: $("genSize").value,
         notes: $("genNotes").value.trim(), seed: (Date.now() % 2000000000) + Math.floor(Math.random() * 100000) });
       genStatusEl.textContent = `"${r.name}" generated and loaded: ${r.rooms} rooms, ${r.walls} wall/door segments (${r.doors} doors), ${r.props} props, ${r.lights} lights — dynamic lighting is on for it.${r.shared ? "" : " (Floor image lives on this device only — the shared upload didn't go through.)"}${r.regOk === false ? " (The Maps repository save didn't go through — the map works here, but may not list for everybody yet.)" : ""}`;
+      { const oldB = document.getElementById("genWalk3dBtn"); if (oldB) oldB.remove();
+        const gb = document.createElement("button"); gb.type = "button"; gb.className = "btn"; gb.id = "genWalk3dBtn"; gb.textContent = "Walk it in 3D"; gb.style.marginLeft = "8px";
+        gb.addEventListener("click", () => { const b = $("view3dBtn"); if (b) b.click(); });
+        genStatusEl.after(gb); } /* APOC-DA3D P3: generate -> straight into the 3D walk */
     } catch (e) { genStatusEl.textContent = "Generation failed: " + (e && e.message || e); }
     btn.disabled = false;
   });
@@ -6445,6 +6463,10 @@ function floorConnected(L, cols, rows){
     savedView: null, sig: "", poll: 0, drag: null, keys: {}, following: false, counts: {}, localSetAt: 0, genData: null };
   window.__apoc3d = TD;
   const TD_CAPS = { walls: 600, props: 400, tokens: 200, pointLights: 8 };
+  /* APOC-DA3D: scene prefs — per-device and view-only (never shared) */
+  TD.prefs = { roof: false, clutter: false, mood: "torch", quality: "high" };
+  try { const tdp = JSON.parse(localStorage.getItem("apocTdPrefs") || "{}"); if (tdp) Object.assign(TD.prefs, tdp); } catch (e) {}
+  TD.savePrefs = () => { try { localStorage.setItem("apocTdPrefs", JSON.stringify(TD.prefs)); } catch (e) {} };
   /* v1.64: the 3D build works in the map's ROTATED frame — the same frame
      the 2D table and TV show. Stored % coords pass through rotPct, and
      world axes use the frame dimensions (width/height swap on odd turns). */
@@ -6485,11 +6507,11 @@ function floorConnected(L, cols, rows){
     });
     TD.texCache["wall:" + kind] = tex; return tex;
   }
-  function tdWoodMat(){ return new THREE.MeshStandardMaterial({ map: tdWallTexture("wood"), roughness: .85 }); }
+  function tdWoodMat(){ return tdPBRMaterial("dark_wooden_planks", 1, 1, new THREE.MeshStandardMaterial({ map: tdWallTexture("wood"), roughness: .85 })); } /* APOC-DA3D P2: real PBR wood grain over the canvas fallback (tdPBRMaterial is hoisted; only called at build time) */
   function tdPropModel(prop, fw, fh){
     const grp = new THREE.Group();
     const W = fw || 1, D = fh || 1;
-    const wood = tdWoodMat(), darkWood = tdMat(0x4a3823, { roughness: .9 });
+    const wood = tdWoodMat(), darkWood = tdPBRMaterial("dark_wooden_planks", 1, 1, tdMat(0x4a3823, { roughness: .9 })); /* APOC-DA3D P2 */
     const iron = tdMat(0x3c3f45, { roughness: .55, metalness: .55 });
     const box = (mat, sx, sy, sz, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat); m.position.set(x || 0, y || 0, z || 0); grp.add(m); return m; };
     const cyl = (mat, rt, rb, sy, x, y, z, seg) => { const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, sy, seg || 14), mat); m.position.set(x || 0, y || 0, z || 0); grp.add(m); return m; };
@@ -6823,7 +6845,7 @@ function floorConnected(L, cols, rows){
   function tdDispose(obj){
     obj.traverse(m => {
       if (m.geometry) m.geometry.dispose();
-      if (m.material) { (Array.isArray(m.material) ? m.material : [m.material]).forEach(mt => { if (mt.map && !Object.values(TD.texCache).includes(mt.map)) mt.map.dispose(); mt.dispose(); }); }
+      if (m.material) { (Array.isArray(m.material) ? m.material : [m.material]).forEach(mt => { if (mt.userData && mt.userData.tdKeep) return; /* APOC-DA3D: cached wall materials survive rebuilds */ if (mt.map && !Object.values(TD.texCache).includes(mt.map)) mt.map.dispose(); mt.dispose(); }); }
     });
   }
   /* APOC-V200: DA-quality 3D — real CC0 photogrammetry models + PBR
@@ -6848,6 +6870,7 @@ function floorConnected(L, cols, rows){
     if (it.model3d) return it.model3d; /* APOC-V207: the v2.03 shelf stamps carry the bucket model key directly (model3d hook) */
     if (!it.prop) return null;
     if (it.prop === "crate") return it.steam ? "old_military_crate" : "wooden_crate_01";
+    if (it.prop === "table" && (it.fw || 1) === (it.fh || 1)) return "round_wooden_table_01"; /* APOC-DA3D P2: a square table reads as a round top */
     return TD3D_MODELS[it.prop] || null;
   }
   function tdLoadModel(key, cb){
@@ -6878,6 +6901,29 @@ function floorConnected(L, cols, rows){
       grp.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
       grp.userData.tdModel = key;
     });
+  }
+  /* APOC-DA3D P3: mood presets ride the existing sun / ambient / fog.
+     Gloom is the Fog of Life: grey, sunless, close — APOC canon */
+  function tdApplyMood(){
+    if (!TD.scene || !TD.sun || !TD.amb) return;
+    const M = {
+      day:   { sun: 0.9,  sunC: 0xfff2d8, amb: 0.75, ambC: 0xcfd8e6, fog: [150, 320], bg: 0x0a0e14 },
+      torch: { sun: 0.55, sunC: 0xfff2d8, amb: 0.62, ambC: 0xbfae90, fog: [120, 260], bg: 0x05070a },
+      night: { sun: 0.22, sunC: 0x9fb6ff, amb: 0.34, ambC: 0x5a6f9e, fog: [90, 220],  bg: 0x02040a },
+      gloom: { sun: 0.3,  sunC: 0xb8b8b4, amb: 0.5,  ambC: 0x9a9a94, fog: [26, 85],   bg: 0x0b0b0a }
+    }[TD.prefs.mood];
+    if (!M) return;
+    TD.sun.intensity = M.sun; TD.sun.color.set(M.sunC);
+    TD.amb.intensity = M.amb; TD.amb.color.set(M.ambC);
+    if (TD.scene.fog) { TD.scene.fog.near = M.fog[0]; TD.scene.fog.far = M.fog[1]; }
+    if (TD.scene.background) TD.scene.background.set(M.bg);
+  }
+  /* APOC-DA3D P3: quality — High keeps full pixel ratio + 2048 sun
+     shadows + shadow-casting point lights; Performance trades them
+     for frame rate on big maps */
+  function tdApplyQuality(){
+    if (TD.sun) { const qs = TD.prefs.quality === "performance" ? 1024 : 2048; if (TD.sun.shadow.mapSize.x !== qs) { TD.sun.shadow.mapSize.set(qs, qs); if (TD.sun.shadow.map) { TD.sun.shadow.map.dispose(); TD.sun.shadow.map = null; } } }
+    if (TD.renderer) TD.renderer.setPixelRatio(TD.prefs.quality === "performance" ? 1 : Math.min(window.devicePixelRatio || 1, 2));
   }
   function tdBuildStatic(){
     if (TD.root) { TD.scene.remove(TD.root); tdDispose(TD.root); }
@@ -6931,6 +6977,21 @@ function floorConnected(L, cols, rows){
     const wallTex = tdWallTexture(wallKind); wallTex.repeat.set(1, 1);
     const wallMat = tdPBRMaterial(TD3D_TEX[genTheme] || "rustic_stone_wall", 2, 1, new THREE.MeshStandardMaterial({ map: wallTex, roughness: .95 })); /* APOC-V200: PBR over canvas fallback */
     const doorMat = tdPBRMaterial("dark_wooden_planks", 1, 1, tdWoodMat()); /* APOC-V200 */
+    /* APOC-DA3D P1: wall texture repeats scale with the segment's length
+       and height (quantized + cached) — a 20-square wall no longer
+       stretches the same two repeats a 1-square wall gets */
+    const wallSetQ = TD3D_TEX[genTheme] || "rustic_stone_wall";
+    if (!TD.wallMatCache) TD.wallMatCache = {};
+    const tdWallMatFor = (len, hU) => {
+      const rx = Math.min(16, Math.max(1, Math.round(len / 2))), ry = Math.min(4, Math.max(1, Math.round(hU / 2)));
+      const k = wallSetQ + "|" + wallKind + "|" + rx + "|" + ry;
+      if (!TD.wallMatCache[k]) {
+        const fbTex = wallTex.clone(); fbTex.repeat.set(rx, ry); fbTex.needsUpdate = true;
+        const m = tdPBRMaterial(wallSetQ, rx, ry, new THREE.MeshStandardMaterial({ map: fbTex, roughness: .95 }));
+        m.userData.tdKeep = true; TD.wallMatCache[k] = m;
+      }
+      return TD.wallMatCache[k];
+    };
     const wallsGrp = new THREE.Group(); TD.root.add(wallsGrp);
     let wallCount = 0;
     for (const w of lightState.walls) {
@@ -6941,37 +7002,72 @@ function floorConnected(L, cols, rows){
       const hFt = w.h || 10, hU = hFt / feetPerSquare;
       wallCount++;
       if (w.kind === "door") {
-        const hinge = new THREE.Group(); hinge.position.set(ax, 0, az); hinge.rotation.y = -ang;
-        const panel = new THREE.Mesh(new THREE.BoxGeometry(len * 0.96, hU, 0.07), doorMat);
-        panel.position.set(len / 2, hU / 2, 0); hinge.add(panel);
-        const knob = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), tdMat(0xb9bdc4, { metalness: .7, roughness: .3 }));
-        knob.position.set(len * 0.88, hU * 0.45, 0.07); hinge.add(knob);
-        if (w.open) hinge.rotation.y = -ang + THREE.MathUtils.degToRad(100);
-        wallsGrp.add(hinge);
+        /* APOC-DA3D P1: a framed doorway — posts + threshold; a wide
+           door (>= 1.6 squares) hangs as TWO leaves, one from each end;
+           iron bands + a ring handle; the shared open state swings the
+           leaves, exactly like 2D says */
+        const frameMat = tdWallMatFor(len, hU);
+        for (const eEnd of [0, 1]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, hU, 0.3), frameMat);
+          post.position.set(eEnd ? bx : ax, hU / 2, eEnd ? bz : az); post.rotation.y = -ang; wallsGrp.add(post);
+        }
+        const thr = new THREE.Mesh(new THREE.BoxGeometry(len, 0.04, 0.3), frameMat);
+        thr.position.set((ax + bx) / 2, 0.02, (az + bz) / 2); thr.rotation.y = -ang; wallsGrp.add(thr);
+        const mkLeaf = (hx, hz, leafLen, flip) => {
+          const hinge = new THREE.Group(); hinge.position.set(hx, 0, hz); hinge.rotation.y = -ang + (flip ? Math.PI : 0);
+          const panel = new THREE.Mesh(new THREE.BoxGeometry(leafLen * 0.94, hU * 0.96, 0.07), doorMat);
+          panel.position.set(leafLen / 2, hU * 0.48, 0); hinge.add(panel);
+          for (const by of [0.22, 0.78]) { const band = new THREE.Mesh(new THREE.BoxGeometry(leafLen * 0.9, 0.07, 0.085), tdMat(0x2e2e33, { metalness: .6, roughness: .5 })); band.position.set(leafLen / 2, hU * by, 0); hinge.add(band); }
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.016, 8, 18), tdMat(0xb9bdc4, { metalness: .7, roughness: .3 }));
+          ring.position.set(leafLen * 0.86, hU * 0.45, 0.06); hinge.add(ring);
+          if (w.open) hinge.rotation.y += (flip ? -1 : 1) * THREE.MathUtils.degToRad(100);
+          wallsGrp.add(hinge);
+        };
+        if (len >= 1.6) { mkLeaf(ax, az, len / 2, false); mkLeaf(bx, bz, len / 2, true); }
+        else mkLeaf(ax, az, len, false);
         const lintelH = (10 / feetPerSquare) - hU;
-        if (lintelH > 0.05) { const lin = new THREE.Mesh(new THREE.BoxGeometry(len, lintelH, 0.22), wallMat); lin.position.set((ax + bx) / 2, hU + lintelH / 2, (az + bz) / 2); lin.rotation.y = -ang; wallsGrp.add(lin); }
+        if (lintelH > 0.05) { const lin = new THREE.Mesh(new THREE.BoxGeometry(len, lintelH, 0.22), tdWallMatFor(len, hU)); lin.position.set((ax + bx) / 2, hU + lintelH / 2, (az + bz) / 2); lin.rotation.y = -ang; wallsGrp.add(lin); }
       } else if (w.kind === "window") {
         /* a window stands as a glass pane on a sill with a lintel, not a solid wall.
            v1.90: the pane swings on a hinge at end A while OPEN — the 3D reflection
            of the shared open state (a closed window now occludes in 2D lighting too) */
-        const sill = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.32, 0.26), wallMat);
+        const sill = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.32, 0.26), tdWallMatFor(len, hU)); /* APOC-DA3D P1 */
         sill.position.set((ax + bx) / 2, hU * 0.16, (az + bz) / 2); sill.rotation.y = -ang; wallsGrp.add(sill);
-        const linW = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.18, 0.26), wallMat);
+        const linW = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.18, 0.26), tdWallMatFor(len, hU)); /* APOC-DA3D P1 */
         linW.position.set((ax + bx) / 2, hU * 0.91, (az + bz) / 2); linW.rotation.y = -ang; wallsGrp.add(linW);
         const winHinge = new THREE.Group(); winHinge.position.set(ax, 0, az); winHinge.rotation.y = -ang;
         const glass = new THREE.Mesh(new THREE.BoxGeometry(len, hU * 0.5, 0.06), new THREE.MeshStandardMaterial({ color: 0x9fd4ee, transparent: true, opacity: 0.4, roughness: 0.1 }));
         glass.position.set(len / 2, hU * 0.57, 0); winHinge.add(glass);
+        /* APOC-DA3D P1: mullion cross-bars, so the pane reads as a window */
+        const mullMat = tdMat(0x3a332a, { roughness: .8 });
+        const mv = new THREE.Mesh(new THREE.BoxGeometry(0.05, hU * 0.5, 0.075), mullMat); mv.position.set(len / 2, hU * 0.57, 0); winHinge.add(mv);
+        const mh = new THREE.Mesh(new THREE.BoxGeometry(len, 0.05, 0.075), mullMat); mh.position.set(len / 2, hU * 0.57, 0); winHinge.add(mh);
         winHinge.userData.tdWindowId = w.id; winHinge.userData.tdOpen = !!w.open;
         if (w.open) winHinge.rotation.y = -ang + THREE.MathUtils.degToRad(100);
         wallsGrp.add(winHinge);
       } else {
-        const seg = new THREE.Mesh(new THREE.BoxGeometry(len, hU, 0.24), wallMat);
+        const seg = new THREE.Mesh(new THREE.BoxGeometry(len, hU, 0.24), tdWallMatFor(len, hU)); /* APOC-DA3D P1 */
         seg.position.set((ax + bx) / 2, hU / 2, (az + bz) / 2); seg.rotation.y = -ang;
         wallsGrp.add(seg);
       }
     }
     wallsGrp.traverse(m => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } }); /* APOC-V200 */
     TD.counts.walls = wallCount;
+    /* APOC-DA3D P1: roof — a toggleable cap over the walled area.
+       Like DA, it hides itself when you go inside (first-person) or
+       look straight down (top view); tdUpdateCamera drives visibility */
+    TD.roofGrp = null;
+    if (TD.prefs.roof && lightState.walls.length) {
+      let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9, topY = 0;
+      for (const w of lightState.walls) { const [wax, waz] = tdW(w.a[0], w.a[1]), [wbx, wbz] = tdW(w.b[0], w.b[1]); mnx = Math.min(mnx, wax, wbx); mxx = Math.max(mxx, wax, wbx); mnz = Math.min(mnz, waz, wbz); mxz = Math.max(mxz, waz, wbz); topY = Math.max(topY, (w.h || 10) / feetPerSquare); }
+      if (mxx > mnx && mxz > mnz) {
+        const rg = new THREE.Group();
+        const roofMat = tdPBRMaterial("dark_wooden_planks", Math.max(1, Math.round((mxx - mnx) / 2)), Math.max(1, Math.round((mxz - mnz) / 2)), tdWoodMat());
+        const slab = new THREE.Mesh(new THREE.BoxGeometry((mxx - mnx) + 0.6, 0.09, (mxz - mnz) + 0.6), roofMat);
+        slab.position.set((mnx + mxx) / 2, topY + 0.05, (mnz + mxz) / 2); slab.castShadow = true; slab.receiveShadow = true; rg.add(slab);
+        TD.root.add(rg); TD.roofGrp = rg;
+      }
+    }
     /* props */
     const propsGrp = new THREE.Group(); TD.root.add(propsGrp);
     let propCount = 0, skipped = 0;
@@ -6997,6 +7093,37 @@ function floorConnected(L, cols, rows){
       propsGrp.add(node);
     }
     TD.counts.props = propCount; TD.counts.propsSkipped = skipped;
+    /* APOC-DA3D P2: auto-clutter — DA-style surface dressing as a
+       per-device VIEW toggle. Deterministic per stamp (seeded by the
+       stamp id), so the GM, the players and the TV dress identically.
+       Nothing here is written to shared state — the map data is
+       untouched; turn the toggle off and the scene is exactly as saved */
+    TD.counts.clutter = 0;
+    if (TD.prefs.clutter) {
+      const cGrp = new THREE.Group(); propsGrp.add(cGrp);
+      const plateM = tdMat(0xd8cfb8, { roughness: .4 }), mugM = tdMat(0x8a4a2e, { roughness: .5 });
+      const bookMs = [0x8a3b2e, 0x2e5d8a, 0x3f7a3a].map(c => tdMat(c, { roughness: .7 }));
+      let ci = 0;
+      for (const it of stamps) {
+        if (!it.prop || !tdPropVisible(it)) continue;
+        const topY = (it.prop === "table" || it.prop === "counter") ? 0.58 : it.prop === "desk" ? 0.6 : 0;
+        if (!topY) continue;
+        const [cpx, cpz] = tdW(it.x, it.y);
+        let seed = 7; const sk = String(it.id || (it.x + "," + it.y));
+        for (let i2 = 0; i2 < sk.length; i2++) seed = (seed * 31 + sk.charCodeAt(i2)) >>> 0;
+        const rnd = () => { seed = (seed * 1103515245 + 12345) >>> 0; return seed / 4294967296; };
+        const n = 1 + Math.floor(rnd() * 3);
+        for (let j = 0; j < n; j++) {
+          const ox = (rnd() - 0.5) * Math.max(0.2, (it.fw || 1) - 0.5), oz = (rnd() - 0.5) * Math.max(0.2, (it.fh || 1) - 0.5);
+          const pick = rnd(); let m;
+          if (pick < 0.4) { m = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.025, 14), plateM); m.position.set(cpx + ox, topY + 0.02, cpz + oz); }
+          else if (pick < 0.7) { m = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.045, 0.11, 10), mugM); m.position.set(cpx + ox, topY + 0.06, cpz + oz); }
+          else { m = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.045, 0.15), bookMs[ci % 3]); m.position.set(cpx + ox, topY + 0.03, cpz + oz); m.rotation.y = rnd() * 0.8; }
+          m.castShadow = true; cGrp.add(m); TD.counts.clutter++;
+        }
+        ci++;
+      }
+    }
     /* light sources as real lights (first N) + a visible flame marker */
     let li = 0;
     for (const src of lightState.lights) {
@@ -7005,7 +7132,7 @@ function floorConnected(L, cols, rows){
       const [lx, lz] = tdW(src.x, src.y);
       const pl = new THREE.PointLight(new THREE.Color(src.color || "#ffb347"), 0.85, Math.max(2, (src.dim || 20) / feetPerSquare), 1.6);
       pl.position.set(lx, 1.1, lz); pl.userData.flame = !!src.flame; pl.userData.seed = li * 1.37;
-      if (li < 3) { pl.castShadow = true; pl.shadow.mapSize.set(512, 512); pl.shadow.camera.near = 0.1; pl.shadow.camera.far = Math.max(4, (src.dim || 20) / feetPerSquare); pl.shadow.bias = -0.004; } /* APOC-V200 */
+      if (li < 3 && TD.prefs.quality !== "performance") { pl.castShadow = true; pl.shadow.mapSize.set(512, 512); pl.shadow.camera.near = 0.1; pl.shadow.camera.far = Math.max(4, (src.dim || 20) / feetPerSquare); pl.shadow.bias = -0.004; } /* APOC-V200 */
       TD.root.add(pl); li++;
     }
     TD.counts.pointLights = li;
@@ -7066,8 +7193,8 @@ function floorConnected(L, cols, rows){
     if (TD.active) return;
     if (!window.THREE) { if (tdStatusEl()) tdStatusEl().textContent = "The 3D library could not load — check the connection and refresh."; return; }
     if (!TD.renderer) {
-      TD.renderer = new THREE.WebGLRenderer({ antialias: true });
-      TD.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      TD.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); /* preserveDrawingBuffer: APOC-DA3D P3 (Save image) */
+      TD.renderer.setPixelRatio(TD.prefs.quality === "performance" ? 1 : Math.min(window.devicePixelRatio || 1, 2));
       TD.renderer.shadowMap.enabled = true; /* APOC-V200: real shadows */
       TD.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       $("tdCanvas").appendChild(TD.renderer.domElement);
@@ -7077,11 +7204,12 @@ function floorConnected(L, cols, rows){
     TD.scene.background = new THREE.Color(0x05070a);
     TD.scene.fog = new THREE.Fog(0x05070a, 120, 260);
     TD.camera = new THREE.PerspectiveCamera(46, 1, 0.1, 600);
-    TD.scene.add(new THREE.AmbientLight(0xbfae90, 0.62));
+    TD.amb = new THREE.AmbientLight(0xbfae90, 0.62); TD.scene.add(TD.amb); /* APOC-DA3D P3: kept for the mood presets */
     const sun = new THREE.DirectionalLight(0xfff2d8, 0.55); sun.position.set(30, 60, 18);
-    sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); /* APOC-V200 */
+    sun.castShadow = true; sun.shadow.mapSize.set(TD.prefs.quality === "performance" ? 1024 : 2048, TD.prefs.quality === "performance" ? 1024 : 2048); /* APOC-V200 + APOC-DA3D P3 */
     sun.shadow.camera.near = 5; sun.shadow.camera.far = 220; sun.shadow.bias = -0.0006;
     TD.sun = sun; TD.scene.add(sun);
+    tdApplyMood(); tdApplyQuality(); /* APOC-DA3D P3 */
     TD.savedView = { c: map.getCenter(), z: map.getZoom() };
     await tdLoadGenData();
     tdBuildStatic();
@@ -7131,6 +7259,7 @@ function floorConnected(L, cols, rows){
        height), so the eye stands at 5 ft in world units (1 unit =
        1 square = feetPerSquare ft). TD.fp is driven by the APOC-V192
        block (drag-look in tdBindControls + the WASD walk loop). */
+    if (TD.roofGrp) TD.roofGrp.visible = TD.prefs.roof && TD.view !== "fp" && TD.view !== "top"; /* APOC-DA3D P1 */
     if (TD.view === "fp") {
       const eye = 5 / (feetPerSquare || 5);
       const cp = Math.cos(TD.fp.pitch);
@@ -7248,6 +7377,22 @@ function floorConnected(L, cols, rows){
     el.addEventListener("contextmenu", e => e.preventDefault());
   }
   $("view3dBtn").addEventListener("click", () => { if (TD.active) exit3D(false); else enter3D(false); });
+  /* APOC-DA3D: scene-option wiring — prefs are per-device, view-only */
+  {
+    const rb = $("tdRoofBtn"), cb2 = $("tdClutterBtn"), ms = $("tdMoodSel"), qb = $("tdQualityBtn"), sb = $("tdShotBtn");
+    const syncTdBtns = () => {
+      if (rb) { rb.setAttribute("aria-pressed", String(!!TD.prefs.roof)); rb.classList.toggle("primary", !!TD.prefs.roof); }
+      if (cb2) { cb2.setAttribute("aria-pressed", String(!!TD.prefs.clutter)); cb2.classList.toggle("primary", !!TD.prefs.clutter); }
+      if (ms && TD.prefs.mood) ms.value = TD.prefs.mood;
+      if (qb) qb.textContent = "Quality: " + (TD.prefs.quality === "performance" ? "Performance" : "High");
+    };
+    if (rb) rb.addEventListener("click", () => { TD.prefs.roof = !TD.prefs.roof; TD.savePrefs(); syncTdBtns(); if (TD.active) tdBuildStatic(); });
+    if (cb2) cb2.addEventListener("click", () => { TD.prefs.clutter = !TD.prefs.clutter; TD.savePrefs(); syncTdBtns(); if (TD.active) tdBuildStatic(); });
+    if (ms) ms.addEventListener("change", () => { TD.prefs.mood = ms.value; TD.savePrefs(); tdApplyMood(); });
+    if (qb) qb.addEventListener("click", () => { TD.prefs.quality = TD.prefs.quality === "performance" ? "high" : "performance"; TD.savePrefs(); syncTdBtns(); if (TD.active) { tdApplyQuality(); tdBuildStatic(); } });
+    if (sb) sb.addEventListener("click", () => { if (!TD.active || !TD.renderer) return; TD.renderer.render(TD.scene, TD.camera); const a = document.createElement("a"); a.download = "apoc-3d-" + (currentMapId || "map") + ".png"; a.href = TD.renderer.domElement.toDataURL("image/png"); a.click(); });
+    syncTdBtns();
+  }
   /* v1.90: the 3D view's own zoom slider. The 2D zoom bar hides in 3D
      (its sync() keys off the 2D map element's width, which is 0 while
      the map is hidden) and its slider drives Leaflet zoom anyway, so
@@ -7291,7 +7436,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1821";
+        var BUILD_STAMP = "2026-11-08-1927";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
