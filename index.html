@@ -8384,7 +8384,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-2208";
+        var BUILD_STAMP = "2026-11-08-2245";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -15921,6 +15921,22 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
          puts a button, it stays there. */
       var sl = dragB.slot;
       var overHome = !dragB.parked && sl && typeof e.clientX === "number" && e.clientX >= sl.l - 10 && e.clientX <= sl.r + 10 && e.clientY >= sl.t - 10 && e.clientY <= sl.b + 10;
+      /* APOC-V239: a PARKED button dragged back over its home bar
+         re-slots too. The V230 own-slot test above only covers drags
+         that START in the bar; a parked drag fell through to the park
+         branch below, which wrote a fresh record at the drop point —
+         dropping the button on its own home slot left a park record at
+         the home coordinates and the button floated over its slot
+         instead of slotting in (probe267 on v2.34; probe271 on v2.38:
+         record {x:15,y:406} for #mapTab written by this same endB
+         park-branch save, zero other writers in 15s). Same semantics
+         as the right-click menu's pick/drop path (whole home rect):
+         a drop inside the home parent's rect (+/-10px) sends it home
+         and the branch below deletes the record via delKey. */
+      if (!overHome && dragB.parked && home && typeof e.clientX === "number") {
+        var hr9 = home.getBoundingClientRect();
+        if (e.clientX >= hr9.left - 10 && e.clientX <= hr9.right + 10 && e.clientY >= hr9.top - 10 && e.clientY <= hr9.bottom + 10) overHome = true;
+      }
       if (overHome && home) {
         undetach(b);
         var nx = dragB.parked ? null : dragB.next;
