@@ -7798,7 +7798,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-2018";
+        var BUILD_STAMP = "2026-11-08-2034";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10887,10 +10887,10 @@ function floorConnected(L, cols, rows){
     if (!closedState()) return;
     var de = document.documentElement, ih = window.innerHeight;
     var slack = ih - de.scrollHeight;
-    if (slack >= 1) return; /* v1.88: was 8 — the bubble now fills to the screen bottom (APOC-V188), so the guard only trims a genuine overflow */
+    if (slack >= -2) return; /* APOC-V235: dead band — bubbleFill owns slack >= 1 and this guard owns slack <= -3 only; trimming at exact fit made the pair oscillate the whole bottom section on Shaun's page */
     var am = document.getElementById("apocMap"); if (!am) return;
     var cur = am.getBoundingClientRect().height;
-    var nh = Math.max(240, Math.round(cur - (1 - slack))); /* v1.88: slack target 1, see above */
+    var nh = Math.max(240, Math.round(cur - (-1 - slack))); /* APOC-V235: trim to slack -1, inside the dead band */
     if (nh >= cur) return;
     am.style.height = nh + "px";
     window.__v179.trimmed += Math.round(cur - nh);
@@ -15448,40 +15448,15 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
 .btn-picked{outline:2px solid #1e40af !important;outline-offset:1px}
 </style>
 <script>
-/* APOC-V228a — Library float record guard. The perimeter passes could
-   rewrite apocVttPerimeterV2's repo.float without the user touching
-   anything (a load-time clamp rendered Shaun's saved y=455 as 0 and a
-   later pass saved the clobber; one scroll excursion rewrote it again
-   to the map's document top). This guard snapshots the float at load;
-   any change NOT preceded by a pointer drag on the Library itself is
-   reverted within a second. A real drag (or send-home) is adopted as
-   the new snapshot. Per-device only; display copies excluded. */
-(function(){
-  "use strict";
-  if (new URLSearchParams(location.search).get("display")) return;
-  var PKEY = "apocVttPerimeterV2";
-  function loadJ(){ try { return JSON.parse(localStorage.getItem(PKEY) || "{}") || {}; } catch(e){ return {}; } }
-  function saveJ(v){ try { localStorage.setItem(PKEY, JSON.stringify(v)); } catch(e){} }
-  function floatOf(st){ return (st && st.repo && st.repo.float) ? JSON.stringify(st.repo.float) : null; }
-  var snap = floatOf(loadJ()), userAt = 0, touching = false;
-  document.addEventListener("pointerdown", function(e){
-    if (e.target && e.target.closest && e.target.closest(".map-repo")) touching = true;
-  }, true);
-  document.addEventListener("pointerup", function(){
-    if (!touching) return;
-    touching = false; userAt = Date.now();
-    setTimeout(function(){ snap = floatOf(loadJ()); }, 900);
-  }, true);
-  setInterval(function(){
-    if (touching || Date.now() - userAt < 2000) return;
-    var st = loadJ(), cur = floatOf(st);
-    if (cur === snap) return;
-    if (cur === null) { snap = null; return; }        /* sent home: adopt */
-    if (snap === null) { snap = cur; return; }        /* first float: adopt */
-    st.repo = st.repo || {}; st.repo.float = JSON.parse(snap); saveJ(st);
-    window.dispatchEvent(new Event("resize"));
-  }, 1000);
-})();
+/* APOC-V235: the APOC-V228a Library float record guard was
+   REMOVED. Probe234 (2026-11-08) caught it reverting Shaun's own
+   float drag ~0.6s after the drop: its pointerdown 'touching'
+   detection missed the drag, so the 1s revert tick restored the
+   load-time snapshot over his save and dispatched a resize that
+   re-applied it — the Library 'snap back'. The writers it
+   guarded against no longer write the record (v2.28 cut their
+   record writes; v2.30 gated the height writers), so the float
+   record is now owned solely by the perimeter drag path. */
 </script>
 <script>
 /* APOC-V228b — right-click options for movable buttons, Library
