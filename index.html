@@ -2599,7 +2599,18 @@ setInterval(loadSharedEntries, 60000);
      returns to ON. Unarmed devices get no button and no GM state.
      Supersedes the v1.35 "button everywhere, starts off" state. */
   var gmArmed200 = false;
-  try { gmArmed200 = new URLSearchParams(location.search).get("dm") === "1" || localStorage.getItem("apocVttDM") === "1"; } catch(e) {}
+  /* APOC-V230 (Shaun, 2026-11-08 ~18:39): the arm ALSO accepts the
+     device's GM flag (apocGm) - Shaun's laptop carries apocGm=1 from
+     DM-view use but never got apocVttDM stamped, so the DM view
+     button never rendered for him at all ("I don't see it"). A
+     device that has run DM view IS a DM device. Player/display
+     screens never set apocGm (its only writer is this button's own
+     toggle), so they stay clean. */
+  try { gmArmed200 = new URLSearchParams(location.search).get("dm") === "1" || localStorage.getItem("apocVttDM") === "1" || localStorage.getItem("apocGm") === "1" || sessionStorage.getItem("apocGm") === "1"; } catch(e) {}
+  /* ...and the accepted arm is stamped permanently: toggling DM view
+     OFF removes apocGm, and without the stamp the button would
+     vanish on the next load - the same lockout by another door. */
+  if (gmArmed200 && !new URLSearchParams(location.search).get("display")) { try { localStorage.setItem("apocVttDM", "1"); } catch(e) {} } /* APOC-V234: a ?display copy on the DM's own laptop shares localStorage (apocGm=1) — it must not arm or stamp; the TV stays clean. */
   $("gmBtn").hidden = !gmArmed200;
   if (gmArmed200) {
     gmView = true;
@@ -7787,7 +7798,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-1958";
+        var BUILD_STAMP = "2026-11-08-2018";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9005,6 +9016,17 @@ function floorConnected(L, cols, rows){
       var gb = $("genBtn"), gs = $("genStatus");
       if (gb) { gb.classList.add("ctl-tab"); bar.appendChild(gb); tabs[name] = gb; }
       if (gs) bar.appendChild(gs);
+      /* APOC-V230 (Shaun, 2026-11-08 ~18:41: "Put that DM button
+         right next to the generate map button. Make it movable also
+         like the rest of them."): the DM view button's home is
+         IMMEDIATELY NEXT TO Generate Map in the bar (it sat at the
+         end of the bar after Dice since v1.67, where Shaun could
+         not find it). Appended here, inside the generate step; the
+         v1.67 end-of-bar append below stands down. In the bar it is
+         a roam target like every other bar button (drag, right-click
+         menu, snap, per-device persistence). */
+      if (gmBtn) bar.appendChild(gmBtn);
+      if (gmStatus) bar.appendChild(gmStatus);
       return;
     }
     if (name === "markers") {
@@ -9027,10 +9049,9 @@ function floorConnected(L, cols, rows){
     bar.appendChild(b); tabs[name] = b;
     b.addEventListener("click", function () { openSet(sets[name].hidden ? name : null); });
   });
-  /* v1.67: GM view button + its status line take the end of the bar,
-     right after Dice (the last tab appended above). */
-  if (gmBtn) bar.appendChild(gmBtn);
-  if (gmStatus) bar.appendChild(gmStatus);
+  /* v1.67's end-of-bar append STANDS DOWN (APOC-V230): the DM view
+     button + its status line now land inside the generate step
+     above, beside Generate Map. */
   function openSet(name) {
     ORDER.forEach(function (n) {
       var on = n === name;
@@ -10564,6 +10585,11 @@ function floorConnected(L, cols, rows){
     var push = document.getElementById("pushTvBtn");
     var amb = document.getElementById("ambBtn");
     if (!gm || !push || !amb || !gm.parentNode) return false;
+    /* APOC-V230: a cluster member Shaun has parked is HIS placement,
+       not a placement error - the assert stands down (and counts as
+       stable) while any member is parked, instead of insertBefore-ing
+       the parked button back beside GM view mid-drag-war. */
+    if (gm.classList.contains("btn-roam") || push.classList.contains("btn-roam") || amb.classList.contains("btn-roam")) return true;
     var parent = gm.parentNode;
     if (gm.nextSibling !== push) parent.insertBefore(push, gm.nextSibling);
     if (push.nextSibling !== amb) parent.insertBefore(amb, push.nextSibling);
@@ -10703,6 +10729,7 @@ function floorConnected(L, cols, rows){
     var send = document.getElementById("screen2SendBtn");
     var mir = document.getElementById("screen2MirrorBtn");
     if (!push || !send || !mir || !push.parentNode) return;
+    if (push.classList.contains("btn-roam")) return; /* APOC-V230: cluster parked by Shaun - do not chase it into <body> */
     var amb = document.getElementById("ambBtn");
     var anchor = (amb && amb.parentNode === push.parentNode) ? amb : push;
     if (anchor.nextSibling !== send) anchor.parentNode.insertBefore(send, anchor.nextSibling);
@@ -10790,6 +10817,7 @@ function floorConnected(L, cols, rows){
         window.open(u.href, "_blank", "noopener");
       });
     }
+    if (push && push.classList.contains("btn-roam")) return; /* APOC-V230: cluster parked by Shaun - do not chase it */
     if (send && send.parentNode) {
       if (send.previousSibling !== open) send.parentNode.insertBefore(open, send);
     } else if (push && push.parentNode && open !== push) {
@@ -14050,6 +14078,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   function placeTv(){
     var push = document.getElementById("pushTvBtn");
     if (!push || !push.parentNode) return;
+    if (push.classList.contains("btn-roam")) return; /* APOC-V230: cluster parked by Shaun - do not chase it */
     var b1 = document.getElementById("tvDm1Btn"), b2 = document.getElementById("tvDm2Btn");
     if (!b1) {
       b1 = mkTvBtn("tvDm1Btn", "TV: DM view", "vtt_active");
@@ -15172,7 +15201,9 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   if (new URLSearchParams(location.search).get("display")) return;
   var KEY = "apocVttBtnParkV1", THRESH = 7;
   function load(){ try { var v = JSON.parse(localStorage.getItem(KEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
-  function save(s){ try { localStorage.setItem(KEY, JSON.stringify(s)); } catch(e){} }
+  function save(s, delKey){ try { /* APOC-V234: merge, never clobber. Two systems write this store; a save built from a stale or partial snapshot must not delete records the other one just wrote (probes 260/261: a manual roam park was saved, then wiped within ~1s by a whole-store rewrite carrying only the cluster buttons, and the button snapped back). Keys in the live store that this save does not mention are carried over; only delKey — a deliberate un-park by this same path — may disappear. */
+    var cur = load(); for (var k in cur) { if (!(k in s) && k !== delKey) s[k] = cur[k]; }
+    localStorage.setItem(KEY, JSON.stringify(s)); } catch(e){} }
   function slug(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "btn"; }
   function keyOf(btn){
     if (btn.dataset && btn.dataset.roamKey) return btn.dataset.roamKey;
@@ -15254,7 +15285,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     if (!b || (!b.classList.contains("btn-roam") && !isTarget(b))) return;
     candB = { btn: b, x: e.clientX, y: e.clientY, id: e.pointerId,
               parked: b.classList.contains("btn-roam"),
-              parent: b.parentElement, next: b.nextSibling, gx: 0, gy: 0, key: null, pdesc: null };
+              parent: b.parentElement, next: b.nextSibling, gx: 0, gy: 0, key: null, pdesc: null,
+              slot: (function(){ var r = b.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom }; })() };
   });
   window.addEventListener("pointermove", function(e){
     if (!candB || e.pointerId !== candB.id) return;
@@ -15282,13 +15314,23 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       var b = dragB.btn, key = dragB.key || keyOf(b);
       var rec = (load()[key] || {});
       var home = dragB.parked ? parentByDesc(rec.pdesc) : dragB.parent;
-      var hr = home ? home.getBoundingClientRect() : null;
-      var overHome = hr && typeof e.clientX === "number" && e.clientX >= hr.left - 14 && e.clientX <= hr.right + 14 && e.clientY >= hr.top - 14 && e.clientY <= hr.bottom + 14;
+      /* APOC-V230 (Shaun, 2026-11-08 ~18:39: "I can pick it up but I
+         can't drop it - it won't move, it'll snap back to where it
+         was"): the re-slot test used the WHOLE home bar's rect
+         (+14px), so any drop in that full-width band - the natural
+         place to drop a toolbar button - reverted the drag AND
+         deleted its record. The re-slot now fires only when the drop
+         lands on the button's OWN pre-drag slot (+10px): putting it
+         back exactly where it came from. Everywhere else the drop
+         parks and stays, per Shaun's standing spec: anywhere he
+         puts a button, it stays there. */
+      var sl = dragB.slot;
+      var overHome = !dragB.parked && sl && typeof e.clientX === "number" && e.clientX >= sl.l - 10 && e.clientX <= sl.r + 10 && e.clientY >= sl.t - 10 && e.clientY <= sl.b + 10;
       if (overHome && home) {
         undetach(b);
         var nx = dragB.parked ? null : dragB.next;
         if (nx && nx.parentElement === home) home.insertBefore(b, nx); else home.appendChild(b);
-        var st = load(); delete st[key]; save(st);
+        var st = load(); delete st[key]; save(st, key); /* APOC-V234: deliberate un-park */
       } else {
         var st2 = load();
         var nx2 = parseInt(b.style.left, 10) || 0, ny2 = parseInt(b.style.top, 10) || 0;
@@ -15458,7 +15500,9 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
   if (new URLSearchParams(location.search).get("display")) return;
   var BKEY = "apocVttBtnParkV1", SKEY = "apocVttLibSubOrderV1", PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1";
   function loadB(){ try { var v = JSON.parse(localStorage.getItem(BKEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
-  function saveB(s){ try { localStorage.setItem(BKEY, JSON.stringify(s)); } catch(e){} }
+  function saveB(s, delKey){ try { /* APOC-V234: merge, never clobber — the other half of the drag fix (see the roam save). */
+    var cur = loadB(); for (var k in cur) { if (!(k in s) && k !== delKey) s[k] = cur[k]; }
+    localStorage.setItem(BKEY, JSON.stringify(s)); } catch(e){} }
   function loadS(){ try { var v = JSON.parse(localStorage.getItem(SKEY) || "null"); if (v && v.containers) { if (!v.parks) v.parks = {}; if (!v.locks) v.locks = {}; return v; } } catch(e){} return { containers: {}, parks: {}, locks: {} }; }
   function saveS(s){ try { localStorage.setItem(SKEY, JSON.stringify(s)); } catch(e){} }
   function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
@@ -15664,7 +15708,7 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
       undetachBtn(p.btn);
       if (!p.parked) { if (p.next && p.next.parentElement === p.home) p.home.insertBefore(p.btn, p.next); else p.home.appendChild(p.btn); }
       else p.home.appendChild(p.btn);
-      delete st[p.key]; saveB(st);
+      delete st[p.key]; saveB(st, p.key); /* APOC-V234: deliberate un-park */
     } else {
       var nx = parseInt(p.btn.style.left, 10) || 0, ny = parseInt(p.btn.style.top, 10) || 0;
       var sn = snapXY(p.btn, p.home, nx, ny);
@@ -15702,7 +15746,7 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
       var s = loadB(), r = s[key] || {};
       var home = parentByDesc(r.pdesc);
       if (home) { undetachBtn(btn); home.appendChild(btn); }
-      delete s[key]; saveB(s);
+      delete s[key]; saveB(s, key); /* APOC-V234: deliberate un-park */
     } });
     items.push({ label: "Hide this button", danger: true, fn: function(){
       var s = loadB(); s[key] = Object.assign({}, s[key] || {}, { hidden: true }); saveB(s);
