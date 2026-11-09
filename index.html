@@ -8384,7 +8384,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-08-2332";
+        var BUILD_STAMP = "2026-11-08-2349";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9601,7 +9601,6 @@ function floorConnected(L, cols, rows){
          templates library unhides (Draw > Template). */
       var gb = $("genBtn"), gs = $("genStatus");
       if (gb) { gb.classList.add("ctl-tab"); bar.appendChild(gb); tabs[name] = gb; }
-      if (gs) bar.appendChild(gs);
       /* APOC-V230 (Shaun, 2026-11-08 ~18:41: "Put that DM button
          right next to the generate map button. Make it movable also
          like the rest of them."): the DM view button's home is
@@ -9612,6 +9611,7 @@ function floorConnected(L, cols, rows){
          a roam target like every other bar button (drag, right-click
          menu, snap, per-device persistence). */
       if (gmBtn) bar.appendChild(gmBtn);
+      if (gs) bar.appendChild(gs); /* APOC-V240: genStatus rides AFTER the DM button — it is flex-basis:100%, and sitting between Generate Map and the DM button it forced the DM button onto the next bar row (measured genBtn 669,406 vs gmBtn 15,451 in Shaun's seeded layout, probe272b). The pair is adjacent now; both status lines keep their full rows below. */
       if (gmStatus) bar.appendChild(gmStatus);
       return;
     }
@@ -10416,7 +10416,7 @@ function floorConnected(L, cols, rows){
     try { if (p) localStorage.setItem(KEY, JSON.stringify(p)); } catch(e) {}
   }
   function blocked(){
-    /* APOC-V240: the under-821px term is gone — on phones the zoom bar
+    /* APOC-V241: the under-821px term is gone — on phones the zoom bar
        (and its Pinch checkbox, which lives on the bar) was unreachable,
        leaving gesture zoom un-enableable and slider zoom absent. The
        fullscreen / display / expand blocks stay. >=821px unchanged:
@@ -12214,7 +12214,21 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   window.addEventListener("pointerdown", function(e){
     if (libDrag || e.button > 0 || !mqOk()) return;
     var g = libGrip(); if (!g) return;
-    if (e.target !== g && !g.contains(e.target)) return;
+    var onGrip = (e.target === g || g.contains(e.target));
+    var headEl = null;
+    if (!onGrip) {
+      /* APOC-V240: the Library's HEAD ROW is a drag handle too. The
+         drag engaged only from the 16x15 grip; a press on the head's
+         centre — the grab a person actually makes — never engaged
+         (mid-drag samples frozen, probe272d on v2.39). Interactive
+         children of the head keep their own press; a plain click
+         still toggles (no-move releases restore and let the click
+         through, and the post-drag click suppressor below already
+         covers real drags). */
+      headEl = document.querySelector("#artLibrary .artlib-head");
+      if (!headEl || (e.target !== headEl && !headEl.contains(e.target))) return;
+      if (e.target !== headEl && e.target.closest && e.target.closest("button, a, input, select, textarea, .fp-lock")) return;
+    }
     var fp = loadJ(FKEY); if (fp["per-repo"] && fp["per-repo"].lock) return;
     var el = repo(), pn = panel(); if (!el || !pn) return;
     /* Double-press on the grip = send the Library home. Detected
@@ -12226,13 +12240,13 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
        grip dblclick handler has been unreachable since v1.80.
        Skipped while DM edit is on (head double-click = edit). */
     var now = Date.now();
-    if (lastGripPress && now - lastGripPress.t < 450 && Math.abs(e.clientX - lastGripPress.x) < 6 && Math.abs(e.clientY - lastGripPress.y) < 6 && !document.body.classList.contains("vtt-dm-edit")) {
+    if (onGrip && lastGripPress && now - lastGripPress.t < 450 && Math.abs(e.clientX - lastGripPress.x) < 6 && Math.abs(e.clientY - lastGripPress.y) < 6 && !document.body.classList.contains("vtt-dm-edit")) {
       lastGripPress = null;
       e.preventDefault(); e.stopPropagation();
       sendLibHome(el);
       return;
     }
-    lastGripPress = { t: now, x: e.clientX, y: e.clientY };
+    if (onGrip) lastGripPress = { t: now, x: e.clientX, y: e.clientY };
     e.preventDefault(); e.stopPropagation();
     var r = el.getBoundingClientRect();
     libDrag = { el: el, dx: e.clientX - r.left, dy: e.clientY - r.top, sx: e.clientX, sy: e.clientY, moved: false,
@@ -12241,7 +12255,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     el.style.width = Math.min(r.width, 720) + "px";
     el.style.left = r.left + "px"; el.style.top = r.top + "px";
     el.style.right = el.style.bottom = "";
-    try { g.setPointerCapture(e.pointerId); } catch(err){}
+    try { (onGrip ? g : headEl).setPointerCapture(e.pointerId); } catch(err){}
   }, true);
   window.addEventListener("pointermove", function(e){
     if (!libDrag) return;
@@ -12301,7 +12315,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   /* ================= (1b) zoom bar grip drag + (3) row de-overlap ================= */
   var zbDrag = null;
   function zbBlocked(){
-    return !!document.fullscreenElement || /* APOC-V240: no mq term — the zoom grip must drag on phones too (see blocked() above) */
+    return !!document.fullscreenElement || /* APOC-V241: no mq term — the zoom grip must drag on phones too (see blocked() above) */
       document.body.classList.contains("displaying") ||
       document.body.classList.contains("map-expanded") ||
       document.body.classList.contains("map-fs");
@@ -14628,7 +14642,26 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
          Shaun watched expand and follow him down the page (measured
          +57px per 57px scroll step in his saved layout, probe229). */
       var hs = pinFrozen[set.id];
-      if (hs === undefined) { hs = pinFrozen[set.id] = Math.max(80, Math.round(window.innerHeight - tr.bottom) + 4) + "px"; } /* APOC-V230: +4 slack, same Visuals fix */
+      /* APOC-V240: the frozen height derives from the set's own CONTENT
+         (scrollHeight), not the tab's viewport bottom. The V228/V230
+         viewport formula froze at whatever transient position the
+         smooth scrollIntoView had reached — the Dice set froze at
+         244px against 352px of content, its dice row and Save/Clear
+         buttons below the fold (probe272c, Shaun's seeded layout).
+         scrollHeight does not depend on scrollY, so the v2.28
+         grow-with-scroll defect cannot recur; the freeze ratchets UP
+         only when content itself grows (late thumbs, log lines),
+         capped at the standing viewport rule (innerHeight - 16). */
+      var cap240 = Math.max(120, window.innerHeight - 16);
+      if (hs === undefined) { hs = pinFrozen[set.id] = Math.min(Math.max(80, set.scrollHeight + 4), cap240) + "px"; }
+      /* Ratchet, overflow-gated: fire only when content genuinely
+         overflows the frozen box (scrollHeight beyond clientHeight
+         by >4px). An ungated comparison feeds back through border
+         accounting (scrollHeight reads clientHeight+2 at the
+         boundary) and climbs +2px per tick forever — the v2.28
+         growth defect in a new coat; caught by probe272e's growth
+         watch on this build's first candidate (368px -> 492px). */
+      else if (set.scrollHeight > set.clientHeight + 4) { var want240 = Math.min(set.scrollHeight + 4, cap240); if (want240 > parseInt(hs, 10)) { hs = pinFrozen[set.id] = want240 + "px"; } }
       if (set.style.top !== ts) set.style.top = ts;
       if (set.style.height !== hs) set.style.height = hs;
     });
@@ -15473,7 +15506,13 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   window.addEventListener("pointerdown", function(e){
     if (myDrag || e.button > 0 || !MQ.matches) return;
     var g = gripEl(); if (!g) return;
-    if (e.target !== g && !g.contains(e.target)) return;
+    var onGrip = (e.target === g || g.contains(e.target));
+    var headEl = null;
+    if (!onGrip) {
+      headEl = document.querySelector("#artLibrary .artlib-head"); /* APOC-V240: head-row handle, as in V183 */
+      if (!headEl || (e.target !== headEl && !headEl.contains(e.target))) return;
+      if (e.target !== headEl && e.target.closest && e.target.closest("button, a, input, select, textarea, .fp-lock")) return;
+    }
     if (!repoLocked()) return;
     var el = repoEl(), pn = panelEl(); if (!el || !pn) return;
     e.preventDefault(); e.stopPropagation();
@@ -15484,7 +15523,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     el.style.width = Math.min(r.width, 720) + "px";
     el.style.left = r.left + "px"; el.style.top = r.top + "px";
     el.style.right = el.style.bottom = "";
-    try { g.setPointerCapture(e.pointerId); } catch(err){}
+    try { (onGrip ? g : headEl).setPointerCapture(e.pointerId); } catch(err){}
   }, true);
   window.addEventListener("pointermove", function(e){
     if (!myDrag) return;
@@ -17348,8 +17387,8 @@ return module.exports; })();</script>
 #artLibrary .mr-folder-head{white-space:normal;overflow:visible;text-overflow:clip;height:auto;min-height:24px}
 </style>
 
-<style id="APOC-V240">
-/* ================= APOC-V240: PHONE TIGHTENING PASS (Shaun, 2026-11-08
+<style id="APOC-V241">
+/* ================= APOC-V241: PHONE TIGHTENING PASS (Shaun, 2026-11-08
    ~23:0x — "tighten up big time on the phone app version"). Every rule
    below is inside the phone media query; desktop/TV behaviour is
    byte-identical. Baseline (phone-census-baseline.json, v2.39):
@@ -17426,6 +17465,18 @@ return module.exports; })();</script>
   .init-strip{max-width:92vw}
   .ps-sw{width:30px;height:30px}
 }
+</style>
+<style id="APOC-V240">
+/* APOC-V240 (defect round, item 4): the Layers set IS its own flex
+   row, and a V2xx-era rule pins it nowrap — the row measured 1510px
+   wide inside a 1334px set in Shaun's seeded layout, the Drawings
+   and Tokens toggles ending at x=1418/1514, past the 1366 screen
+   edge (probe272c). The set now wraps; its children already carry
+   flex:0 0 auto from that same rule, so every item keeps its
+   natural width and each layer chip (chip + its eye, one span)
+   stays whole on its line, per the one-line-per-layer order. The
+   set's height is auto, so it grows to fit the wrapped lines. */
+#set-layers{flex-wrap:wrap !important}
 </style>
 </body>
 </html>
