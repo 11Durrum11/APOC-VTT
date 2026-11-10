@@ -3320,7 +3320,9 @@ setInterval(loadSharedEntries, 60000);
     baseOverlay.bringToBack();
     drawVeil();
     $("mapSelect").value = id;
-    map.fitBounds(bounds);
+    /* APOC-V246: ViewState rule — when this device holds a saved view for the incoming map (apocVttViewV1), the per-device restore owns the framing and this fit would only discard it and race the restore (map S3.3 vs S3.6). Fit only when no saved view exists. */
+    var __sv246 = null; try { __sv246 = (JSON.parse(localStorage.getItem("apocVttViewV1") || "{}") || {})[id]; } catch(e) {}
+    if (!__sv246 || !__sv246.c) map.fitBounds(bounds);
     drawGrid();
     if (gridOn) gridLayer.addTo(map);
     layer.addTo(map);
@@ -7273,7 +7275,7 @@ function floorConnected(L, cols, rows){
     const suffix = `_${id}`;
     await upsertKey("vtt_light" + suffix, { enabled: true, walls, lights });
     await upsertKey("vtt_draw" + suffix, { items: stampItems, layers: DEFAULT_DRAW_LAYERS.map(l => ({ ...l })) });
-    await upsertKey("vtt_settings" + suffix, { feetPerSquare: 5, unit: "ft", gridType: "square" });
+    await upsertKey("vtt_settings" + suffix, { feetPerSquare: 5, unit: "ft", gridType: "square", gridOn: false, rotation: 0 }); /* APOC-V246: full saveVttSettings shape — the partial seed omitted gridOn/rotation, the two facets loadVttSettings reads with engine defaults false/0, now written explicitly. */
     await upsertKey(genKey(id), genData);
     let regOk = true;
     if (!opts.id) {
@@ -8416,7 +8418,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-09-2107";
+        var BUILD_STAMP = "2026-11-10-1140";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -9802,6 +9804,241 @@ function floorConnected(L, cols, rows){
 </script>
 
 <script>
+/* APOC-V246 — GEOMETRY AUTHORITY (Phase 1 consolidation, revamp-writer-map
+   §25). ONE owner for saved-geometry validation and for the shared
+   merge-save paths of the chrome layout stores. This block runs BEFORE
+   every geometry block below (Perimeter, map fit, zoom bar, the V179–V243
+   patch blocks), so its rules are the read path every later block consumes:
+   (1) VALIDATION ON LOAD, BY RULE — out-of-range saved values are clamped
+       or made inert HERE, not by per-writer exceptions downstream. A
+       sub-380 apocVttMapSizeV1.h (the V179 trim poison — Shaun's record
+       held h:240) is dropped, so the fit falls through to its fill
+       formula; the Library float width is normalised to the 224 standard
+       (the job the V214 3s timer guard used to do by rewriting records);
+       negative / absurd parks are clamped; the cached shared default
+       (apocVttSharedDefaultV1) is sanitised by the same rules so poison
+       cannot be re-seeded from cache. Values inside their ranges — Shaun's
+       actual saved placements — pass through byte-identical in effect.
+   (2) SINGLE SAVE PATHS — saveBtnPark (apocVttBtnParkV1) and saveSubOrder
+       (apocVttLibSubOrderV1) below are the ONE merge-never-clobber
+       implementations (APOC-V234 semantics); the roam drag, the V228b
+       menu system, APOC-V208 and the V228b Library facets all delegate
+       here. saveSubOrder extends the shim to the store that never had it.
+   (3) resetLayout() — the complete geometry key list (the old R1/R2 reset
+       lists missed the phone zoom park, the phone Library width and the
+       per-device view record).
+   Display copies (?display=) run none of this: they are non-writers of
+   geometry state and keep following the shared camera only. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var IW = window.innerWidth || 1366, IH = window.innerHeight || 768;
+  function get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+  function set(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
+  function del(k){ try { localStorage.removeItem(k); } catch(e){} }
+  function parse(k){ try { var v = JSON.parse(get(k) || "null"); return (v && typeof v === "object") ? v : null; } catch(e){ return null; } }
+  function num(v){ return typeof v === "number" && isFinite(v); }
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+  /* MapSize {w,h,l,t}: h valid only in [380,1600] (below the 380 CSS floor
+     a height is poison, never a user size — it goes inert); w [320,2600];
+     insets [0,1200]. Returns null when nothing usable remains. */
+  function sanMapSize(ms){
+    if (!ms || typeof ms !== "object") return null;
+    var out = {}, any = false;
+    if (num(ms.w)) { out.w = Math.round(clamp(ms.w, 320, 2600)); any = true; }
+    if (num(ms.h) && ms.h >= 380) { out.h = Math.round(clamp(ms.h, 380, 1600)); any = true; }
+    if (num(ms.l)) { out.l = Math.round(clamp(ms.l, 0, 1200)); any = true; }
+    if (num(ms.t)) { out.t = Math.round(clamp(ms.t, 0, 1200)); any = true; }
+    return any ? out : null;
+  }
+  /* Zoom park {l,t}: both numeric, viewport-bound clamped; absurd = inert. */
+  function sanZoom(z){
+    if (!z || typeof z !== "object" || !num(z.l) || !num(z.t)) return null;
+    if (Math.abs(z.l) > 10000 || Math.abs(z.t) > 10000) return null;
+    return { l: Math.round(clamp(z.l, 0, Math.max(0, IW))), t: Math.round(clamp(z.t, 0, Math.max(0, IH + 400))) };
+  }
+  function fixKey(k, san){
+    var raw = get(k); if (raw == null) return;
+    var out = san(parse(k));
+    if (!out) { del(k); return; }
+    if (JSON.stringify(out) !== raw) set(k, out);
+  }
+
+  /* ---- run the validation pass over every saved geometry record ---- */
+  fixKey("apocVttMapSizeV1", sanMapSize);
+  /* Each zoom park is validated ONLY by the form factor that owns it
+     (the page's own split, APOC-V242: max-width 820px = phone). A phone
+     boot must never clamp — and thereby rewrite — the desktop park
+     against the phone viewport, nor the reverse: the other form
+     factor's record is not this viewport's to judge, and it stays
+     byte-identical until its own device boots. */
+  if (IW > 820) fixKey("apocVttZoomBarV1", sanZoom);
+  if (IW <= 820) fixKey("apocVttZoomBarPhoneV1", sanZoom);
+  fixKey("apocVttPerimeterV2", function(p){
+    if (!p) return null;
+    var out = {};
+    Object.keys(p).forEach(function(k){
+      var park = p[k];
+      if (k === "repo" && park && park.float && num(park.float.x) && num(park.float.y)) {
+        var w0 = num(park.float.w) ? Math.round(park.float.w) : 224;
+        var x0 = Math.round(park.float.x);
+        if (w0 > 224) x0 += (w0 - 224); /* width standard on load, right edge kept (the old V214 rule, once, here) */
+        out.repo = { float: { x: Math.round(clamp(x0, -2000, 4000)), y: Math.round(clamp(park.float.y, 0, 4000)), w: 224 } };
+      } else out[k] = park; /* legacy edge parks + other groups pass through untouched */
+    });
+    return out;
+  });
+  fixKey("apocVttFreeLayoutV1", function(f){
+    if (!f) return null;
+    var out = {};
+    Object.keys(f).forEach(function(id){
+      var r = f[id];
+      if (!r || typeof r !== "object") { out[id] = r; return; }
+      var o = {};
+      Object.keys(r).forEach(function(k2){
+        var v = r[k2];
+        if (k2 === "x" && num(v)) o.x = Math.round(clamp(v, -2000, 4000));
+        else if (k2 === "y" && num(v)) o.y = Math.round(clamp(v, 0, 4000));
+        else if (k2 === "w" && num(v)) o.w = (id === "per-repo") ? 224 : Math.round(clamp(v, 0, 2600));
+        else if (k2 === "h" && num(v)) o.h = Math.round(clamp(v, 0, 1600));
+        else if (k2 === "x" || k2 === "y" || k2 === "w" || k2 === "h") { /* non-numeric geometry field: inert, dropped */ }
+        else o[k2] = v; /* lock / orient facets pass through */
+      });
+      out[id] = o;
+    });
+    return out;
+  });
+  fixKey("apocVttBtnParkV1", function(s){
+    if (!s) return null;
+    var out = {};
+    Object.keys(s).forEach(function(k){
+      var r = s[k];
+      if (!r || typeof r !== "object") return;
+      if (("x" in r) || ("y" in r)) {
+        if (!num(r.x) || !num(r.y) || Math.abs(r.x) > 5000 || Math.abs(r.y) > 5000) return; /* absurd park: inert */
+        r = Object.assign({}, r, { x: Math.round(clamp(r.x, -500, 5000)), y: Math.round(clamp(r.y, -500, 5000)) });
+      }
+      out[k] = r; /* lock-only / hidden-only records (menu facets) pass through */
+    });
+    return out;
+  });
+  fixKey("apocVttLibSubOrderV1", function(s){
+    if (!s) return null;
+    if (s.parks) Object.keys(s.parks).forEach(function(ck){
+      var m = s.parks[ck]; if (!m || typeof m !== "object") return;
+      Object.keys(m).forEach(function(uid){
+        var r = m[uid];
+        if (!r || !num(r.x) || !num(r.y) || Math.abs(r.x) > 5000 || Math.abs(r.y) > 5000) delete m[uid];
+        else { r.x = Math.round(clamp(r.x, -500, 5000)); r.y = Math.round(clamp(r.y, -500, 5000)); }
+      });
+    });
+    return s; /* containers + locks are order/state, not geometry — untouched */
+  });
+  fixKey("apocVttPanelParkV1", function(s){
+    if (!s) return null;
+    var out = {};
+    Object.keys(s).forEach(function(k){
+      var r = s[k];
+      if (!r || !num(r.dx) || !num(r.dy) || Math.abs(r.dx) > 3000 || Math.abs(r.dy) > 3000) return;
+      out[k] = { dx: Math.round(clamp(r.dx, -3000, 3000)), dy: Math.round(clamp(r.dy, -3000, 3000)) };
+    });
+    return out;
+  });
+  (function(){
+    var raw = get("apocVttLibBoxH"); if (raw == null) return;
+    var h = parseInt(raw, 10);
+    if (!(h >= 60 && h <= IH + 2000)) del("apocVttLibBoxH");
+  })();
+  (function(){
+    var raw = get("apocVttLibPhoneW"); if (raw == null) return;
+    var w = parseInt(raw, 10);
+    if (!(w >= 150 && w <= 1200)) del("apocVttLibPhoneW");
+  })();
+  fixKey("apocVttViewV1", function(s){
+    if (!s) return null;
+    var out = {};
+    Object.keys(s).forEach(function(id){
+      var v = s[id];
+      if (v && Array.isArray(v.c) && num(v.c[0]) && num(v.c[1]) && num(v.z) && v.z >= -2 && v.z <= 3) out[id] = v;
+    });
+    return out;
+  });
+  /* The cached shared default gets the same rules before VDCAP can seed
+     from it — the h:240 poison sat in this cache on Shaun's laptop. */
+  (function(){
+    var c = parse("apocVttSharedDefaultV1");
+    if (!c || c.v !== 1) return;
+    var before = JSON.stringify(c);
+    c.mapSize = sanMapSize(c.mapSize);
+    if (IW > 820) c.zoomBar = sanZoom(c.zoomBar); /* the cached park is a DESKTOP park (VDCAP capture is desktop-side); a phone boot leaves it byte-identical rather than clamping it to the phone viewport */
+    if (JSON.stringify(c) !== before) set("apocVttSharedDefaultV1", c);
+  })();
+
+  /* ---- the ONE merge-never-clobber save paths (APOC-V234 semantics) ---- */
+  function loadBtn(){ try { var v = JSON.parse(get("apocVttBtnParkV1") || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function saveBtnPark(s, delKey){
+    try {
+      var cur = loadBtn();
+      for (var k in cur) { if (!(k in s) && k !== delKey) s[k] = cur[k]; }
+      set("apocVttBtnParkV1", s);
+    } catch(e){}
+  }
+  function loadSub(){ try { var v = JSON.parse(get("apocVttLibSubOrderV1") || "null"); if (v && v.containers) { if (!v.parks) v.parks = {}; if (!v.locks) v.locks = {}; return v; } } catch(e){} return { containers: {}, parks: {}, locks: {} }; }
+  function saveSubOrder(s){
+    try {
+      if (!s.containers) s.containers = {};
+      if (!s.parks) s.parks = {};
+      if (!s.locks) s.locks = {};
+      var cur = loadSub();
+      ["containers", "parks", "locks"].forEach(function(f){
+        Object.keys(cur[f] || {}).forEach(function(ck){ if (!(ck in s[f])) s[f][ck] = cur[f][ck]; });
+      });
+      set("apocVttLibSubOrderV1", s);
+    } catch(e){}
+  }
+  /* APOC-V246b (Phase 1b, DEFECT-1/2): the two shared engine rules.
+     clampLanding(x, y, w, h) — the SAVE-TIME viewport clamp: a drop's
+     landing rect is pulled wholly inside the LIVE viewport before any
+     record is written (a piece larger than the viewport lands with its
+     top-left — its grip/title — at the origin edge, so it stays
+     reachable). Records already inside pass through unchanged, so
+     in-viewport behaviour is byte-identical. Appliers honour records
+     verbatim; this clamp is the ONLY viewport correction, and it runs
+     here, at save, in the engines.
+     insertAtHome(home, btn, homeIdx, next) — the ONE re-slot rule:
+     a live next-sibling wins when present; otherwise the button is
+     inserted at its recorded homeIdx CLAMPED to the bar's current
+     child count (an index at/past the end appends); no homeIdx falls
+     back to append (legacy records). Returns the landed index. */
+  function clampLanding(x, y, w, h){
+    var iw = window.innerWidth || IW, ih = window.innerHeight || IH;
+    var cw = (typeof w === "number" && isFinite(w) && w > 0) ? w : 0;
+    var ch = (typeof h === "number" && isFinite(h) && h > 0) ? h : 0;
+    return { x: Math.round(clamp(x, 0, Math.max(0, iw - cw))), y: Math.round(clamp(y, 0, Math.max(0, ih - ch))) };
+  }
+  function insertAtHome(home, btn, homeIdx, next){
+    if (!home || !btn) return -1;
+    if (next && next.parentElement === home && next !== btn) home.insertBefore(btn, next);
+    else if (typeof homeIdx === "number" && isFinite(homeIdx) && homeIdx >= 0) {
+      var idx = Math.min(Math.round(homeIdx), home.children.length);
+      var tgt = idx < home.children.length ? home.children[idx] : null;
+      if (tgt === btn) tgt = btn.nextSibling;
+      if (tgt) home.insertBefore(btn, tgt); else home.appendChild(btn);
+    } else home.appendChild(btn);
+    return Array.prototype.indexOf.call(home.children, btn);
+  }
+  var RESET_KEYS = ["apocVttPerimeterV2", "apocVttMapSizeV1", "apocVttZoomBarV1", "apocVttZoomBarPhoneV1",
+    "apocVttFreeLayoutV1", "apocVttBtnParkV1", "apocVttLibSubOrderV1", "apocVttPanelParkV1",
+    "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttViewV1", "apocVttFsFloatV1"];
+  function resetLayout(){ RESET_KEYS.forEach(function(k){ del(k); }); }
+
+  window.__apocGeo246 = { sanMapSize: sanMapSize, sanZoom: sanZoom, saveBtnPark: saveBtnPark, clampLanding: clampLanding, insertAtHome: insertAtHome,
+    saveSubOrder: saveSubOrder, resetLayout: resetLayout, resetKeys: RESET_KEYS, version: "2.46" };
+})();
+</script>
+
+<script>
 "use strict";
 /* ================= v1.06: perimeter-always, movable groups =================
    Desktop/table only (phones keep the right-edge repository drawer).
@@ -10002,6 +10239,7 @@ function floorConnected(L, cols, rows){
   defs.forEach(function(d){
     d.grip.addEventListener("pointerdown", function(ev){
       if (!mq.matches || ev.button > 0) return;
+      if (d.id === "repo") return; /* APOC-V246: the Library grip/head drag is owned by the ONE remaining Library drag (APOC-V183 block: grip + head row, lock-gated, double-press home). This Perimeter binding stays the owner for every other perimeter group; the repo can never be double-dragged. */
       ev.preventDefault();
       var el = d.el, r = el.getBoundingClientRect();
       var grabDX = ev.clientX - r.left, grabDY = ev.clientY - r.top;
@@ -10035,9 +10273,10 @@ function floorConnected(L, cols, rows){
           /* v1.71: free float — save the EXACT spot, panel-relative.
              No nearest-edge snap: where he leaves it is where it stays. */
           var pr0 = panel.getBoundingClientRect();
+          var cl9b = (window.__apocGeo246 && window.__apocGeo246.clampLanding) ? window.__apocGeo246.clampLanding(er0.left, er0.top, er0.width, er0.height) : { x: er0.left, y: er0.top }; /* APOC-V246b: clamp AT SAVE, same rule as the V183 Library drag */
           state[d.id] = { float: {
-            x: Math.round(er0.left - pr0.left),
-            y: Math.max(0, Math.round(er0.top - pr0.top)),
+            x: Math.round(cl9b.x - pr0.left),
+            y: Math.max(0, Math.round(cl9b.y - pr0.top)),
             w: Math.round(er0.width)
           } };
           save(state);
@@ -10099,10 +10338,7 @@ function floorConnected(L, cols, rows){
      could otherwise be left hanging below the fitted panel's
      bottom edge. applyAll is idempotent, so re-applying is free. */
   window.addEventListener("load", function(){ setTimeout(applyAll, 60); });
-  if (window.ResizeObserver) {
-    var roT = 0;
-    new ResizeObserver(function(){ clearTimeout(roT); roT = setTimeout(applyAll, 120); }).observe(panel);
-  }
+  /* APOC-V246: the #mapPanel ResizeObserver is REMOVED — it closed the fit<->applyAll loop (any geometry write inside the panel re-fired applyAll 120ms later, which re-wrote geometry, which re-fired the observer). applyAll runs on event triggers only now: load, window resize, fullscreenchange, mq change, grip drops, resets. */
 })();
 </script>
 
@@ -10275,6 +10511,8 @@ function floorConnected(L, cols, rows){
   function loadMan(){
     try {
       var man = JSON.parse(localStorage.getItem(MANKEY) || "null");
+      /* APOC-V246: the authority read path — whoever wrote the record, out-of-range fields are inert here by rule (a sub-380 h is dropped and the fill formula decides). */
+      if (man && window.__apocGeo246 && window.__apocGeo246.sanMapSize) man = window.__apocGeo246.sanMapSize(man);
       if (!man || (typeof man.w !== "number" && typeof man.h !== "number" && typeof man.l !== "number" && typeof man.t !== "number")) return null;
       return man;
     } catch(e) { return null; }
@@ -10458,7 +10696,8 @@ function floorConnected(L, cols, rows){
     return null;
   }
   function savePos(p){
-    try { if (p) localStorage.setItem(phoneMq() ? PKEY242 : KEY, JSON.stringify(p)); } catch(e) {}
+    /* APOC-V246b: clamp AT SAVE — the record write itself enforces the zoom owner's own bounds (the stage bounds sync()/the grip move already apply: whole stage width, map height + the 44px gutter band), so the stored park can never be an off-viewport landing on either form factor (phoneMq() selects the phone record; the bounds come from the live stage). In-bounds parks pass through unchanged. */
+    try { if (p) { var mxL10 = Math.max(0, stageW() - bar.offsetWidth), mxT10 = Math.max(0, side.clientHeight + 44 - bar.offsetHeight); p = { l: Math.round(Math.min(Math.max(0, p.l), mxL10)), t: Math.round(Math.min(Math.max(0, p.t), mxT10)) }; localStorage.setItem(phoneMq() ? PKEY242 : KEY, JSON.stringify(p)); } } catch(e) {}
   }
   function blocked(){
     /* APOC-V241: the under-821px term is gone — on phones the zoom bar
@@ -10497,7 +10736,7 @@ function floorConnected(L, cols, rows){
     var maxT = Math.max(0, side.clientHeight + 44 - bar.offsetHeight); /* the bar may ride into the gutter band under the window (its home straddles the bottom edge) */
     bar.style.left = Math.min(Math.max(0, p.l), maxL) + "px";
     bar.style.top = Math.min(Math.max(0, p.t), maxT) + "px";
-    if (m) slider.value = m.getZoom();
+    /* APOC-V246: no slider write here — the zoomend listener in waitMap below is the ONE Leaflet->slider mirror path (map S4.1/S4.3 de-duplicated). */
   }
   slider.addEventListener("input", function(){
     var m = window.map;
@@ -10505,6 +10744,7 @@ function floorConnected(L, cols, rows){
   });
   grip.addEventListener("pointerdown", function(e){
     e.preventDefault();
+    try { var __fl246 = JSON.parse(localStorage.getItem("apocVttFreeLayoutV1") || "{}"); if (__fl246["zoombar"] && __fl246["zoombar"].lock) return; } catch(err) {} /* APOC-V246: the free-layout zoombar lock facet — formerly enforced by the retired V183 duplicate drag — is enforced here, in the ONE remaining zoom drag. */
     var sx = e.clientX, sy = e.clientY, sl = bar.offsetLeft, st = bar.offsetTop;
     try { grip.setPointerCapture(e.pointerId); } catch(err) {}
     function mv(ev){
@@ -10530,10 +10770,14 @@ function floorConnected(L, cols, rows){
     var m = window.map;
     if (m && m.on){
       m.on("zoomend", function(){ slider.value = m.getZoom(); });
+      m.on("resize", function(){ sync(); }); /* APOC-V246: the map's own resize/load events re-apply the park — layout convergence lives in this ONE owner. */
+      m.on("load", function(){ sync(); });
       sync();
       setTimeout(sync, 350);
     } else setTimeout(waitMap, 120);
   })();
+  /* APOC-V246: bounded one-shot boot convergence — sync() is record-driven and idempotent, and the first apply must land even where window.map is late (the retired periodic duplicate appliers, V183/V187/V211, used to mask a late first sync by re-applying forever). Three fixed retries, then the owner rests on its event triggers: window resize, fullscreenchange, the map-style observer above, and the map resize/load hooks. */
+  setTimeout(sync, 600); setTimeout(sync, 1800); setTimeout(sync, 4000);
 })();
 </script>
 
@@ -11523,6 +11767,7 @@ function floorConnected(L, cols, rows){
   }
   function guard(){
     window.__v179.runs++;
+    return; /* APOC-V246: RETIRED as a writer. This guard trimmed #apocMap and PERSISTED the derived height into apocVttMapSizeV1 (the poison writer, map S2.6 — source of the h:240 record). It is a pure counter now: it never touches the element and never writes the record. The closed-page fit is owned by the map fit fill formula; saved heights are validated on load by the geometry authority. */
     if (!closedState()) return;
     var de = document.documentElement, ih = window.innerHeight;
     var slack = ih - de.scrollHeight;
@@ -11667,7 +11912,7 @@ function floorConnected(L, cols, rows){
     rb.textContent = "Reset layout";
     rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
     rb.addEventListener("click", function(){
-      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttMapSizeV1", "apocVttLibBoxH", "apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttZoomBarPhoneV1", "apocVttMapSizeV1", "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttPanelParkV1", "apocVttViewV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} }); /* APOC-V246: complete reset list — the phone zoom park, the phone Library width and the per-device view record clear too; they survived every reset before (map S15). */
       location.reload();
     });
     titleBubble.appendChild(rb);
@@ -11879,7 +12124,7 @@ function floorConnected(L, cols, rows){
   else setTimeout(boot, 2200);
   document.addEventListener("click", function(){ setTimeout(fitLib, 350); setTimeout(fitLib, 1000); }, true);
   window.addEventListener("resize", function(){ setTimeout(fitLib, 300); });
-  setInterval(function(){ var lib = document.getElementById("artLibrary"); if (lib && lib.classList.contains("open")) fitLib(); }, 1800);
+  /* APOC-V246: 1800ms fitLib tick removed — fitLib recomputes on click/resize events only (handlers above). */
 })();
 </script>
 
@@ -11951,6 +12196,8 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
   document.addEventListener("pointerdown", function(e){
     if (document.body && document.body.classList.contains("vtt-dm-edit")) return;
     var t = e.target;
+    /* APOC-V246: the two PRE-TREATMENT grips are exempt from the veto — the Art Library grip (.map-repo .per-grip, including its in-head copy) and the zoom-bar grip (#zoomBarGrip). Those drags predate the treatment (v1.71/v1.74) and were never DM-gated; this capture veto is what forced the duplicate V183/V211 drag systems, now retired — the veto is fixed here, at the guard. */
+    if (t && t.closest && (t.closest("#zoomBarGrip") || (t.closest(".per-grip") && t.closest(".map-repo")))) return;
     if (t && t.closest && t.closest(TREAT_SEL)) { e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); }
   }, true);
 
@@ -12095,7 +12342,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     rl.addEventListener("click", function(){
       var b = document.getElementById("layoutResetBtn");
       if (b) { b.click(); return; }
-      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttMapSizeV1","apocVttLibBoxH","apocVttPanelParkV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });
+      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttZoomBarPhoneV1","apocVttMapSizeV1","apocVttLibBoxH","apocVttLibPhoneW","apocVttPanelParkV1","apocVttViewV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} }); /* APOC-V246: complete reset list (see R1). */
       location.reload();
     });
     var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
@@ -12212,6 +12459,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
      position and the box paints OVER it (the aside rides at
      z-index 3000). Measure -> apply is stable across passes. */
   function fitLib182(){
+    return; /* APOC-V246: RETIRED — duplicate docked Library height owner (fitLib copy + a margin chase no other writer owned, map S7.2). Docked height: fitLib (events) + libTick (events). Floated was already stood down here. */
     var lib = document.getElementById("artLibrary");
     var am = document.getElementById("apocMap");
     if (!lib || !am) return;
@@ -12228,10 +12476,11 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   }
   document.addEventListener("click", function(){ setTimeout(fitLib182, 1200); setTimeout(fitLib182, 2100); }, true);
   window.addEventListener("resize", function(){ setTimeout(fitLib182, 450); });
-  setInterval(function(){ var lib = document.getElementById("artLibrary"); if (lib && lib.classList.contains("open")) fitLib182(); }, 600);
+  /* APOC-V246: 600ms fitLib182 tick removed (the function itself is retired above). */
 
   /* ================= (1a) Art Library grip drag ================= */
   function applyFloat(el, pn, park){
+    return; /* APOC-V246: RETIRED duplicate applier (copy 2 of the Library box applier, map S6.3) — the Perimeter applyRepoPark is the ONE applier; endLibDrag's saved record is re-applied by Perimeter applyAll on the drag-end resize dispatch. */
     var pr = pn.getBoundingClientRect();
     el.classList.remove("per-parked", "per-h", "per-v", "per-float");
     el.style.left = el.style.right = el.style.top = el.style.bottom = el.style.width = "";
@@ -12336,9 +12585,10 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     el.classList.remove("per-dragging");
     el.style.width = "";
     var state = loadJ(PKEY), pr = pn.getBoundingClientRect();
-    state.repo = { float: { x: Math.round(er.left - pr.left), y: Math.max(0, Math.round(er.top - pr.top)), w: Math.round(er.width) } };
+    var cl9 = (window.__apocGeo246 && window.__apocGeo246.clampLanding) ? window.__apocGeo246.clampLanding(er.left, er.top, er.width, er.height) : { x: er.left, y: er.top }; /* APOC-V246b: clamp AT SAVE — the float record stores the CLAMPED viewport landing (panel-relative below), never an off-viewport one */
+    state.repo = { float: { x: Math.round(cl9.x - pr.left), y: Math.max(0, Math.round(cl9.y - pr.top)), w: Math.round(er.width) } };
     saveJ(PKEY, state);
-    applyFloat(el, pn, state.repo);
+    /* APOC-V246: no second applier — Perimeter applyAll re-applies state.repo on the resize dispatched below (single applier; record == landed rect). */
     setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
   }
   window.addEventListener("pointerup", endLibDrag, true);
@@ -12389,6 +12639,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
              t: Math.max(0, side.clientHeight + 44 - bar.offsetHeight) };
   }
   window.addEventListener("pointerdown", function(e){
+    return; /* APOC-V246: RETIRED duplicate zoom-bar drag (map S5.2/D8) — the v1.71 grip drag is the ONE zoom drag, with the free-layout zoombar lock gate folded into it. */
     if (zbDrag || e.button > 0) return;
     var gripEl = document.getElementById("zoomBarGrip");
     var bar = document.getElementById("zoomBar");
@@ -12417,6 +12668,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   window.addEventListener("pointercancel", endZbDrag, true);
 
   function deOverlap(){
+    return; /* APOC-V246: RETIRED — this nudger PERSISTED its own nudge over the user's saved zoom park (map S5.3, highest-risk writer #5). The record now only ever holds where the user dropped the bar. */
     if (zbDrag) return;
     if (!mqOk()) return; /* APOC-V242: the row-clear nudge is a desktop layout guard; at phone width the bar's spot is the user's own phone park */
     var bar = document.getElementById("zoomBar");
@@ -12550,11 +12802,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   window.addEventListener("pointerup", function(){ setTimeout(guards, 150); }, true);
   window.addEventListener("resize", function(){ setTimeout(guards, 350); });
   [2400, 3600, 5200].forEach(function(ms){ setTimeout(guards, ms); });
-  setInterval(function(){
-    var lib = document.getElementById("artLibrary");
-    if (lib && lib.classList.contains("open")) anchorLib();
-    guardRepo();
-  }, 1200);
+  /* APOC-V246: 1200ms guards interval removed — anchorLib/guardRepo run on their event triggers (click, pointerup, resize, boot timeouts above); anchorLib is the Library module's open-state box rule, guardRepo a render-only reachability pass (its record write was already removed in APOC-V228). */
 })();
 </script>
 
@@ -12644,6 +12892,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 
   /* ================= (b) bubble fill ================= */
   function bubbleFill(){
+    return; /* APOC-V246: RETIRED — the second map-height owner (map S2.5). Its grow-to-screen-bottom case is the map fit's own fill formula; two owners alternated the height ~17px and jumped the bottom section. */
     if (blocked() || !closedState()) return;
     var page = document.querySelector(".page"), am = document.getElementById("apocMap");
     if (!page || !am) return;
@@ -12805,8 +13054,8 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   window.addEventListener("resize", function(){ setTimeout(bubbleFill, 900); setTimeout(libTick, 500); });
   window.addEventListener("pointerup", function(){ setTimeout(libTick, 160); }, true);
   [2400, 3600, 5200, 7000].forEach(function(ms){ setTimeout(function(){ bubbleFill(); libTick(); }, ms); });
-  setInterval(libTick, 450);
-  setInterval(bubbleFill, 2500);
+  /* APOC-V246: 450ms libTick interval removed — libTick is event-driven now (click +1500/+2400, resize +500, pointerup +160, boot timeouts above) and remains the ONE Library inner-height writer. */
+  /* APOC-V246: 2500ms bubbleFill interval removed (the function itself is retired above). */
 })();
 </script>
 
@@ -14458,9 +14707,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       }
     }
   }
-  document.addEventListener("click", function(){ setTimeout(tick, 60); setTimeout(tick, 300); setTimeout(tick, 900); }, true);
-  window.addEventListener("resize", function(){ setTimeout(tick, 300); });
-  setInterval(tick, 200);
+  /* APOC-V246: APOC-V196 tick registrations REMOVED (200ms interval + click/resize re-arms). The tick was the legacy .nest-body height fill (map S7.5): floated it already stood down (APOC-V243), docked it raced libTick. Its close-clear job is duplicated by libTick's closed branch. The function above is now dead code, never invoked. */
 })();
 </script>
 
@@ -14513,9 +14760,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (want > 80 && Math.abs(lr.height - want) > 1) lib.style.height = want + "px";
     if (body) { body.style.height = ""; body.style.maxHeight = ""; } /* flex owns the body height; clear any px the V196 tick set */
   }
-  document.addEventListener("click", function(){ setTimeout(tick, 60); setTimeout(tick, 300); }, true);
-  window.addEventListener("resize", function(){ setTimeout(tick, 200); });
-  setInterval(tick, 200);
+  /* APOC-V246: APOC-V198 tick registrations REMOVED (200ms interval + click/resize re-arms). The tick was the docked wrapper height fill (map S7.6) — a duplicate of fitLib's target formula, whose standing job included undoing the V196 tick's writes. Docked height is owned by fitLib + libTick (events). The function above is now dead code, never invoked; the texture-stamp interval below is untouched. */
   /* --- un-frame already-saved texture stamps (they were placed
      before V198 with steam:1 and the interval framed them). Only
      texture stamps carry a data-URL imgPlain; art uses file paths,
@@ -14727,7 +14972,11 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       if (set.style.height !== hs) set.style.height = hs;
     });
   }
-  setInterval(pinSets, 200);
+  pinSets();
+  try { var __psMo = new MutationObserver(function(){ pinSets(); }); document.querySelectorAll(".ctl-set").forEach(function(s){ __psMo.observe(s, { attributes: true, attributeFilter: ["hidden", "class"] }); }); } catch(e){} /* APOC-V246: PROGRAMMATIC opens re-pin too — ctlOpen called from code fires no click, so the sets' own hidden/class state is observed; every open path converges on the one owner. */
+  document.addEventListener("click", function(){ setTimeout(pinSets, 60); setTimeout(pinSets, 350); }, true);
+  window.addEventListener("scroll", function(){ pinSets(); }, { passive: true });
+  /* APOC-V246: the 200ms pin interval is gone — open sets recompute on open/close clicks, the hidden/class observer above, window resize (listener above, incl. the V245 shrink re-derive) and scroll. pinSets is idempotent (writes only on change) and keeps its freeze-at-open + ratchet + cap rules; it is the ONE writer of .ctl-set height/top (on desktop the competing maxHeight is CSS-owned: max-height:none !important in APOC-V200; on phone pinSets stands down and placeSet owns maxHeight — one owner per form factor). */
   /* APOC-V244: frozen heights SURVIVE resize. The old blanket reset
      re-measured scrollHeight against the box's own inline height —
      scrollHeight reads clientHeight at the boundary, so every resize
@@ -14932,7 +15181,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   if (qs.get("display")) return;
   var SKEY = "default_layout_v1";
   var CACHE = "apocVttSharedDefaultV1", DONE = "apocVttDefaultCapturedV1", SEEDSS = "apocVttDefSeedStamp";
-  var PKEY = "apocVttPerimeterV2", MKEY = "apocVttMapSizeV1", ZKEY = "apocVttZoomBarV1", FKEY = "apocVttFreeLayoutV1";
+  var PKEY = "apocVttPerimeterV2", MKEY = "apocVttMapSizeV1", ZKEY = "apocVttZoomBarV1", FKEY = "apocVttFreeLayoutV1", ZPKEY = "apocVttZoomBarPhoneV1"; /* APOC-V246: the phone zoom park joins the captured set (ZPKEY) */
   function G(n){ try { return eval(n); } catch(e){ return undefined; } }
   function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
   function lsSet(k, v){ try { localStorage.setItem(k, v); } catch(e){} }
@@ -14947,8 +15196,12 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   function stripPerim(o){ if (o) delete o.repo; return o; }
   function stripFree(o){ if (o) delete o["per-repo"]; return o; }
   function readLocal(){
-    return { perimeter: stripPerim(parse(lsGet(PKEY))), mapSize: parse(lsGet(MKEY)),
-             zoomBar: parse(lsGet(ZKEY)), freeLayout: stripFree(parse(lsGet(FKEY))) };
+    /* APOC-V246: capture is SANITISED through the geometry authority — a poisoned or out-of-range local value (the h:240 mapSize this block once promoted into the shared default for every device, map S19.3) is validated before it can be captured. The phone zoom park is read too. */
+    var ms246 = parse(lsGet(MKEY)); if (window.__apocGeo246 && window.__apocGeo246.sanMapSize) ms246 = window.__apocGeo246.sanMapSize(ms246);
+    var zb246 = parse(lsGet(ZKEY)); if (window.__apocGeo246 && window.__apocGeo246.sanZoom) zb246 = window.__apocGeo246.sanZoom(zb246);
+    var zp246 = parse(lsGet(ZPKEY)); if (window.__apocGeo246 && window.__apocGeo246.sanZoom) zp246 = window.__apocGeo246.sanZoom(zp246);
+    return { perimeter: stripPerim(parse(lsGet(PKEY))), mapSize: ms246,
+             zoomBar: zb246, zoomBarPhone: zp246, freeLayout: stripFree(parse(lsGet(FKEY))) };
   }
   /* Capture gate: the zoom bar is NOT evidence of a layout — the
      base auto-writes apocVttZoomBarV1 on a fresh load (V183
@@ -14967,6 +15220,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     seed(PKEY, stripPerim(clone(rec.perimeter)));
     seed(MKEY, clone(rec.mapSize));
     seed(ZKEY, clone(rec.zoomBar));
+    seed(ZPKEY, clone(rec.zoomBarPhone)); /* APOC-V246: phone zoom park — seed() fills only a genuinely missing key, so a device's own park always wins over the shared default (the device-wins rule). */
     seed(FKEY, stripFree(clone(rec.freeLayout)));
     return changed;
   }
@@ -15022,7 +15276,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
           var sig = JSON.stringify([rec.perimeter, rec.mapSize, rec.freeLayout]);
           if (sig === prevSig || ++settleTries > 10) {
             var out = { v: 1, capturedAt: new Date().toISOString(), perimeter: rec.perimeter,
-                        mapSize: rec.mapSize, zoomBar: rec.zoomBar, freeLayout: rec.freeLayout };
+                        mapSize: rec.mapSize, zoomBar: rec.zoomBar, zoomBarPhone: rec.zoomBarPhone, freeLayout: rec.freeLayout };
             d.from(table()).upsert({ key: SKEY, value: out, updated_at: new Date().toISOString() }, { onConflict: "key" })
               .then(function(r){
                 if (!(r && r.error)) { lsSet(DONE, "1"); lsSet(CACHE, JSON.stringify(out)); }
@@ -15135,7 +15389,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     try { var v = JSON.parse(localStorage.getItem(KEY) || "null"); if (v && v.containers) { if (!v.parks) v.parks = {}; return v; } } catch(e){}
     return { containers: {}, parks: {} };
   }
-  function save(store){ try { localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} }
+  function save(store){ /* APOC-V246: ONE save path — delegates to the geometry authority's saveSubOrder (facet-level merge-never-clobber); the plain write remains only as the authority-absent fallback. */ if (window.__apocGeo246 && window.__apocGeo246.saveSubOrder) { window.__apocGeo246.saveSubOrder(store); return; } try { localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} }
   function persist(container){
     var store = load(), units = unitsOf(container), ids = [];
     for (var i = 0; i < units.length; i++) ids.push(uidOf(units[i], units));
@@ -15351,7 +15605,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
         } else {
           var ckP = drag.parked ? drag.originKey : containerKey(drag.origin);
           var uidP = drag.uid || uidOf(u2, unitsOf(drag.origin));
-          if (ckP) { u2.dataset.libsubCk = ckP; u2.dataset.libsubUid = uidP; parkSave(ckP, uidP, px, py); }
+          if (ckP) { /* APOC-V246b: clamp AT SAVE — the parked nest's landing is pulled wholly inside the live viewport, rendered at the clamped spot, and parkSave stores exactly that */ var cl12 = { x: px, y: py }; try { var rr12 = u2.getBoundingClientRect(); if (window.__apocGeo246 && window.__apocGeo246.clampLanding) cl12 = window.__apocGeo246.clampLanding(px, py, rr12.width, rr12.height); } catch(e){} px = cl12.x; py = cl12.y; u2.style.left = px + "px"; u2.style.top = py + "px"; u2.dataset.libsubCk = ckP; u2.dataset.libsubUid = uidP; parkSave(ckP, uidP, px, py); }
           if (!drag.parked && drag.origin) persist(drag.origin);
         }
       } else {
@@ -15525,7 +15779,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     el.classList.remove("per-dragging");
     el.classList.add("per-float");
     el.style.left = x + "px"; el.style.top = y + "px"; el.style.width = w + "px";
-    setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 60);
+    /* APOC-V246: synthetic resize removed — the pill writes the record and the element itself (single pass through the Library applier's values); the next event-driven applyAll re-reads the same record. */
   });
   document.body.appendChild(pill);
 
@@ -15605,7 +15859,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   [1000, 2800, 5200].forEach(function(ms){ setTimeout(guard, ms); });
   var rzT = 0;
   window.addEventListener("resize", function(){ clearTimeout(rzT); rzT = setTimeout(guard, 450); });
-  setInterval(guard, 3000);
+  /* APOC-V246: 3000ms guard interval removed — the reachability guard is a single pass on boot timeouts + resize (above), render-only (no record writes since APOC-V228). */
 
   /* (2ii) takeover grip drag — ONLY for the treatment-locked case,
      where APOC-V183's drag stands down and the V180/V181 guards
@@ -15615,6 +15869,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
      the same panel-relative float record APOC-V183 writes. */
   var myMovedEnd = 0;
   window.addEventListener("pointerdown", function(e){
+    return; /* APOC-V246: RETIRED takeover drag — the THIRD Library grip drag (map S6.5/D3), which existed only to override the treatment lock. With the V181 guard fixed at the guard, a locked Library is simply locked: the one remaining Library drag stands down on the lock and no third system overrides it. */
     if (myDrag || e.button > 0 || !MQ.matches) return;
     var g = gripEl(); if (!g) return;
     var onGrip = (e.target === g || g.contains(e.target));
@@ -15725,6 +15980,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     if (rp && rp.w && rp.w < CAP) { rp.w = CAP; saveJ(FKEY, fp); } /* APOC-V230: adopt the doubled width */
   }
   function clampLib(){
+    return; /* APOC-V246: RETIRED timer guard — it rewrote BOTH saved records (Perimeter repo float + FreeLayout per-repo) every 3s (map S6.8/S14.4, highest-risk writer #4). The 224 width standard is validate-on-load (geometry authority) + validate-on-apply (Perimeter applier); no timer rewrites records any more. */
     if (!MQ.matches || pressing) return;
     var el = repoEl(); if (!el) return;
     if (el.classList.contains("per-dragging")) return;
@@ -15747,7 +16003,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   [1200, 3000, 5400].forEach(function(ms){ setTimeout(clampLib, ms); });
   var rzT = 0;
   window.addEventListener("resize", function(){ clearTimeout(rzT); rzT = setTimeout(clampLib, 450); });
-  setInterval(clampLib, 3000);
+  /* APOC-V246: 3000ms clampLib interval removed (the function itself is retired above). */
 })();
 </script>
 
@@ -15950,7 +16206,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   if (new URLSearchParams(location.search).get("display")) return;
   var KEY = "apocVttBtnParkV1", THRESH = 7;
   function load(){ try { var v = JSON.parse(localStorage.getItem(KEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
-  function save(s, delKey){ try { /* APOC-V234: merge, never clobber. Two systems write this store; a save built from a stale or partial snapshot must not delete records the other one just wrote (probes 260/261: a manual roam park was saved, then wiped within ~1s by a whole-store rewrite carrying only the cluster buttons, and the button snapped back). Keys in the live store that this save does not mention are carried over; only delKey — a deliberate un-park by this same path — may disappear. */
+  function save(s, delKey){ /* APOC-V246: ONE save path — the geometry authority's merge-never-clobber implementation owns apocVttBtnParkV1 writes; the APOC-V234 shim below remains only as the authority-absent fallback. */ if (window.__apocGeo246 && window.__apocGeo246.saveBtnPark) { window.__apocGeo246.saveBtnPark(s, delKey); return; } try { /* APOC-V234: merge, never clobber. Two systems write this store; a save built from a stale or partial snapshot must not delete records the other one just wrote (probes 260/261: a manual roam park was saved, then wiped within ~1s by a whole-store rewrite carrying only the cluster buttons, and the button snapped back). Keys in the live store that this save does not mention are carried over; only delKey — a deliberate un-park by this same path — may disappear. */
     var cur = load(); for (var k in cur) { if (!(k in s) && k !== delKey) s[k] = cur[k]; }
     localStorage.setItem(KEY, JSON.stringify(s)); } catch(e){} }
   function slug(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "btn"; }
@@ -16018,8 +16274,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       rec = store[keys[i]]; if (!rec || typeof rec.x !== "number") continue;
       btn = findByKey(keys[i]);
       if (!btn || btn.classList.contains("btn-roam")) continue;
-      detach(btn, Math.max(0, Math.min(rec.x, window.innerWidth - 40)), Math.max(0, Math.min(rec.y, window.innerHeight - 24)), keys[i]);
-      try { var rr9 = btn.getBoundingClientRect(); if (rr9.height > 0) { var ny9 = Math.min(parseInt(btn.style.top, 10) || 0, Math.max(0, window.innerHeight - Math.round(rr9.height))); if (ny9 !== (parseInt(btn.style.top, 10) || 0)) btn.style.top = ny9 + "px"; } if (rr9.width > 0) { var nx9 = Math.min(parseInt(btn.style.left, 10) || 0, Math.max(0, window.innerWidth - Math.round(rr9.width))); if (nx9 !== (parseInt(btn.style.left, 10) || 0)) btn.style.left = nx9 + "px"; } } catch(e) {} /* APOC-CP1: the reload rescue keeps the WHOLE button on screen — the old 24px top-edge allowance visibly moved near-bottom parks (probeCP DRAG) */
+      detach(btn, rec.x, rec.y, keys[i]); /* APOC-V246b: VERBATIM restore — no apply-time viewport clamp of in-record values (DEFECT-2 ruling: the clamp lives at save, in the drag engines, via clampLanding; a record therefore always renders exactly as written). */
+      try { var rr9 = btn.getBoundingClientRect(); if (rr9.height > 0) { var ny9 = parseInt(btn.style.top, 10) || 0; /* APOC-V246b: verbatim (was the CP1 whole-button apply clamp — removed per the DEFECT-2 ruling) */ if (ny9 !== (parseInt(btn.style.top, 10) || 0)) btn.style.top = ny9 + "px"; } if (rr9.width > 0) { var nx9 = parseInt(btn.style.left, 10) || 0; /* APOC-V246b: verbatim (see F8b) */ if (nx9 !== (parseInt(btn.style.left, 10) || 0)) btn.style.left = nx9 + "px"; } } catch(e) {} /* APOC-CP1: the reload rescue keeps the WHOLE button on screen — the old 24px top-edge allowance visibly moved near-bottom parks (probeCP DRAG) */
       /* APOC-V228: menu-set state rides the same record — width
          multiplier and hidden survive reloads like the position does. */
       if (typeof rec.wmult === "number" && rec.wmult !== 1 && rec.bw) btn.style.width = Math.max(24, Math.round(rec.bw * rec.wmult)) + "px";
@@ -16116,8 +16372,9 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
       }
       if (overHome && home) {
         undetach(b);
-        var nx = dragB.parked ? (function(){ var hi2 = (load()[key] || {}).homeIdx; return (typeof hi2 === "number" && hi2 >= 0 && home.children[hi2]) ? home.children[hi2] : null; })() : dragB.next; /* APOC-V242: a slotted parked button returns to its slot */
-        if (nx && nx.parentElement === home) home.insertBefore(b, nx); else home.appendChild(b);
+        /* APOC-V246b: ONE re-slot rule — the authority's insertAtHome: parked buttons return to their recorded homeIdx (clamped to the bar's current child count), in-bar drags to their live next sibling; the APOC-V242 logic below is the authority-absent fallback. */
+        if (window.__apocGeo246 && window.__apocGeo246.insertAtHome) window.__apocGeo246.insertAtHome(home, b, dragB.parked ? (load()[key] || {}).homeIdx : dragB.homeIdx, dragB.parked ? null : dragB.next);
+        else { var nx = dragB.parked ? (function(){ var hi2 = (load()[key] || {}).homeIdx; return (typeof hi2 === "number" && hi2 >= 0 && home.children[hi2]) ? home.children[hi2] : null; })() : dragB.next; if (nx && nx.parentElement === home) home.insertBefore(b, nx); else home.appendChild(b); }
         var st = load(); delete st[key]; save(st, key); /* APOC-V234: deliberate un-park */
       } else {
         var st2 = load();
@@ -16138,6 +16395,8 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
           });
           b.style.left = nx2 + "px"; b.style.top = ny2 + "px";
         } catch(e){}
+        /* APOC-V246b: clamp AT SAVE (DEFECT-2 ruling) — after snapping, the landing rect is pulled wholly inside the live viewport via the authority's clampLanding, the rendered style is set to the clamped landing, and the record below stores exactly that. An in-viewport drop is unchanged. */
+        try { var br6 = b.getBoundingClientRect(); var cl6 = (window.__apocGeo246 && window.__apocGeo246.clampLanding) ? window.__apocGeo246.clampLanding(nx2, ny2, br6.width, br6.height) : { x: Math.max(0, Math.min(nx2, Math.max(0, window.innerWidth - Math.round(br6.width)))), y: Math.max(0, Math.min(ny2, Math.max(0, window.innerHeight - Math.round(br6.height)))) }; nx2 = cl6.x; ny2 = cl6.y; b.style.left = nx2 + "px"; b.style.top = ny2 + "px"; } catch(e){}
         /* APOC-V228: merge, never replace — lock/wmult/hidden set via
            the right-click menu must survive re-drags. */
         st2[key] = Object.assign({}, st2[key] || {}, { x: nx2, y: ny2,
@@ -16264,11 +16523,11 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
   if (new URLSearchParams(location.search).get("display")) return;
   var BKEY = "apocVttBtnParkV1", SKEY = "apocVttLibSubOrderV1", PKEY = "apocVttPerimeterV2", FKEY = "apocVttFreeLayoutV1";
   function loadB(){ try { var v = JSON.parse(localStorage.getItem(BKEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
-  function saveB(s, delKey){ try { /* APOC-V234: merge, never clobber — the other half of the drag fix (see the roam save). */
+  function saveB(s, delKey){ /* APOC-V246: ONE save path — delegates to the geometry authority's saveBtnPark, the same implementation the roam drag uses; the APOC-V234 shim below remains only as the authority-absent fallback. */ if (window.__apocGeo246 && window.__apocGeo246.saveBtnPark) { window.__apocGeo246.saveBtnPark(s, delKey); return; } try { /* APOC-V234: merge, never clobber — the other half of the drag fix (see the roam save). */
     var cur = loadB(); for (var k in cur) { if (!(k in s) && k !== delKey) s[k] = cur[k]; }
     localStorage.setItem(BKEY, JSON.stringify(s)); } catch(e){} }
   function loadS(){ try { var v = JSON.parse(localStorage.getItem(SKEY) || "null"); if (v && v.containers) { if (!v.parks) v.parks = {}; if (!v.locks) v.locks = {}; return v; } } catch(e){} return { containers: {}, parks: {}, locks: {} }; }
-  function saveS(s){ try { localStorage.setItem(SKEY, JSON.stringify(s)); } catch(e){} }
+  function saveS(s){ /* APOC-V246: the missing APOC-V234 shim, supplied — saveS was a plain whole-store write and a menu action could clobber a concurrent APOC-V208 drag save (map S12.3, the latent clobber). It now delegates to the geometry authority's saveSubOrder, the ONE save path for this store; the plain write remains only as the authority-absent fallback. */ if (window.__apocGeo246 && window.__apocGeo246.saveSubOrder) { window.__apocGeo246.saveSubOrder(s); return; } try { localStorage.setItem(SKEY, JSON.stringify(s)); } catch(e){} }
   function loadJ(k){ try { return JSON.parse(localStorage.getItem(k) || "{}") || {}; } catch(e){ return {}; } }
   function saveJ(k, v){ try { localStorage.setItem(k, JSON.stringify(v)); } catch(e){} }
   function slug(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "btn"; }
@@ -16442,9 +16701,13 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
     var parked = btn.classList.contains("btn-roam");
     var st = loadB(), rec = st[key] || {};
     var home = parked ? parentByDesc(rec.pdesc) : btn.parentElement;
+    /* APOC-V246b: homeIdx + next are captured BEFORE detachBtn moves the button to <body> — evaluated after the detach (the F4a first cut, and the original next capture), indexOf/nextSibling describe the body's children, not the bar's: homeIdx came back -1 and the pick park record lost its home slot. */
+    var next246 = parked ? null : btn.nextSibling;
+    var homeIdx246 = parked ? rec.homeIdx : (home ? Array.prototype.indexOf.call(home.children, btn) : -1);
     var r = parked ? btn.getBoundingClientRect() : detachBtn(btn, key);
     pick = { btn: btn, key: key, parked: parked, home: home,
-             parent: parked ? null : home, next: parked ? null : btn.nextSibling,
+             parent: parked ? null : home, next: next246,
+             homeIdx: homeIdx246, /* APOC-V246b: the home slot captured at pick (pre-detach) — the park branch writes it, so send-back has a slot to return to */
              pdesc: parked ? rec.pdesc : parentDesc(home), gx: r.width / 2, gy: r.height / 2 };
     btn.classList.add("btn-picked");
   }
@@ -16470,14 +16733,18 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
     var st = loadB();
     if (overHome && p.home) {
       undetachBtn(p.btn);
-      if (!p.parked) { if (p.next && p.next.parentElement === p.home) p.home.insertBefore(p.btn, p.next); else p.home.appendChild(p.btn); }
+      /* APOC-V246b: ONE re-slot rule for the pick/drop home drop too — parked picks re-slot at the record's homeIdx, in-bar picks at their live next sibling (insertAtHome prefers it); the old parked branch appended at the bar end. */
+      if (window.__apocGeo246 && window.__apocGeo246.insertAtHome) window.__apocGeo246.insertAtHome(p.home, p.btn, p.parked ? (st[p.key] || {}).homeIdx : p.homeIdx, p.parked ? null : p.next);
+      else if (!p.parked) { if (p.next && p.next.parentElement === p.home) p.home.insertBefore(p.btn, p.next); else p.home.appendChild(p.btn); }
       else p.home.appendChild(p.btn);
       delete st[p.key]; saveB(st, p.key); /* APOC-V234: deliberate un-park */
     } else {
       var nx = parseInt(p.btn.style.left, 10) || 0, ny = parseInt(p.btn.style.top, 10) || 0;
       var sn = snapXY(p.btn, p.home, nx, ny);
+      /* APOC-V246b: clamp AT SAVE on the pick/drop park path too (DEFECT-2 ruling) — the snapped landing is pulled wholly inside the live viewport before it is rendered or recorded. */
+      try { var pr7 = p.btn.getBoundingClientRect(); if (window.__apocGeo246 && window.__apocGeo246.clampLanding) sn = window.__apocGeo246.clampLanding(sn.x, sn.y, pr7.width, pr7.height); } catch(e){}
       p.btn.style.left = sn.x + "px"; p.btn.style.top = sn.y + "px";
-      st[p.key] = Object.assign({}, st[p.key] || {}, { x: sn.x, y: sn.y, pdesc: p.pdesc });
+      st[p.key] = Object.assign({}, st[p.key] || {}, { x: sn.x, y: sn.y, pdesc: p.pdesc, homeIdx: (typeof p.homeIdx === "number" && p.homeIdx >= 0) ? p.homeIdx : (st[p.key] || {}).homeIdx }); /* APOC-V246b: homeIdx joins pdesc in the record (merge keeps every other facet) */
       saveB(st);
     }
     /* swallow the click this drop would otherwise deliver */
@@ -16509,7 +16776,7 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
     if (btn.classList.contains("btn-roam") || rec.x !== undefined) items.push({ label: "Send back to its bar", fn: function(){
       var s = loadB(), r = s[key] || {};
       var home = parentByDesc(r.pdesc);
-      if (home) { undetachBtn(btn); home.appendChild(btn); }
+      if (home) { undetachBtn(btn); /* APOC-V246b: send-back re-slots at the record's homeIdx (r was read from the record above — pdesc/homeIdx consumed BEFORE the deliberate un-park delete below), via the ONE insertAtHome rule; append is only the legacy/authority-absent fallback. This was the DEFECT-1 append-at-bar-end. */ if (window.__apocGeo246 && window.__apocGeo246.insertAtHome) window.__apocGeo246.insertAtHome(home, btn, r.homeIdx, null); else home.appendChild(btn); }
       delete s[key]; saveB(s, key); /* APOC-V234: deliberate un-park */
     } });
     items.push({ label: "Hide this button", danger: true, fn: function(){
@@ -17467,7 +17734,7 @@ return module.exports; })();</script>
         var shared = false;
         try { var up = await db.storage.from("cody-artwork").upload(path, blob, { contentType: "image/png", upsert: false }); shared = !up.error; } catch(e) { shared = false; }
         if (!shared) throw new Error("the shared image upload didn't go through — nothing was registered");
-        await writeSetting("vtt_light_" + id, { enabled: !!(out.lighting && out.lighting.enabled), walls: (out.lighting && out.lighting.walls) || [], lights: (out.lighting && out.lighting.lights) || [] });
+        await writeSetting("vtt_light_" + id, { enabled: !!(out.lighting && out.lighting.enabled), walls: (out.lighting && out.lighting.walls) || [], lights: (out.lighting && out.lighting.lights) || [], layerHidden: false, layerOpacity: 1 }); /* APOC-V246: the full saveLighting shape for a fresh map — the owner writes the whole lightState object; the two layer facets carry exactly the defaults loadLighting applies when they are absent. */
         var imgByKey = {}; (out.images || []).forEach(function(im){ imgByKey[im.key] = im.dataUri; });
         var tileByGuid = {};
         var items = (out.stamps || []).map(function(st){
@@ -17476,7 +17743,7 @@ return module.exports; })();</script>
           else { var gd = st.damGuid || st.prop || "?"; if (!tileByGuid[gd]) tileByGuid[gd] = guidTile(gd, String(st.prop || gd).replace(/^dam-/, "")); img = tileByGuid[gd]; }
           return { type: "stamp", x: Math.round(st.gx / W * 10000) / 100, y: Math.round(st.gy / H * 10000) / 100, size: st.fw || 1, rot: st.rot || 0, img: img, prop: st.prop || "", fw: st.fw || 1, fh: st.fh || 1, steam: 0, layer: "shared", gm: false };
         });
-        if (items.length) await writeSetting("vtt_draw_" + id, { items: items });
+        if (items.length) await writeSetting("vtt_draw_" + id, { items: items, layers: [] }); /* APOC-V246: the owner's saveDraw shape ({items, layers}) — an empty layers array is loadDraw's keep-defaults signal (it adopts only a non-empty layers array), so a fresh DAM map receives the standard layers exactly as a drawn map does. The registry + active writes in this flow already go through read-merged writes (the CP1 pattern); writeSetting remains this block's sole shared-store choke point. */
         var rec = { id: id, name: name, w: ground.canvas.width, h: ground.canvas.height, cell: ground.cell, path: path };
         var reg = await readSetting("vtt_dropmaps");
         var regMaps = (reg && Array.isArray(reg.maps)) ? reg.maps.filter(function(m){ return m.id !== id; }) : [];
