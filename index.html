@@ -8416,7 +8416,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-09-0026";
+        var BUILD_STAMP = "2026-11-09-2107";
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10229,7 +10229,7 @@ function floorConnected(L, cols, rows){
        mode the column itself follows the window (see above). */
     if (man){
       if (man.w) w = Math.min(Math.max(320, Math.min(man.w, 2600)), dockCeilW()); /* v1.74: never into the dock column */
-      if (man.h) h = Math.max(380, Math.min(man.h, 1600)); /* v1.70: floor is the CSS min-height (380) — v1.68's 240 rendered at 380 anyway */
+      if (man.h && man.h >= 380) h = Math.max(380, Math.min(man.h, 1600)); /* APOC-V245: a sub-380 man.h is never a user size (the window cannot render below the 380 CSS floor) — it is V179 trim poison (Shaun's record held h:240); honouring it dropped the map to exactly 380 on every lone fit() until another writer repainted (chaos probe284/285, fuzz 380->557/593). Sub-floor heights fall through to the fill. */ /* v1.70: floor is the CSS min-height (380) — v1.68's 240 rendered at 380 anyway */
     }
     el.style.width = w + "px";
     if (Math.abs(h - el.getBoundingClientRect().height) > 2 || !el.style.height) el.style.height = h + "px"; /* APOC-V242: dead band — sub-2px deltas are not written, so the fit cannot churn the inline height against bubbleFill/V179 between their passes */
@@ -11516,6 +11516,7 @@ function floorConnected(L, cols, rows){
   function closedState(){
     if (document.fullscreenElement) return false;
     if (document.querySelector(".artlib.open, .nest.open")) return false;
+    if (document.querySelector(".ctl-set:not([hidden])")) return false; /* APOC-V245c: an open dropdown set is NOT the fully closed state this guard is scoped to — the set is in-flow, so the document is taller while it is open, and the guard read that as overflow and trimmed the map against the fit (probe288: 630 -> 408 with the Map set open) */
     var pcs = document.querySelectorAll(".per-collapsible");
     for (var i = 0; i < pcs.length; i++) if (!pcs[i].classList.contains("per-collapsed")) return false;
     return true;
@@ -11525,18 +11526,31 @@ function floorConnected(L, cols, rows){
     if (!closedState()) return;
     var de = document.documentElement, ih = window.innerHeight;
     var slack = ih - de.scrollHeight;
-    if (slack >= -2) return; /* APOC-V235: dead band — bubbleFill owns slack >= 1 and this guard owns slack <= -3 only; trimming at exact fit made the pair oscillate the whole bottom section on Shaun's page */
+    if (slack >= -20) return; /* APOC-V235: dead band — trimming at exact fit made the pair oscillate the whole bottom section on Shaun's page. APOC-V245: widened from -2 to -20 — in scrolled states this trim and the fit fill disagree by up to the 18px slack, and the guard runs on every document click (+650ms) in the closed state, so ordinary clicks yo-yoed the map 539<->557 (chaos fuzz #249). A <=19px overflow is a hair of scroll; overflows past 20px still trim to the shared 18px slack target. */
     var am = document.getElementById("apocMap"); if (!am) return;
-    var cur = am.getBoundingClientRect().height;
-    var nh = Math.max(240, Math.round(cur - (-slack + 18))); /* APOC-V242: trim to the SAME 18px slack the v1.54 fit targets (was slack -1: fit regrew the 17px difference on its next pass and the writers alternated the map height — Shaun's bottom-section jump) */
-    if (nh >= cur) return;
-    am.style.height = nh + "px";
-    window.__v179.trimmed += Math.round(cur - nh);
-    try { if (window.map && window.map.invalidateSize) window.map.invalidateSize(); } catch(e) {}
-    try {
-      var man = JSON.parse(localStorage.getItem(MANKEY) || "null");
-      if (man && typeof man.h === "number" && man.h > nh) { man.h = nh; localStorage.setItem(MANKEY, JSON.stringify(man)); }
-    } catch(e) {}
+    /* APOC-V245b: confirmation pass. The guard fires on every document
+       click (+650ms) — often while the page is still re-settling from
+       the interaction that scheduled it. probe288 trapped a trim to
+       408px computed from a transient scrollHeight (204px over, mid
+       scroll/settle flux) that the fit then had to undo. Re-measure
+       300ms later and trim only if the overflow is still past the
+       dead band, with the fresh numbers. A standing overflow still
+       trims, 300ms later than before. */
+    setTimeout(function(){
+      if (!closedState()) return;
+      var s2 = window.innerHeight - document.documentElement.scrollHeight;
+      if (s2 >= -20) return;
+      var cur = am.getBoundingClientRect().height;
+      var nh = Math.max(380, Math.round(cur - (-s2 + 18))); /* floor + slack target as above */
+      if (nh >= cur) return;
+      am.style.height = nh + "px";
+      window.__v179.trimmed += Math.round(cur - nh);
+      try { if (window.map && window.map.invalidateSize) window.map.invalidateSize(); } catch(e) {}
+      try {
+        var man = JSON.parse(localStorage.getItem(MANKEY) || "null");
+        if (man && typeof man.h === "number" && man.h > nh) { man.h = nh; localStorage.setItem(MANKEY, JSON.stringify(man)); }
+      } catch(e) {}
+    }, 300);
   }
   var t = null;
   function schedule(ms){ clearTimeout(t); t = setTimeout(guard, ms || 400); }
@@ -14723,7 +14737,32 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
      Draw 380px -> 512px in 30s). Cleanup of closed sets already
      happens per-tick above; window growth is served by the ratchet,
      window shrink by the cap clamp. */
-  window.addEventListener("resize", function(){ pinSets(); });
+  window.addEventListener("resize", function(){ pinSets(); apocV245Rederive(); });
+  /* APOC-V245: resize-end re-derive, SHRINK only. The ratchet grows a
+     frozen height when content wraps taller at a narrower width, but
+     nothing ever gave the height back when the window widened again
+     (probe284: Draw froze 426 at 1100px and kept it at 1366px, 46px
+     of dead space under the dice). 320ms after the last resize event,
+     each open pinned set is measured with its inline height cleared
+     synchronously (no paint can intervene, so scrollHeight reads the
+     true content height — not the clientHeight boundary feedback
+     behind the v2.28 +2 climb) and re-frozen only when the natural
+     height is >8px smaller. Growth stays with the ratchet above. */
+  var __v245rz = null;
+  function apocV245Rederive(){
+    clearTimeout(__v245rz);
+    __v245rz = setTimeout(function(){
+      document.querySelectorAll(".ctl-set").forEach(function(set){
+        var hs = pinFrozen[set.id];
+        if (hs === undefined || set.style.height !== hs) return;
+        var prev = set.style.height;
+        set.style.height = "";
+        var natural = Math.min(Math.max(80, set.scrollHeight + 4), Math.max(120, window.innerHeight - 16));
+        set.style.height = prev;
+        if (natural < parseInt(hs, 10) - 8) { pinFrozen[set.id] = natural + "px"; set.style.height = natural + "px"; }
+      });
+    }, 320);
+  }
 
   /* ===== (6) control page: per-screen DM view choice =====
      Two toggle buttons ride with the Push to TV / Screen 2 cluster.
