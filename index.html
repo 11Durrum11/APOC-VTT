@@ -7762,7 +7762,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-0912";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-1112";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -17594,5 +17594,295 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
   var iv = setInterval(function(){ try { chip(); } catch(e){} bind(); if (bind.done) clearInterval(iv); }, 800);
   setTimeout(function(){ clearInterval(iv); }, 120000); })();
 </script>
+<style id="APOC-V251-CSS">
+/* APOC-V251 (Shaun, 2026-11-11 11:04 — "I want all the buttons to
+   track along the side"): EVERY control surface gets an edge header
+   in a fixed side track. The census tabs + Screens head ride the
+   LEFT rail; the screen/action cluster rides the RIGHT rail, flush
+   against the Art Library strip; the DM cluster docks as a vertical
+   unit on the right edge with the zoom bar homed under it. Sets
+   still open BELOW THE MAP (the .ctl-set flow is untouched). Dark-
+   blue treatment chrome; minimum footprints; no white-on-white. */
+.apoc-track{position:fixed;top:34px;z-index:1250;display:flex;flex-direction:column;gap:4px;width:138px;max-height:calc(100dvh - 42px);overflow-y:auto;overflow-x:hidden;padding:4px;background:rgba(8,10,14,.9);border:1px solid #1e40af;scrollbar-width:thin;box-sizing:border-box}
+#apocSideTrackL{left:0;border-left:none;border-radius:0 10px 10px 0}
+#apocSideTrackR{right:34px;border-right:none;border-radius:10px 0 0 10px}
+.apoc-track>button{flex:0 0 auto;width:100%;min-height:28px!important;height:auto!important;padding:4px 8px!important;margin:0!important;position:static!important;left:auto!important;top:auto!important;z-index:auto!important;font-size:.88rem;line-height:1.2;display:flex;align-items:center;justify-content:flex-start;gap:5px;white-space:normal;text-align:left;touch-action:none;box-sizing:border-box;cursor:pointer}
+.apoc-track>button .ctl-caret{margin-left:auto}
+.apoc-track>button.apoc-track-drag{opacity:.55;outline:2px solid rgba(30,64,175,.65);outline-offset:1px}
+body.apoc-side251 #screenBar.tucked{display:none!important}
+body.apoc-side251 .ctl-bar>.fp-grip,body.apoc-side251 .ctl-bar>.fp-lock{display:none!important}
+body.apoc-side251 #phBarStrip{display:none!important}
+#dmBarV181.apoc-side-dm{flex-direction:column!important;align-items:stretch!important;gap:4px;width:138px;padding:6px;border-radius:10px;box-sizing:border-box}
+#dmBarV181.apoc-side-dm .dm-tag{text-align:center;cursor:grab;touch-action:none}
+#dmBarV181.apoc-side-dm button{width:100%;white-space:nowrap;overflow:hidden}
+@media (max-width:820px){
+  .apoc-track{top:8px;width:104px;max-height:calc(100dvh - 16px)}
+  #apocSideTrackR{right:38px}
+  .apoc-track>button{min-height:36px!important;font-size:.78rem;padding:4px 6px!important}
+  #dmBarV181.apoc-side-dm{width:104px}
+  #dmBarV181.apoc-side-dm button{white-space:normal}
+}
+</style>
+<script>
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var SKEY = "apocVttTuckV1", BKEY = "apocVttBtnParkV1", PHKEY = "apocVttTuckPhoneV1";
+  var ZK_D = "apocVttZoomBarV1", ZK_P = "apocVttZoomBarPhoneV1";
+  function $(id){ return document.getElementById(id); }
+  function load(){ try { var v = JSON.parse(localStorage.getItem(SKEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function save(p){ try { var s = load(); for (var k in p) s[k] = p[k]; localStorage.setItem(SKEY, JSON.stringify(s)); } catch(e){} }
+  function mqD(){ return window.matchMedia("(min-width: 821px)").matches; }
+  function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+
+  var LEFT = ["mapTab","addMarkerBtn","addPlaceBtn","genBtn","gmBtn","toolsTab","fogTab","lightTab","drawTab","layersTab","diceTab","grpHead"];
+  var RIGHT = ["screen2OpenBtn","screen2SendBtn","screen2MirrorBtn","pushTvBtn","tvDm1Btn","tvDm2Btn","ambBtn","arLockBtn"];
+  var ALL = LEFT.concat(RIGHT);
+  /* gmBtn + pushTvBtn keep their btn-roam class as a DO-NOT-TOUCH
+     marker: the cluster/screen scripts (assertCluster, V177 place,
+     V178 addOpen, placeTv) all bail out when push is roam-marked, so
+     they can never pull buttons back out of the rails. Their BtnPark
+     RECORDS are cleared below, so the roam restorer never detaches
+     them either. */
+  var KEEP_ROAM = { gmBtn: 1, pushTvBtn: 1 };
+
+  function trackRec(){
+    var s = load();
+    var raw = (s.sideTrack251 && typeof s.sideTrack251 === "object") ? s.sideTrack251 : {};
+    var seen = {}, out = { v: 1, left: [], right: [], dm: { edge: "right", along: 314 } };
+    ["left", "right"].forEach(function(side){
+      var arr = Array.isArray(raw[side]) ? raw[side] : [];
+      arr.forEach(function(id){ if (ALL.indexOf(id) >= 0 && !seen[id]) { seen[id] = 1; out[side].push(id); } });
+    });
+    ALL.forEach(function(id){ if (!seen[id]) out[LEFT.indexOf(id) >= 0 ? "left" : "right"].push(id); });
+    if (raw.dm && typeof raw.dm === "object") {
+      if (raw.dm.edge === "left" || raw.dm.edge === "right") out.dm.edge = raw.dm.edge;
+      if (typeof raw.dm.along === "number" && isFinite(raw.dm.along)) out.dm.along = Math.round(raw.dm.along);
+    }
+    if (raw.zoomHomeFor && typeof raw.zoomHomeFor === "object" && isFinite(+raw.zoomHomeFor.along)) {
+      out.zoomHomeFor = { edge: raw.zoomHomeFor.edge === "left" ? "left" : "right", along: Math.round(+raw.zoomHomeFor.along), l: Math.round(+raw.zoomHomeFor.l || 0), t: Math.round(+raw.zoomHomeFor.t || 0) };
+    }
+    return out;
+  }
+  function saveTrack(t){ save({ sideTrack251: t }); }
+
+  function clearBtnPark(){
+    try {
+      var st = JSON.parse(localStorage.getItem(BKEY) || "{}");
+      if (!st || typeof st !== "object") return;
+      var ch = false;
+      ALL.forEach(function(id){ if (st["#" + id]) { delete st["#" + id]; ch = true; } });
+      if (ch) localStorage.setItem(BKEY, JSON.stringify(st));
+    } catch(e){}
+  }
+  function clearRoam(el){
+    if (!KEEP_ROAM[el.id]) el.classList.remove("btn-roam");
+    el.style.position = ""; el.style.left = ""; el.style.top = "";
+    el.style.width = ""; el.style.zIndex = ""; el.style.margin = "";
+    el.classList.add("apoc-track-btn");
+  }
+  function ensureRails(){
+    var l = $("apocSideTrackL"), r = $("apocSideTrackR");
+    if (!l) { l = document.createElement("div"); l.id = "apocSideTrackL"; l.className = "apoc-track"; l.setAttribute("aria-label", "Side track — map controls"); document.body.appendChild(l); }
+    if (!r) { r = document.createElement("div"); r.id = "apocSideTrackR"; r.className = "apoc-track"; r.setAttribute("aria-label", "Side track — screen controls"); document.body.appendChild(r); }
+    document.body.classList.add("apoc-side251");
+    return { l: l, r: r };
+  }
+  function applyDmEdge(dm, t){
+    if (t.dm.edge === "left") { dm.style.left = "0px"; dm.style.right = "auto"; }
+    else { dm.style.left = "auto"; dm.style.right = mqD() ? "34px" : "38px"; }
+  }
+  function applyDm(t){
+    var dm = $("dmBarV181"); if (!dm) return;
+    dm.classList.add("apoc-side-dm");
+    applyDmEdge(dm, t);
+    var h = dm.getBoundingClientRect().height || 0;
+    dm.style.top = clamp(t.dm.along, 0, Math.max(0, window.innerHeight - h)) + "px";
+  }
+  function phoneFix(){
+    if (mqD()) return;
+    try {
+      var ps = JSON.parse(localStorage.getItem(PHKEY) || "{}");
+      if (!ps.side251) { ps.barTucked = false; ps.side251 = true; localStorage.setItem(PHKEY, JSON.stringify(ps)); }
+    } catch(e){}
+    var row = $("ctlRow"); if (row) row.classList.remove("ph-bar-tucked");
+  }
+  function gather(){
+    var rails = ensureRails(); if (!rails) return;
+    clearBtnPark();
+    var t = trackRec();
+    /* Screens group: never-decided now defaults TUCKED (Shaun's
+       "all" overrides v2.50's deliberate expanded default). A state
+       he set by clicking the head is respected forever. */
+    var s = load();
+    if (!Object.prototype.hasOwnProperty.call(s, "grpTucked")) save({ grpTucked: true });
+    /* persist the default track record on first gather so the
+       per-device layout exists in the record from the first load
+       (Reset Layout wipes the whole Tuck key, so this re-seeds). */
+    if (!load().sideTrack251) saveTrack(t);
+    var bar = $("screenBar");
+    if (bar) {
+      var tk = !!load().grpTucked;
+      bar.classList.toggle("tucked", tk);
+      var hd = $("grpHead"); if (hd) hd.setAttribute("aria-expanded", String(!tk));
+    }
+    ["left", "right"].forEach(function(side){
+      var rail = side === "left" ? rails.l : rails.r;
+      t[side].forEach(function(id){
+        var el = $(id); if (!el) return;
+        clearRoam(el);
+        rail.appendChild(el);
+      });
+    });
+    applyDm(t);
+    phoneFix();
+  }
+
+  /* zoom: home under the (moved) DM cluster — edge-aware version of
+     V247's zoomHome, with the same step-below-intersecting-controls
+     scan. Marks zoomHomeDone so V247's own homing stops fighting
+     the side placement. */
+  function positionZoom(){
+    var dm = $("dmBarV181"), zb = $("zoomBar");
+    if (!dm || !zb || !zb.offsetWidth) return;
+    var dr = dm.getBoundingClientRect(); if (!dr.width) return;
+    var zr = zb.getBoundingClientRect(); if (!zr.width) return;
+    /* Home the zoom under the DM cluster's CURRENT spot only. The
+       zoomHomeFor marker remembers the DM spot + the zoom RECORD
+       the homing wrote: if the record has since changed, Shaun
+       dragged the zoom himself and his position stands (v2.47+
+       behaviour); if the record is unchanged but the bar's rect
+       drifted (the page wrapper re-centres while the page settles),
+       the retries re-home it. A DM drag saves a new along, which
+       re-triggers the homing on drop. */
+    var t0 = trackRec();
+    var zhf = (load().sideTrack251 || {}).zoomHomeFor;
+    var zKey0 = mqD() ? ZK_D : ZK_P, zRec0 = null;
+    try { zRec0 = JSON.parse(localStorage.getItem(zKey0) || "null"); } catch(e){}
+    if (zhf && zhf.edge === t0.dm.edge && zhf.along === t0.dm.along && zRec0) {
+      if (zRec0.l !== zhf.l || zRec0.t !== zhf.t) return;
+      var aligned = t0.dm.edge === "left" ? Math.abs(zr.left - dr.left) <= 4 : Math.abs(zr.right - dr.right) <= 4;
+      if (aligned && zr.top >= dr.bottom + 2 && zr.top <= dr.bottom + 80) return;
+    }
+    var key = mqD() ? ZK_D : ZK_P, rec = null;
+    try { rec = JSON.parse(localStorage.getItem(key) || "null"); } catch(e){}
+    var curL = (rec && typeof rec.l === "number") ? rec.l : parseInt(zb.style.left, 10);
+    var curT = (rec && typeof rec.t === "number") ? rec.t : parseInt(zb.style.top, 10);
+    if (isNaN(curL) || isNaN(curT)) return;
+    var edge = trackRec().dm.edge;
+    var wantT = Math.round(dr.bottom) + 6;
+    try {
+      var bandL = edge === "left" ? dr.left : dr.right - zr.width;
+      var bandR = edge === "left" ? dr.left + zr.width : dr.right;
+      document.querySelectorAll("button, [role='button'], input, select, textarea").forEach(function(el){
+        if (!el.offsetWidth || zb.contains(el) || dm.contains(el)) return;
+        if (el.closest && el.closest(".map-repo")) return;
+        var br = el.getBoundingClientRect();
+        if (!br.width || !br.height) return;
+        if (br.left < bandR && br.right > bandL && br.top < wantT + zr.height && br.bottom > wantT) wantT = Math.max(wantT, Math.round(br.bottom) + 4);
+      });
+    } catch(e){}
+    var dx = edge === "left" ? Math.round(dr.left - zr.left) : Math.round(dr.right - zr.right);
+    var dy = wantT - Math.round(zr.top);
+    var nl = curL + dx, nt = curT + dy;
+    var tNow = trackRec(); tNow.zoomHomeFor = { edge: tNow.dm.edge, along: tNow.dm.along, l: nl, t: nt };
+    if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) { save({ zoomHomeDone: true }); saveTrack(tNow); return; }
+    try { localStorage.setItem(key, JSON.stringify({ l: nl, t: nt })); } catch(e){}
+    zb.style.left = nl + "px"; zb.style.top = nt + "px";
+    save({ zoomHome247: true, zoomHomeDone: true });
+    saveTrack(tNow);
+  }
+
+  /* rail drag: press a header and move — past 6px it becomes a drag
+     (capture-phase move handler pre-empts the roam system's 7px
+     threshold), reordering live inside its rail; crossing the
+     screen midpoint moves it to the other edge's rail. The drop
+     saves the per-device order. A drag never fires the click. */
+  var rDrag = null, rSuppress = { btn: null, until: 0 };
+  document.addEventListener("pointerdown", function(e){
+    if (e.button !== undefined && e.button > 0) return;
+    var b = e.target && e.target.closest ? e.target.closest(".apoc-track-btn") : null;
+    if (!b) return;
+    rDrag = { btn: b, x: e.clientX, y: e.clientY, id: e.pointerId, on: false };
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!rDrag || e.pointerId !== rDrag.id) return;
+    if (!rDrag.on) {
+      if (Math.hypot(e.clientX - rDrag.x, e.clientY - rDrag.y) < 6) return;
+      rDrag.on = true;
+      rDrag.btn.classList.add("apoc-track-drag");
+      try { rDrag.btn.setPointerCapture(e.pointerId); } catch(err){}
+    }
+    if (e.cancelable) e.preventDefault();
+    e.stopImmediatePropagation();
+    var rail = e.clientX < window.innerWidth / 2 ? $("apocSideTrackL") : $("apocSideTrackR");
+    if (!rail) return;
+    var kids = Array.prototype.slice.call(rail.children).filter(function(k){ return k !== rDrag.btn; });
+    var before = null;
+    for (var i = 0; i < kids.length; i++) {
+      var r = kids[i].getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) { before = kids[i]; break; }
+    }
+    if (before) rail.insertBefore(rDrag.btn, before); else rail.appendChild(rDrag.btn);
+  }, true);
+  function endRailDrag(){
+    if (!rDrag) return;
+    var d = rDrag; rDrag = null;
+    if (!d.on) return;
+    d.btn.classList.remove("apoc-track-drag");
+    rSuppress = { btn: d.btn, until: Date.now() + 800 };
+    var l = $("apocSideTrackL"), r = $("apocSideTrackR"), t = trackRec();
+    if (l) t.left = Array.prototype.slice.call(l.children).map(function(el){ return el.id; }).filter(Boolean);
+    if (r) t.right = Array.prototype.slice.call(r.children).map(function(el){ return el.id; }).filter(Boolean);
+    saveTrack(t);
+  }
+  window.addEventListener("pointerup", endRailDrag, true);
+  window.addEventListener("pointercancel", endRailDrag, true);
+  document.addEventListener("click", function(e){
+    if (rSuppress.btn && Date.now() < rSuppress.until) {
+      var b = e.target && e.target.closest ? e.target.closest("button") : null;
+      if (b && b === rSuppress.btn) { e.stopPropagation(); e.preventDefault(); rSuppress.btn = null; }
+    }
+  }, true);
+
+  /* DM cluster drag: drag by the DM tag (not its buttons) — slides
+     along its edge, flips edge across the midpoint, saves; the zoom
+     bar re-homes under it on drop. */
+  var dmDrag = null;
+  document.addEventListener("pointerdown", function(e){
+    if (e.button !== undefined && e.button > 0) return;
+    var dm = $("dmBarV181"); if (!dm) return;
+    if (e.target !== dm && !(e.target && e.target.classList && e.target.classList.contains("dm-tag"))) return;
+    dmDrag = { y: e.clientY, id: e.pointerId, top: dm.getBoundingClientRect().top, on: false };
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!dmDrag || e.pointerId !== dmDrag.id) return;
+    var dm = $("dmBarV181"); if (!dm) return;
+    if (!dmDrag.on) { if (Math.abs(e.clientY - dmDrag.y) < 6) return; dmDrag.on = true; }
+    if (e.cancelable) e.preventDefault();
+    e.stopImmediatePropagation();
+    var h = dm.getBoundingClientRect().height;
+    var nt = clamp(Math.round(dmDrag.top + (e.clientY - dmDrag.y)), 0, Math.max(0, window.innerHeight - h));
+    var t = trackRec();
+    t.dm.along = nt;
+    t.dm.edge = e.clientX < window.innerWidth / 2 ? "left" : "right";
+    dm.style.top = nt + "px";
+    applyDmEdge(dm, t);
+    saveTrack(t);
+  }, true);
+  function endDmDrag(){ if (dmDrag && dmDrag.on) positionZoom(); dmDrag = null; }
+  window.addEventListener("pointerup", endDmDrag, true);
+  window.addEventListener("pointercancel", endDmDrag, true);
+
+  function boot(){ gather(); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+  [1200, 3000, 6500, 12500, 16000].forEach(function(ms){
+    setTimeout(function(){ gather(); if (ms >= 6500) positionZoom(); }, ms);
+  });
+  window.addEventListener("resize", function(){ applyDm(trackRec()); });
+})();
+</script>
+
 </body>
 </html>
