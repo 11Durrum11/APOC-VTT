@@ -7762,7 +7762,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-1112";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-1414";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -11053,7 +11053,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     var H = rp.getBoundingClientRect().height;
     var nt = Math.max(0, Math.min(drag.top + dy, Math.max(0, window.innerHeight - H)));
         rp.style.top = nt + "px";
-    save({ libAlong: nt });
+    save({ libAlong: Math.round(nt) });
   }, true);
   function up(e){
     if (!drag || (e.pointerId !== undefined && e.pointerId !== drag.id)) return;
@@ -16047,8 +16047,8 @@ return module.exports; })();</script>
       }
       return;
     }
-    var H = Math.max(80, Math.min(Math.min(s.libStripH || 571, parseInt(localStorage.getItem("apocVttLibBoxH"), 10) || 571), window.innerHeight));
-    var top = Math.max(0, Math.min(s.libAlong || 0, Math.max(0, window.innerHeight - H)));
+    var H = Math.round(Math.max(80, Math.min(Math.min(s.libStripH || 571, parseInt(localStorage.getItem("apocVttLibBoxH"), 10) || 571), window.innerHeight)));
+    var top = Math.round(Math.max(0, Math.min(s.libAlong || 0, Math.max(0, window.innerHeight - H))));
     rp.classList.add("lib-tucked");
     setIf(rp, "width", STRIP_W + "px");
     setIf(rp, "height", H + "px");
@@ -16154,8 +16154,8 @@ return module.exports; })();</script>
       if (!load().libTucked || !mqD()) return;
       if (!rp.classList.contains("lib-tucked")) { applyLibTuck(); return; }
       var s = load();
-      var H = Math.max(80, Math.min(Math.min(s.libStripH || 571, parseInt(localStorage.getItem("apocVttLibBoxH"), 10) || 571), window.innerHeight));
-      var top = Math.max(0, Math.min(s.libAlong || 0, Math.max(0, window.innerHeight - H)));
+      var H = Math.round(Math.max(80, Math.min(Math.min(s.libStripH || 571, parseInt(localStorage.getItem("apocVttLibBoxH"), 10) || 571), window.innerHeight)));
+      var top = Math.round(Math.max(0, Math.min(s.libAlong || 0, Math.max(0, window.innerHeight - H))));
       var wantL = s.libEdge === "left" ? "0px" : "auto";
       var wantR = s.libEdge === "left" ? "auto" : "0px";
       if (rp.style.width !== STRIP_W + "px" || rp.style.height !== H + "px" || rp.style.top !== top + "px" || rp.style.left !== wantL || rp.style.right !== wantR) applyLibTuck();
