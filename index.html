@@ -2756,6 +2756,8 @@ setInterval(loadSharedEntries, 60000);
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", drawKey()).maybeSingle();
     if (error) return;
     drawItems = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
+    /* APOC-V248 (probe294k): stamp identity. The live draw record's stamps carry NO id field, and the array is rebuilt on every load — object identity cannot survive a save. Give every stamp a stable id at load (position signature for legacy items, persisted on the next save) so collect/drag/save all key on the same identity. */
+    drawItems.forEach(it => { if (it && !it.id && typeof it.x === "number") it.id = "s" + Math.round(it.x * 100) + "-" + Math.round(it.y * 100) + "-" + String(it.prop || it.sym || it.img || it.type || "").replace(/[^a-z0-9]/gi, "").slice(-12); });
     if (data && data.value && Array.isArray(data.value.layers) && data.value.layers.length) drawLayers = data.value.layers;
     drawHist.last = drawSnapshot();
     buildLayerUi();
@@ -2785,6 +2787,7 @@ setInterval(loadSharedEntries, 60000);
   window.vttDraw = {
     items: () => drawItems,
     del: async it => { drawItems = drawItems.filter(x => x !== it); const ok = await saveDraw(); renderDraw(); return ok; },
+    render: () => { try { renderDraw(); } catch(e) {} }, /* APOC-V248: live re-render for the asset-drag bridge (no save) */
     reorder: async (it, dir) => {
       const i = drawItems.indexOf(it);
       if (i < 0) return false;
@@ -3628,7 +3631,9 @@ setInterval(loadSharedEntries, 60000);
   $("drawWidth").addEventListener("change", () => { $("drawWidthRange").value = $("drawWidth").value; });
 
   /* ---- Layer tabs: the chips are the tabs — tap a name to draw on it ---- */
-  let layerTabOverride = null; /* APOC-V242: "map" / "light" while their chip is the active tab — neither is a draw target, so drawLayerSel never holds them */
+  let layerTabOverride = null;
+  window.__apocActiveLayerId = () => layerTabOverride || ($("drawLayerSel") ? $("drawLayerSel").value : "shared"); /* APOC-V248: the Lighting render gate reads the active layer through here */
+  window.__apocRerenderLighting = () => { try { renderLighting(); } catch(e) {} }; /* APOC-V248: layer-tab switches re-render so light handles appear/disappear with the active layer */ /* APOC-V242: "map" / "light" while their chip is the active tab — neither is a draw target, so drawLayerSel never holds them */
   function layerTabOpacity(id){
     if (id === "light") return (window.__apocLightLayer && typeof window.__apocLightLayer.opacity === "function") ? window.__apocLightLayer.opacity() : 1;
     const d = drawLayerDef(id); return typeof d.opacity === "number" ? d.opacity : 1;
@@ -3644,7 +3649,7 @@ setInterval(loadSharedEntries, 60000);
     $("layerOpacity").value = layerTabOpacity(cur);
   }
   new MutationObserver(refreshLayerTabs).observe($("drawLayerChips"), { childList: true });
-  $("drawLayerSel").addEventListener("change", () => { layerTabOverride = null; refreshLayerTabs(); }); /* APOC-V242 */
+  $("drawLayerSel").addEventListener("change", () => { layerTabOverride = null; refreshLayerTabs(); if (window.__apocRerenderLighting) window.__apocRerenderLighting(); }); /* APOC-V248 */ /* APOC-V242 */
   refreshLayerTabs();
   $("drawLayerChips").addEventListener("click", ev => {
     if (ev.target.closest("button")) return;
@@ -3652,8 +3657,9 @@ setInterval(loadSharedEntries, 60000);
     if (!chip) return;
     const eye = chip.querySelector(".chip-eye");
     if (!eye) return;
-    if (eye.dataset.layer === "map" || eye.dataset.layer === "light") { layerTabOverride = eye.dataset.layer; refreshLayerTabs(); return; } /* APOC-V242: Map + Light chips are tabs for the opacity slider too */
+    if (eye.dataset.layer === "map" || eye.dataset.layer === "light") { layerTabOverride = eye.dataset.layer; refreshLayerTabs(); if (window.__apocRerenderLighting) window.__apocRerenderLighting(); return; } /* APOC-V248: switching the active layer re-renders the lighting material (handles follow the Lighting tab) */ /* APOC-V242: Map + Light chips are tabs for the opacity slider too */
     layerTabOverride = null;
+    if (window.__apocRerenderLighting) window.__apocRerenderLighting(); /* APOC-V248 */
     const sel = $("drawLayerSel");
     if (sel.value !== eye.dataset.layer) { sel.value = eye.dataset.layer; sel.dispatchEvent(new Event("change")); }
     refreshLayerTabs();
@@ -5797,8 +5803,15 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     window.__apocLightOn = lightState.enabled;
     const playerView = !effectiveGm() || lightPreview;
     const lightOpF = (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1); /* APOC-V242: Light layer opacity */
-    /* GM material: wall + door lines and light-source handles (layer 3). */
-    if (effectiveGm() && !lightPreview) { /* APOC-CP1: a DM-flagged screen sees the wall/light material too (Phase 3 #5) */
+    /* APOC-V248 (Shaun, 2026-11-10 ~14:38): ALL lighting material —
+       wall/door/window lines AND the light-source handles — lives on
+       the LIGHTING layer. While that layer is hidden, none of it
+       renders (v242 left the handles standing under the Map/GM
+       material — "on the Map layer he sees the light bars and
+       nothing else"). The handles additionally render only while
+       the Lighting chip is the ACTIVE layer tab: they are that
+       layer's editing surface. The Map layer carries the map only. */
+    if (lightState.layerHidden !== true && effectiveGm() && !lightPreview) { /* APOC-CP1: a DM-flagged screen sees the wall/light material too (Phase 3 #5) */
       for (const w of lightState.walls) {
         const a = toLatLng(w.a[0], w.a[1]), b = toLatLng(w.b[0], w.b[1]);
         if (w.kind === "door") wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }));
@@ -5809,6 +5822,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
         else wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#9aa0a8", weight: 3, interactive: false }));
       }
       for (const src of lightState.lights) {
+        if (!(window.__apocActiveLayerId && window.__apocActiveLayerId() === "light")) break; /* APOC-V248: handles are the Lighting layer's editing surface — active only on its tab */
         const m = L.marker(toLatLng(src.x, src.y), { pane: "layerGm", draggable: true, icon: lightIcon(src) }).addTo(lightEditFx);
         m.on("click", () => openLightEditor(src));
         m.on("dragend", async () => {
@@ -5819,7 +5833,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
         });
       }
     }
-    if (!lightState.enabled || lightState.layerHidden === true) { /* APOC-V242: Light layer hidden — no tints, no shade, no token culling; the GM handles/walls above still render (they live on the GM layer, not the Light layer) */
+    if (!lightState.enabled || lightState.layerHidden === true) { /* APOC-V242 + APOC-V248: Lighting layer hidden (or lighting off) — no tints, no shade, no token culling, and (per the gate above) no handles or wall lines either: the layer carries all of it */
       for (const tk of tokens) { const m = tokenMarkers[tk.id]; if (m && !tokenLayer.hasLayer(m)) tokenLayer.addLayer(m); }
       manageFlicker(false);
       return;
@@ -8418,7 +8432,7 @@ function floorConnected(L, cols, rows){
            page, or a tab left open across a push — the old code kept
            running while the badge showed the new number). Reload ONCE
            (per version, per tab session) to the fresh build instead. */
-        var BUILD_STAMP = "2026-11-10-1140";
+        var BUILD_STAMP = "2026-11-10-1445"; /* APOC-V248 conv: grp actions verify against the store (dmAll re-reads rows); mirror delete error-checked (v248-mirror-204) */
         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
@@ -10030,7 +10044,7 @@ function floorConnected(L, cols, rows){
   }
   var RESET_KEYS = ["apocVttPerimeterV2", "apocVttMapSizeV1", "apocVttZoomBarV1", "apocVttZoomBarPhoneV1",
     "apocVttFreeLayoutV1", "apocVttBtnParkV1", "apocVttLibSubOrderV1", "apocVttPanelParkV1",
-    "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttViewV1", "apocVttFsFloatV1"];
+    "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttViewV1", "apocVttFsFloatV1", "apocVttTuckV1"];
   function resetLayout(){ RESET_KEYS.forEach(function(k){ del(k); }); }
 
   window.__apocGeo246 = { sanMapSize: sanMapSize, sanZoom: sanZoom, saveBtnPark: saveBtnPark, clampLanding: clampLanding, insertAtHome: insertAtHome,
@@ -11643,7 +11657,7 @@ function floorConnected(L, cols, rows){
     mir.addEventListener("click", async function(){
       mir.disabled = true;
       try {
-        await db.from(SETTINGS_TABLE).delete().eq("key", KEY2);
+        var __mirDel = await db.from(SETTINGS_TABLE).delete().eq("key", KEY2); if (__mirDel && __mirDel.error) throw __mirDel.error; /* APOC-V248: a resolved-but-errored delete must not paint "Mirroring" */
         mir.textContent = "Screen 2: Mirroring ✓";
       } catch (e) { mir.textContent = "Screen 2: Mirror failed"; }
       setTimeout(function(){ mir.textContent = "Screen 2: Mirror"; mir.disabled = false; }, 2200);
@@ -11912,7 +11926,7 @@ function floorConnected(L, cols, rows){
     rb.textContent = "Reset layout";
     rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
     rb.addEventListener("click", function(){
-      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttZoomBarPhoneV1", "apocVttMapSizeV1", "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttPanelParkV1", "apocVttViewV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} }); /* APOC-V246: complete reset list — the phone zoom park, the phone Library width and the per-device view record clear too; they survived every reset before (map S15). */
+      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttZoomBarPhoneV1", "apocVttMapSizeV1", "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttPanelParkV1", "apocVttViewV1", "apocVttTuckV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} }); /* APOC-V246: complete reset list — the phone zoom park, the phone Library width and the per-device view record clear too; they survived every reset before (map S15). */
       location.reload();
     });
     titleBubble.appendChild(rb);
@@ -12342,7 +12356,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
     rl.addEventListener("click", function(){
       var b = document.getElementById("layoutResetBtn");
       if (b) { b.click(); return; }
-      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttZoomBarPhoneV1","apocVttMapSizeV1","apocVttLibBoxH","apocVttLibPhoneW","apocVttPanelParkV1","apocVttViewV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} }); /* APOC-V246: complete reset list (see R1). */
+      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttZoomBarPhoneV1","apocVttMapSizeV1","apocVttLibBoxH","apocVttLibPhoneW","apocVttPanelParkV1","apocVttViewV1","apocVttTuckV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} }); /* APOC-V246: complete reset list (see R1). */
       location.reload();
     });
     var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
@@ -12394,6 +12408,73 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
 </script>
 
 
+<script>
+/* APOC-V247-EARLY — tucked-Library strip pointer capture. Registered
+   before the APOC-V183 Library drag (this script sits earlier in the
+   document), so while the Library is tucked to its edge strip, presses
+   on the strip are owned HERE: a plain press is left for the click
+   (which expands, handled in the APOC-V247 block), a drag slides the
+   strip ALONG its edge and persists libAlong. The V183 float drag and
+   the head's open/close toggle never see a tucked press. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var SKEY = "apocVttTuckV1";
+  function load(){ try { var v = JSON.parse(localStorage.getItem(SKEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function save(patchObj){ try { var s = load(); for (var k in patchObj) s[k] = patchObj[k]; localStorage.setItem(SKEY, JSON.stringify(s)); } catch(e){} }
+  function tucked(){ return !!load().libTucked && window.matchMedia("(min-width: 821px)").matches; }
+  function headEl(){ return document.querySelector("#artLibrary .artlib-head"); }
+  var drag = null;
+  window.__apoc247StripSuppressUntil = 0;
+  window.addEventListener("pointerdown", function(e){
+    if (e.button > 0 || !tucked()) return;
+    /* APOC-V249 (diag-zoom7): the hit-test MUST come first. An earlier
+       revision stopped propagation unconditionally whenever the
+       Library was tucked — which silently killed EVERY pointerdown
+       control page-wide in the tucked state, the zoom-bar grip among
+       them (its drag is pointerdown-driven; mousedown still fired,
+       which masked the kill for a full battery cycle). Only presses
+       that land inside the repo box are owned here. */
+    var rp = document.querySelector(".map-repo"); if (!rp) return;
+    if (e.target !== rp && !rp.contains(e.target)) return;
+    /* APOC-V248 (diag-lib5): this listener is registered FIRST (document order) and must END the press here — a stopPropagation-only version let the V183 Library drag (a later window listener at the SAME target) also engage on strip presses: it dragged the 34px strip as a float and saved {x:1328,y:140,w:34} over Shaun's Perimeter record, and the expand then landed on that poisoned record. */
+    /* APOC-V248 (convicted in probe291): v247 only owned presses that
+       landed on the artlib HEAD; the strip box is wider than the head,
+       so centre-strip presses fell through to the Library's own float
+       drag (V183) — which both moved the box diagonally and toggled it.
+       While tucked, EVERY press inside the repo box is owned here. */
+    e.preventDefault(); e.stopImmediatePropagation();
+    drag = { x: e.clientX, y: e.clientY, id: e.pointerId, moved: false,
+             top: parseInt(rp.style.top, 10) || 0 };
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!drag || e.pointerId !== drag.id) return;
+    var dy = e.clientY - drag.y;
+    if (Math.abs(dy) > 6) drag.moved = true;
+    if (!drag.moved) return;
+    var rp = document.querySelector(".map-repo"); if (!rp) return;
+    var H = rp.getBoundingClientRect().height;
+    var nt = Math.max(0, Math.min(drag.top + dy, Math.max(0, window.innerHeight - H)));
+    /* write the record LIVE: the main block's tuck guard enforces
+       style.top from libAlong, so a style-only write is reverted by
+       the guard mid-drag (probe291: the slide never moved). */
+    rp.style.top = nt + "px";
+    save({ libAlong: nt });
+  }, true);
+  function up(e){
+    if (!drag || (e.pointerId !== undefined && e.pointerId !== drag.id)) return;
+    var d = drag; drag = null;
+    if (d.moved) {
+      var rp = document.querySelector(".map-repo");
+      var top = rp ? (parseInt(rp.style.top, 10) || 0) : 0;
+      save({ libAlong: top });
+      window.__apoc247StripSuppressUntil = Date.now() + 700;
+    }
+  }
+  window.addEventListener("pointerup", up, true);
+  window.addEventListener("pointercancel", up, true);
+})();
+</script>
 <style id="APOC-V183">
 /* v1.83 (Shaun, voice call 2026-11-07 ~18:40-18:44) — two pre-treatment
    drags were collateral damage of the v1.81 DM gate: the Art Library
@@ -17996,6 +18077,1231 @@ return module.exports; })();</script>
    stays on watch. Seeded verification: probe274/275 re-run on this
    build — open settles at the full fill with no post-open steps, the
    recorder gains no entries, closed inline height holds one value. */
+</script>
+<style id="APOC-V247-CSS">
+/* APOC-V247 (Shaun, 2026-11-10 12:25-12:32) —
+   (A/B) the bubble group bar under the bubble buttons; (C) the tucked
+   Library edge strip; (D) desktop sets placed BELOW THE MAP in-flow
+   instead of overlaying the content under the bubble. Dark-blue
+   treatment chrome per the standing rule. */
+#screenBar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px}
+#screenBar .btn{white-space:nowrap}
+#screenBar .grp-head{font-weight:700;letter-spacing:.04em}
+#screenBar.tucked .grp-btn{display:none}
+#screenBar .grp-btn.grp-drag{opacity:.55;cursor:grabbing;outline:2px solid rgba(30,64,175,.65);outline-offset:1px}
+#libTuckBtn{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;min-width:22px;height:20px;padding:0 5px;border:1px solid #1e40af;border-radius:6px;color:#9db4d8;font-size:.8rem;line-height:1;cursor:pointer;background:rgba(30,64,175,.18)}
+#libTuckBtn:hover{background:rgba(30,64,175,.4);color:#fff}
+@media (min-width:821px){
+  #mapPanel .ctl-set{position:static !important;top:auto !important;bottom:auto !important;left:auto !important;right:auto !important;width:auto !important;margin-top:8px}
+  .map-repo.lib-tucked{position:fixed !important;z-index:1300;background:transparent;box-shadow:none;overflow:visible !important;max-height:none !important;padding:0;margin:0;flex:none;width:34px !important;min-width:0 !important;box-sizing:border-box !important}
+  /* APOC-V248 (probe293): the Perimeter engine pins the repo's width
+     INLINE (and .map-repo.per-float re-pins position:absolute) — the
+     class alone lost the cascade and the strip rendered at the float's
+     224px. !important above wins position/width; this rule kills the
+     inline width the V183/V246 writers keep re-asserting. */
+  .map-repo.per-float.lib-tucked{width:34px !important;min-width:0 !important}
+  /* APOC-V248 (diag-lib, convicted): the ACTUAL width owner is
+     APOC-V214's desktop rule — `#mapPanel .stage-row > .map-repo
+     {flex-basis:224px !important;width:224px !important}` (line ~16016,
+     AFTER the V247 sheet) — specificity (1,2,0) with !important beats
+     the V247 class rules (0,2,0). The tucked strip must out-specify it
+     on the same terms: same selector path + the tucked class. */
+  #mapPanel .stage-row > .map-repo.lib-tucked{flex:0 0 34px !important;flex-basis:34px !important;width:34px !important;min-width:0 !important;max-width:34px !important}
+  .map-repo.lib-tucked > #placeCard{display:none !important}
+  .map-repo.lib-tucked .v188-rsz{display:none !important}
+  .map-repo.lib-tucked .per-grip{display:none !important}
+  .map-repo.lib-tucked #artLibrary{display:block;height:100%;width:34px;min-width:0}
+  .map-repo.lib-tucked #artLibrary > .nest-body{display:none !important}
+  .map-repo.lib-tucked #artLibrary > .artlib-head{writing-mode:vertical-rl;width:34px;max-width:34px;height:100%;display:flex;align-items:center;justify-content:center;gap:8px;border-radius:8px;margin:0;overflow:hidden}
+  .map-repo.lib-tucked #libTuckBtn{display:none !important}
+}
+#screenBar .grp-btn{touch-action:none}
+#phBarTuckBtn{display:none}
+#phBarStrip{display:none}
+@media (max-width:820px){
+  #libTuckBtn{display:none !important}
+  #screenBar{gap:6px}
+  /* (D-phone) sets reconciled into the same placement system: in-flow
+     below the bar (below the map), no longer fixed bottom sheets. */
+  #mapPanel .ctl-set{position:static !important;top:auto !important;bottom:auto !important;left:auto !important;right:auto !important;height:auto !important;width:auto !important;max-height:min(74dvh,calc(100dvh - 12px)) !important;margin-top:8px}
+  /* (A5) the whole button bar tucks to a right-edge strip */
+  #phBarTuckBtn{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:26px;padding:0 6px;border:1px solid #1e40af;border-radius:6px;color:#9db4d8;font-size:.85rem;cursor:pointer;background:rgba(30,64,175,.18)}
+  #ctlRow.ph-bar-tucked > .ctl-bar, #ctlRow.ph-bar-tucked > #screenBar{display:none !important}
+  #phBarStrip{position:fixed;right:0;width:34px;height:120px;z-index:1300;writing-mode:vertical-rl;align-items:center;justify-content:center;background:rgba(10,12,16,.92);border:1px solid #1e40af;border-right:none;border-radius:8px 0 0 8px;color:#f5f5f5;font-size:.8rem;letter-spacing:.08em;cursor:pointer;touch-action:none}
+}
+</style>
+<script>
+/* APOC-V247 — bubble group + universal tuck (Shaun, voice call
+   2026-11-10 12:25-12:32). One block, one per-device record
+   (apocVttTuckV1, merge-written by this block only), no geometry
+   writers of its own: the Library float record (apocVttPerimeterV2),
+   the BtnPark store and the zoom record's own engine keep their
+   v2.46 owners; this block only reads them or — for the zoom home,
+   once per device — writes the record its owner then applies. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var SKEY = "apocVttTuckV1";
+  function load(){ try { var v = JSON.parse(localStorage.getItem(SKEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function save(patchObj){ try { var s = load(); for (var k in patchObj) s[k] = patchObj[k]; localStorage.setItem(SKEY, JSON.stringify(s)); } catch(e){} }
+  function $(id){ return document.getElementById(id); }
+  function mqD(){ return window.matchMedia("(min-width: 821px)").matches; }
+  function flash(btn, txt){
+    if (!btn || btn.dataset.flashing) return;
+    var old = btn.textContent; btn.dataset.flashing = "1"; btn.textContent = txt;
+    setTimeout(function(){ btn.textContent = old; delete btn.dataset.flashing; }, 1700);
+  }
+  function clickId(id, btn, missTxt){
+    var el = $(id);
+    if (el) { el.click(); flash(btn, btn.textContent.replace(/\s*✓$/, "") + " ✓"); }
+    else flash(btn, missTxt || "Not ready");
+  }
+  function curMap(){
+    try { if (window.__apocShelf && window.__apocShelf.current) return window.__apocShelf.current(); } catch(e){}
+    var s = $("mapSelect"); return s ? s.value : null;
+  }
+  /* APOC-V248: the bubble is clamped inside the viewport — the V230
+     perimeter-park engine moves the whole bubble on Shaun's page, and
+     in probe290 the group animated below the fold mid-test, taking
+     clicks into the void. Clamping after layout keeps every control
+     reachable; it only ever pulls an off-screen bubble back. */
+  function clampBubble(){
+    var row = $("ctlRow"); if (!row || !mqD()) return;
+    var r = row.getBoundingClientRect();
+    if (r.bottom > window.innerHeight - 4 && window.scrollY > 0) window.scrollBy(0, -Math.min(window.scrollY, r.bottom - (window.innerHeight - 4)));
+    else if (r.bottom > window.innerHeight - 4) { var d = r.bottom - (window.innerHeight - 4); window.scrollTo(0, window.scrollY + d); }
+    r = row.getBoundingClientRect();
+    if (r.top < 4 && window.scrollY > 0) window.scrollBy(0, r.top - 4);
+  }
+  [1600, 3200, 5200, 8000].forEach(function(ms){ setTimeout(clampBubble, ms); });
+  /* APOC-V248 (probe293): the bubble's V230 park animation moves it
+     off-viewport DURING use too (the group sat at cy 785 on a 768
+     viewport mid-battery and clicks hit nothing) — a slow guard keeps
+     it reachable for the whole session; it only acts when the bubble
+     is actually outside the viewport. */
+  setInterval(clampBubble, 2500);
+  async function readRow(key){
+    try { var r = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle(); return (r && r.data && r.data.value) || null; } catch(e){ return null; }
+  }
+  async function writeRow(key, row){
+    await db.from(SETTINGS_TABLE).upsert({ key: key, value: row, updated_at: new Date().toISOString() }, { onConflict: "key" });
+  }
+
+  /* ================= A/B: the bubble group ================= */
+  var DEFS = [
+    { id: "grpSendMap", label: "Send Map", act: function(b){ grpSendMap(b); } },
+    { id: "grpScreen2", label: "Screen 2", act: function(b){ grpScreen2(b); } },
+    { id: "grpScreen2Mirror", label: "Screen 2 Mirror", act: function(b){ grpMirror(b); } },
+    { id: "grpScreen2ToDm", label: "Screen 2 to DM", act: function(b){ screen2ToDm(b); } },
+    { id: "grpGenerate", label: "Generate Map", act: function(b){ grpGenerate(b); } },
+    { id: "grpPushTv", label: "Push to TV", act: function(b){ grpPushTv(b); } },
+    { id: "grpDmAll", label: "DM View on all", act: function(b){ dmAll(b); } },
+    { id: "grpPhoto", label: "Take Photo", act: function(b){ takePhoto(b); } }
+  ];
+  async function screen2ToDm(btn){
+    btn.disabled = true;
+    try {
+      var r2 = await readRow("vtt_active_2");
+      if (!r2 || !r2.mapId) { flash(btn, "S2 is mirroring"); btn.disabled = false; return; }
+      /* APOC-V248 (convicted in probe291): vtt_active's writer is the
+         DM screen's own assignment path — a read-merged upsert of the
+         bare row was raced and reverted by the display poll inside
+         the same second. Route the pull through the canonical
+         switcher instead: the mapSelect change handler is the one
+         writer every screen already follows. */
+      var sel = $("mapSelect");
+      if (sel && sel.value !== r2.mapId) {
+        sel.value = r2.mapId;
+        sel.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      flash(btn, "Pulled to DM ✓");
+    } catch(e){ flash(btn, "Pull failed"); }
+    btn.disabled = false;
+  }
+  async function dmAll(btn){
+    btn.disabled = true;
+    try {
+      /* APOC-V248 (probe293d, convicted from the engine source): "DM
+         view on all" governs the DISPLAY screens. Shaun's own screen
+         is ALWAYS the DM screen (his standing rule, 2026-11-10
+         ~15:25: "my screen is always the DM screen") — the local
+         gmView is a per-device toggle and is NOT this button's
+         business. The per-screen writers are the V200 block's own
+         buttons: tvDm1Btn writes vtt_active.gm (Screen 1 / TV),
+         tvDm2Btn writes vtt_active_2.gm (Screen 2). Drive them and
+         verify against the rows. A mirroring Screen 2 has no row:
+         the V200 poller keeps it player by design. */
+      /* APOC-V249 (screen-rule amendment, STAGING-SPEC-AMENDMENTS.md,
+         ported from the land252 fork's adjudicated D1): "DM View on
+         all" SETS DM view on the displays — Screen 2 and the TV. It
+         never turns a display's DM view OFF (per-screen player view
+         is chosen on the screens' own controls), and it never touches
+         this screen's own view. One-way set, idempotent. */
+      var r1 = await readRow("vtt_active"), r2 = await readRow("vtt_active_2");
+      var t1 = $("tvDm1Btn"), t2 = $("tvDm2Btn");
+      if (t1 && !(r1 && r1.gm === true)) t1.click();
+      if (t2 && r2 && r2.mapId && r2.gm !== true) t2.click();
+      /* verify: re-read both rows after the writers settle */
+      var okAll = false;
+      for (var vi = 0; vi < 5 && !okAll; vi++) {
+        await new Promise(function(res){ setTimeout(res, 350); });
+        var v1 = await readRow("vtt_active"), v2 = await readRow("vtt_active_2");
+        okAll = !!(v1 && v1.gm === true) && (!v2 || !v2.mapId || v2.gm === true);
+      }
+      btn.setAttribute("aria-pressed", "true");
+      flash(btn, okAll ? "DM on all ✓" : "DM sync pending");
+    } catch(e){ flash(btn, "DM failed"); }
+    btn.disabled = false;
+  }
+  /* ================= Take Photo (Shaun, 2026-11-10 ~14:34) ==========
+     Composites the map exactly as displayed — the base image in pane
+     layerMap plus every visible canvas/img layer above it (fog,
+     lights, tokens, stamps, markers) — into one PNG at the map
+     element's own size and downloads it. External images are re-read
+     through fetch (the store serves CORS *) so the canvas stays
+     exportable; any piece that cannot be read is skipped, never fatal. */
+  async function takePhoto(btn){
+    btn.disabled = true;
+    try {
+      var mapEl = $("apocMap");
+      if (!mapEl) { flash(btn, "No map yet"); btn.disabled = false; return; }
+      var mr = mapEl.getBoundingClientRect();
+      var W = Math.max(2, Math.round(mr.width)), H = Math.max(2, Math.round(mr.height));
+      var cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+      var g = cv.getContext("2d");
+      g.fillStyle = "#0b0d10"; g.fillRect(0, 0, W, H);
+      var panes = [];
+      var paneEls = mapEl.querySelectorAll(".leaflet-pane");
+      for (var i = 0; i < paneEls.length; i++) {
+        var cs = getComputedStyle(paneEls[i]);
+        if (cs.display === "none" || cs.visibility === "hidden") continue;
+        panes.push({ el: paneEls[i], z: parseInt(cs.zIndex, 10) || 0, i: i });
+      }
+      panes.sort(function(a, b){ return (a.z - b.z) || (a.i - b.i); });
+      var cache = {};
+      async function drawable(node){
+        if (node.tagName === "CANVAS") return node;
+        if (node.tagName !== "IMG") return null;
+        var src = node.currentSrc || node.src;
+        if (!src) return null;
+        if (src.indexOf("data:") === 0) {
+          if (!cache[src]) cache[src] = await new Promise(function(res){ var im = new Image(); im.onload = function(){ res(im); }; im.onerror = function(){ res(null); }; im.src = src; });
+          return cache[src];
+        }
+        if (!cache[src]) cache[src] = fetch(src).then(function(r){ return r.blob(); }).then(function(b){
+          return new Promise(function(res){ var u = URL.createObjectURL(b); var im = new Image(); im.onload = function(){ res(im); }; im.onerror = function(){ res(null); }; im.src = u; });
+        }).catch(function(){ return null; });
+        return cache[src];
+      }
+      for (var p = 0; p < panes.length; p++) {
+        var nodes = panes[p].el.querySelectorAll("canvas, img");
+        for (var n = 0; n < nodes.length; n++) {
+          var node = nodes[n];
+          var r = node.getBoundingClientRect();
+          if (r.width < 1 || r.height < 1) continue;
+          if (r.right < mr.left || r.left > mr.right || r.bottom < mr.top || r.top > mr.bottom) continue;
+          var ncs = getComputedStyle(node);
+          if (ncs.display === "none" || ncs.visibility === "hidden") continue;
+          var dr = await drawable(node);
+          if (!dr) continue;
+          g.save();
+          try { g.globalAlpha = parseFloat(ncs.opacity); if (isNaN(g.globalAlpha)) g.globalAlpha = 1; } catch(e){}
+          try { g.drawImage(dr, Math.round(r.left - mr.left), Math.round(r.top - mr.top), Math.round(r.width), Math.round(r.height)); } catch(e){}
+          g.restore();
+        }
+      }
+      var blob = await new Promise(function(res){ cv.toBlob(res, "image/png"); });
+      if (!blob) { flash(btn, "Photo failed"); btn.disabled = false; return; }
+      var url = URL.createObjectURL(blob);
+      window.__apocLastPhoto = { url: url, size: blob.size, w: W, h: H, ts: Date.now() };
+      var a = document.createElement("a");
+      a.href = url; a.download = "apoc-map-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".png";
+      document.body.appendChild(a); a.click(); a.remove();
+      flash(btn, "Photo saved ✓");
+    } catch(e){ flash(btn, "Photo failed"); }
+    btn.disabled = false;
+  }
+
+  var grpDrag = null, grpSuppress = null;
+  function applyGrpState(bar){
+    var s = load();
+    if (Array.isArray(s.grpOrder)) {
+      s.grpOrder.forEach(function(id){
+        var b = $(id);
+        if (b && b.parentElement === bar) bar.appendChild(b);
+      });
+    }
+    bar.classList.toggle("tucked", !!s.grpTucked);
+    var head = $("grpHead");
+    if (head) head.setAttribute("aria-expanded", String(!s.grpTucked));
+  }
+  function buildGroup(){
+    var row = $("ctlRow");
+    if (!row || $("screenBar")) return;
+    var bar = document.createElement("div");
+    bar.id = "screenBar";
+    var head = document.createElement("button");
+    head.type = "button"; head.id = "grpHead"; head.className = "btn grp-head";
+    head.textContent = "Screens"; head.title = "Show / hide the screen controls";
+    head.setAttribute("aria-expanded", "true");
+    head.addEventListener("click", function(){
+      var s = load(); save({ grpTucked: !s.grpTucked }); applyGrpState(bar);
+    });
+    bar.appendChild(head);
+    DEFS.forEach(function(d){
+      var b = document.createElement("button");
+      b.type = "button"; b.className = "btn grp-btn"; b.id = d.id; b.textContent = d.label;
+      b.title = "Drag to rearrange within the bubble";
+      b.addEventListener("click", function(){
+        if (grpWasDrag()) return; /* APOC-V248: a rearrange drag just ended — this click is its tail */
+        d.act(b);
+      });
+      bar.appendChild(b);
+    });
+    var firstSet = row.querySelector(":scope > .ctl-set");
+    if (firstSet) row.insertBefore(bar, firstSet); else row.appendChild(bar);
+    applyGrpState(bar);
+    /* drag to rearrange — live reorder inside the bar only; the button
+       can never leave the bubble (its DOM home never changes). */
+    bar.addEventListener("pointerdown", function(e){
+      var b = e.target && e.target.closest ? e.target.closest(".grp-btn") : null;
+      if (!b || (e.button !== undefined && e.button > 0)) return;
+      grpDrag = { btn: b, x: e.clientX, y: e.clientY, id: e.pointerId, on: false };
+    });
+    bar.addEventListener("pointermove", function(e){
+      if (!grpDrag || e.pointerId !== grpDrag.id) return;
+      if (!grpDrag.on) {
+        if (Math.abs(e.clientX - grpDrag.x) + Math.abs(e.clientY - grpDrag.y) < 8) return;
+        grpDrag.on = true; grpDrag.btn.classList.add("grp-drag");
+        try { grpDrag.btn.setPointerCapture(e.pointerId); } catch(err){}
+      }
+      if (e.cancelable) e.preventDefault();
+      var sibs = bar.querySelectorAll(".grp-btn"), over = null, i, r;
+      for (i = 0; i < sibs.length; i++) {
+        if (sibs[i] === grpDrag.btn) continue;
+        r = sibs[i].getBoundingClientRect();
+        if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) { over = sibs[i]; break; }
+      }
+      if (over) {
+        var kids = Array.prototype.slice.call(bar.children);
+        if (kids.indexOf(grpDrag.btn) < kids.indexOf(over)) bar.insertBefore(grpDrag.btn, over.nextSibling);
+        else bar.insertBefore(grpDrag.btn, over);
+      }
+    });
+    function endGrp(){
+      if (!grpDrag) return;
+      var d = grpDrag; grpDrag = null;
+      if (!d.on) return;
+      d.btn.classList.remove("grp-drag");
+      grpNoteDrag();
+      var order = Array.prototype.slice.call(bar.querySelectorAll(".grp-btn")).map(function(b){ return b.id; });
+      save({ grpOrder: order });
+    }
+    bar.addEventListener("pointerup", endGrp);
+    bar.addEventListener("pointercancel", endGrp);
+  }
+
+  /* ================= C: Library edge tuck ================= */
+  function repoEl(){ return document.querySelector(".map-repo"); }
+  function libEl(){ return $("artLibrary"); }
+  function headEl(){ return document.querySelector("#artLibrary .artlib-head"); }
+  var STRIP_W = 34;
+  function setIf(el, prop, val){ if (el.style[prop] !== val) el.style[prop] = val; }
+  /* APOC-V248 (convicted in probe291): the tuck styles are INLINE, but
+     the box also lives inside a flex .stage-row — with the Library
+     open, #artLibrary > .nest-body renders position:absolute (the
+     :not(.per-float) repo rule), so the "34px strip" measured 224
+     wide: the flex base came from the open body's intrinsic width.
+     The tucked class must therefore defeat layout, not just style:
+     when lib-tucked is on, the box is taken OUT of the stage-row flow
+     (position:fixed, flex:none) and the open body is hidden outright,
+     so the rendered strip is exactly STRIP_W wide. The Perimeter float
+     record is never written by any of this. */
+  function applyLibTuck(){
+    var rp = repoEl(); if (!rp) return;
+    var s = load();
+    if (!mqD() || !s.libTucked) {
+      if (rp.classList.contains("lib-tucked")) {
+        rp.classList.remove("lib-tucked");
+        rp.style.left = rp.style.top = rp.style.width = rp.style.height = rp.style.right = "";
+        setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 40);
+      }
+      return;
+    }
+    var H = Math.max(80, Math.min(Math.min(s.libStripH || 571, parseInt(localStorage.getItem("apocVttLibBoxH"), 10) || 571), window.innerHeight));
+    var top = Math.max(0, Math.min(s.libAlong || 0, Math.max(0, window.innerHeight - H)));
+    rp.classList.add("lib-tucked");
+    setIf(rp, "width", STRIP_W + "px");
+    setIf(rp, "height", H + "px");
+    setIf(rp, "top", top + "px");
+    if (s.libEdge === "left") { setIf(rp, "left", "0px"); setIf(rp, "right", "auto"); }
+    else { setIf(rp, "left", "auto"); setIf(rp, "right", "0px"); }
+  }
+  function tuckLib(){
+    var rp = repoEl(), lib = libEl(); if (!rp) return;
+    var r = rp.getBoundingClientRect();
+    save({
+      libTucked: true,
+      libEdge: (r.left + r.width / 2) < window.innerWidth / 2 ? "left" : "right",
+      libAlong: Math.max(0, Math.round(r.top)),
+      libStripH: Math.round(Math.max(120, Math.min(r.height || 300, window.innerHeight))),
+      libWasOpen: !!(lib && lib.classList.contains("open")),
+      libFloatRect: { l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } /* APOC-V248: the exact pre-tuck float, restored verbatim on expand */
+    });
+    if (lib && lib.classList.contains("open")) {
+      lib.classList.remove("open");
+      var h = headEl(); if (h) h.setAttribute("aria-expanded", "false");
+    }
+    applyLibTuck();
+  }
+  function expandLib(){
+    var lib = libEl();
+    var was = !!load().libWasOpen;
+    /* APOC-V248 (diag-lib3): PIN the pre-tuck float geometry BEFORE
+       untucking. applyRepoPark measures the panel with the box still
+       in flow; measured mid-expand (after the fill had grown the
+       panel by the strip's height), the same record clamps to a
+       different x (1268 vs the true 969) — the expand landed the box
+       +299/+140 off its park. The geometry that was on screen the
+       moment tuckLib ran is the truth: capture it in tuckLib
+       (libFloatRect) and restore it verbatim here; the engine's own
+       convergence then agrees with it instead of re-deriving it. */
+    var fr = load().libFloatRect;
+    save({ libTucked: false });
+    applyLibTuck();
+    if (fr) {
+      var rpF = repoEl();
+      if (rpF) {
+        var panel = document.getElementById("mapPanel");
+        var prF = panel ? panel.getBoundingClientRect() : { left: 0, top: 0 };
+        rpF.style.left = Math.round(fr.l - prF.left) + "px";
+        rpF.style.top = Math.round(fr.t - prF.top) + "px";
+        rpF.style.width = fr.w + "px";
+        rpF.style.height = fr.h + "px";
+      }
+    }
+    /* APOC-V248 (probe293e): ALSO clear the tucked inline offsets —
+       applyLibTuck only clears them while the class is still on, but
+       the Perimeter engine applies the float from its record with
+       left = panel.left + float.x and its own height (the LibBoxH),
+       and the surviving inline top:140px (the strip's libAlong) plus
+       right:auto shifted the restored box +299/+140. Clearing left/
+       top/right/width/height here (class already off, styles cleared)
+       lets the engine's convergence (resize kick below) land the box
+       exactly on its record. */
+    var rp2 = repoEl();
+    if (rp2) { rp2.style.left = ""; rp2.style.top = ""; rp2.style.right = ""; rp2.style.width = ""; rp2.style.height = ""; }
+    if (was && lib && !lib.classList.contains("open")) {
+      lib.classList.add("open");
+      var h = headEl(); if (h) h.setAttribute("aria-expanded", "true");
+    }
+    setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 80);
+  }
+  function buildLibTuck(){
+    var h = headEl(); if (!h || $("libTuckBtn")) return;
+    var tb = document.createElement("span");
+    tb.id = "libTuckBtn"; tb.textContent = "⇥";
+    tb.title = "Tuck the Art Library to the edge of the screen";
+    tb.setAttribute("role", "button");
+    tb.addEventListener("click", function(e){
+      e.stopPropagation(); e.preventDefault();
+      if (mqD()) tuckLib();
+    });
+    h.appendChild(tb);
+  }
+  document.addEventListener("click", function(e){
+    if (!load().libTucked || !mqD()) return;
+    var rp = repoEl(); if (!rp) return;
+    /* APOC-V248 (convicted in probe291): the v247 handler required the
+       click target to be the artlib HEAD — but the strip box is wider
+       than the head (the head hugs the outer edge), so centre-strip
+       clicks landed on #artLibrary itself and never expanded. The
+       whole tucked box is the click target now. */
+    if (e.target !== rp && !rp.contains(e.target)) return;
+    if (e.target && e.target.closest && e.target.closest("#libTuckBtn")) return;
+    e.stopPropagation(); e.preventDefault();
+    if (Date.now() < (window.__apoc247StripSuppressUntil || 0)) return;
+    expandLib();
+  }, true);
+  /* keep the tuck applied if another pass re-applies the float over it —
+     APOC-V248: enforce the full geometry, not just the class: the
+     Perimeter/fill passes rewrite the inline box wholesale, and the
+     class alone survived while width/top were restored under it. */
+  var tuckMo = null;
+  function watchTuck(){
+    var rp = repoEl(); if (!rp || tuckMo) return;
+    tuckMo = new MutationObserver(function(){
+      if (!load().libTucked || !mqD()) return;
+      if (!rp.classList.contains("lib-tucked")) { applyLibTuck(); return; }
+      var s = load();
+      var H = Math.max(80, Math.min(Math.min(s.libStripH || 571, parseInt(localStorage.getItem("apocVttLibBoxH"), 10) || 571), window.innerHeight));
+      var top = Math.max(0, Math.min(s.libAlong || 0, Math.max(0, window.innerHeight - H)));
+      if (rp.style.width !== STRIP_W + "px" || rp.style.height !== H + "px" || rp.style.top !== top + "px") applyLibTuck();
+    });
+    tuckMo.observe(rp, { attributes: true, attributeFilter: ["class", "style"] });
+  }
+  window.addEventListener("resize", function(){ applyLibTuck(); });
+
+  /* ================= D: set open-state persistence ================= */
+  function watchSets(){
+    var sets = document.querySelectorAll(".ctl-set");
+    sets.forEach(function(set){
+      if (set.dataset.v247) return;
+      set.dataset.v247 = "1";
+      new MutationObserver(function(){
+        var open = document.querySelector(".ctl-set:not([hidden])");
+        var name = open ? open.id.replace(/^set-/, "") : null;
+        if (load().openSet !== name) save({ openSet: name });
+      }).observe(set, { attributes: true, attributeFilter: ["hidden"] });
+    });
+    var s = load();
+    if (s.openSet && window.ctlOpen) {
+      setTimeout(function(){ try { window.ctlOpen(s.openSet); } catch(e){} }, 900);
+      setTimeout(function(){
+        var open = document.querySelector(".ctl-set:not([hidden])");
+        if (!open) { try { window.ctlOpen(s.openSet); } catch(e){} }
+      }, 2600);
+    }
+  }
+
+  /* ================= E: zoom home under the DM-edit cluster ============ */
+  /* APOC-V248 (convicted in probe290): v247 computed the record from
+     the offsetParent's rect, but the zoom engine renders rect =
+     record + a fixed panel offset — the bar landed 6px high and 9px
+     left of the cluster. The home is now DELTA-CORRECTED: measure the
+     bar's actual rect against the wanted rect (right edge on the
+     cluster's right edge, top 8px under its bottom) and nudge the
+     record by the error; the record==style invariant the drag engine
+     keeps makes the correction exact, and repeats converge it even if
+     the cluster settles late. */
+  function zoomHome(){
+    var dm = $("dmBarV181"), zb = $("zoomBar");
+    if (!dm || !zb || !zb.offsetWidth) return;
+    var s0 = load(); if (s0.zoomHomeDone) return; /* APOC-V248 (probe293): the user has parked it — homing is over for this device-session line */
+    var dr = dm.getBoundingClientRect(); if (!dr.width) return;
+    var zr = zb.getBoundingClientRect(); if (!zr.width) return;
+    var wantR = dr.right, wantT = dr.bottom + 8;
+    /* APOC-V249 (ported from the land252 fork's adjudicated D3): the
+       home must be GRABBABLE. The band directly under the DM cluster
+       is occupied in flow (the NPC opener row spans it), so when a
+       visible control intersects the bar's wanted band, the home
+       steps below the lowest blocker instead of sliding the grip
+       underneath it (probe296: grip covered 100% by npcOpenBtn). */
+    try {
+      var bandL = wantR - zr.width;
+      document.querySelectorAll("button, [role='button'], input, select, textarea").forEach(function(el){
+        if (!el.offsetWidth || zb.contains(el) || dm.contains(el)) return;
+        if (el.closest && el.closest(".map-repo")) return; /* APOC-V249: the Library float is not a control — stepping below a 492px float would throw the home off the cluster entirely; the grip-vs-float overlap is a z-order fact, reported as a finding */
+        var br = el.getBoundingClientRect();
+        if (!br.width || !br.height) return;
+        if (br.left < wantR && br.right > bandL && br.top < wantT + zr.height && br.bottom > wantT) wantT = Math.max(wantT, Math.round(br.bottom) + 4);
+      });
+    } catch(e){}
+    var dx = Math.round(wantR - zr.right), dy = Math.round(wantT - zr.top);
+    var s = load();
+    var key0 = window.matchMedia("(max-width: 820px)").matches ? "apocVttZoomBarPhoneV1" : "apocVttZoomBarV1";
+    if (Math.abs(dx) <= 2 && Math.abs(dy) <= 2) { if (!s.zoomHome247) { var recC = null; try { recC = JSON.parse(localStorage.getItem(key0) || "null"); } catch(e){} save({ zoomHome247: true, zoomHomedAt: recC }); } return; }
+    var key = key0;
+    /* APOC-V248 (probe293j): correct the RECORD, not the style. The
+       engine renders style = record - 9 (its boot-apply offset), so
+       nudging by style+dx stored as the record is a fixed point at
+       dx = 9 — homing circled forever 9px short of the cluster's
+       right edge. Rect feedback + record-space nudges converge. */
+    var curL = NaN, curT = NaN;
+    try { var rec0 = JSON.parse(localStorage.getItem(key) || "null"); if (rec0) { curL = rec0.l; curT = rec0.t; } } catch(e){}
+    if (isNaN(curL) || isNaN(curT)) { curL = parseInt(zb.style.left, 10); curT = parseInt(zb.style.top, 10); }
+    if (isNaN(curL) || isNaN(curT)) return;
+    var nl = curL + dx, nt = curT + dy;
+    try { localStorage.setItem(key, JSON.stringify({ l: nl, t: nt })); } catch(e){}
+    zb.style.left = nl + "px"; zb.style.top = nt + "px";
+    if (Math.abs(dx) <= 3 && Math.abs(dy) <= 3) save({ zoomHome247: true, zoomHomedAt: { l: nl, t: nt } });
+  }
+  function watchZoomHome(){
+    [700, 1800, 3500, 6000].forEach(function(ms){ setTimeout(zoomHome, ms); });
+    var mo = new MutationObserver(function(){ zoomHome(); });
+    mo.observe(document.body, { childList: true });
+    setTimeout(function(){ mo.disconnect(); }, 20000);
+    /* APOC-V248 (probe293j): the engine RE-APPLIES record->style
+       (style = record - 9) on later layout events (the battery's
+       synthetic resizes from panel expand/tuck trigger it), shifting
+       the bar 9px left AFTER homing had converged and stopped. A
+       session-long light watcher re-converges whenever the rendered
+       rect drifts from home — until the user parks the bar. A press
+       ON the bar is the park signal: homing stops for good. */
+    document.addEventListener("pointerdown", function(e){
+      var zb = $("zoomBar");
+      if (zb && e.target && (e.target === zb || zb.contains(e.target))) { try { save({ zoomHomeDone: true }); } catch(err){} }
+    }, true);
+    setInterval(function(){ try { var s = load(); if (!s.zoomHomeDone) zoomHome(); } catch(e){} }, 2500);
+  }
+
+  /* ================= A5: phone bar tuck to a side strip ================= */
+  var PHKEY = "apocVttTuckPhoneV1";
+  function phLoad(){ try { var v = JSON.parse(localStorage.getItem(PHKEY) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function phSave(patchObj){ try { var s = phLoad(); for (var k in patchObj) s[k] = patchObj[k]; localStorage.setItem(PHKEY, JSON.stringify(s)); } catch(e){} }
+  function applyPhoneBar(){
+    var row = $("ctlRow"), strip = $("phBarStrip"); if (!row) return;
+    var s = phLoad(), on = !!s.barTucked && !mqD();
+    row.classList.toggle("ph-bar-tucked", on);
+    if (strip) {
+      strip.style.display = on ? "flex" : "none";
+      strip.style.top = (typeof s.barAlong === "number" ? s.barAlong : 120) + "px";
+    }
+  }
+  function buildPhoneBar(){
+    var row = $("ctlRow"); if (!row) return;
+    var bar = row.querySelector(":scope > .ctl-bar");
+    if (bar && !$("phBarTuckBtn")) {
+      var tb = document.createElement("span");
+      tb.id = "phBarTuckBtn"; tb.textContent = "⇥"; tb.setAttribute("role", "button");
+      tb.title = "Tuck the buttons to the side of the screen";
+      tb.addEventListener("click", function(e){ e.stopPropagation(); phSave({ barTucked: true }); applyPhoneBar(); });
+      bar.appendChild(tb);
+    }
+    if (!$("phBarStrip")) {
+      var strip = document.createElement("div");
+      strip.id = "phBarStrip"; strip.textContent = "Controls";
+      strip.title = "Show the buttons";
+      document.body.appendChild(strip);
+      var sd = null;
+      strip.addEventListener("pointerdown", function(e){
+        sd = { y: e.clientY, id: e.pointerId, moved: false, top: parseInt(strip.style.top, 10) || 120 };
+        try { strip.setPointerCapture(e.pointerId); } catch(err){}
+      });
+      strip.addEventListener("pointermove", function(e){
+        if (!sd || e.pointerId !== sd.id) return;
+        var dy = e.clientY - sd.y;
+        if (Math.abs(dy) > 6) sd.moved = true;
+        if (sd.moved) strip.style.top = Math.max(0, Math.min(sd.top + dy, Math.max(0, window.innerHeight - 120))) + "px";
+      });
+      function sup(){
+        if (!sd) return;
+        var d = sd; sd = null;
+        if (d.moved) { phSave({ barAlong: parseInt(strip.style.top, 10) || 0 }); strip.dataset.suppress = String(Date.now() + 600); }
+      }
+      strip.addEventListener("pointerup", sup);
+      strip.addEventListener("pointercancel", sup);
+      strip.addEventListener("click", function(){
+        if (Date.now() < +(strip.dataset.suppress || 0)) return;
+        phSave({ barTucked: false }); applyPhoneBar();
+      });
+    }
+    applyPhoneBar();
+  }
+  window.addEventListener("resize", function(){ applyPhoneBar(); });
+
+  /* APOC-V248 (probe293): grp click suppression is TEMPORAL, not
+     identity-only — suppress stays set after the FIRST rearrange drag
+     and swallows the next plain click on the bar (Mirror/ToDM/dmAll
+     all died to it mid-battery: the bar's own drag ran first). */
+  var grpSuppressAt = 0;
+  function grpNoteDrag(){ grpSuppressAt = Date.now(); }
+  function grpWasDrag(){ return Date.now() - grpSuppressAt < 900; }
+  /* APOC-V248 (probe293): grp actions must reach their engines — a
+     click whose engine control is missing retries once after 700ms
+     instead of flashing "Not ready" into the void. */
+  function clickIdRetry(id, btn, missTxt){
+    if ($(id)) { clickId(id, btn, missTxt); return; }
+    setTimeout(function(){ clickId(id, btn, missTxt); }, 700);
+  }
+  function grpSendMap(b){ clickIdRetry("screen2SendBtn", b); }
+  function grpScreen2(b){ clickIdRetry("screen2OpenBtn", b); }
+  function grpMirror(b){ clickIdRetry("screen2MirrorBtn", b); }
+  function grpPushTv(b){ clickIdRetry("pushTvBtn", b); }
+  function grpGenerate(b){ clickIdRetry("genBtn", b); }
+  function boot(){
+    buildGroup();
+    buildLibTuck();
+    applyLibTuck();
+    watchTuck();
+    watchSets();
+    watchZoomHome();
+    buildPhoneBar();
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+  [1200, 3000].forEach(function(ms){ setTimeout(function(){ buildGroup(); buildLibTuck(); applyLibTuck(); watchTuck(); buildPhoneBar(); }, ms); });
+  /* APOC-V248 (probe293): zoomHome247 settles BEFORE the user's first
+     drag on a fresh-seeded device (the facet is unset), and the home
+     kept re-deriving — every zoom drag was undone at the next call
+     and the record snapped back to the homed value. Once the facet is
+     set, a record that DIFFERS from the last homed value is the
+     user's own park: stop homing for the session. */
+  var zoomParkWatch = setInterval(function(){
+    try {
+      var s = load(); if (!s.zoomHome247) return;
+      var key = window.matchMedia("(max-width: 820px)").matches ? "apocVttZoomBarPhoneV1" : "apocVttZoomBarV1";
+      var rec = JSON.parse(localStorage.getItem(key) || "null");
+      if (!rec) return;
+      if (s.zoomHomedAt && (rec.l !== s.zoomHomedAt.l || rec.t !== s.zoomHomedAt.t)) {
+        /* APOC-V248 (probe293i/j): the zoom engine's own clamp-at-save
+           rewrites the record right after homing (t 13 -> 23) and the
+           cluster can settle after a convergence pass saved
+           zoomHomedAt — both read as a "user park" and froze homing
+           9px short. A genuine user park is STABLE: the same differing
+           record on two consecutive ticks, with homing given its pass
+           in between. (The grip-press signal in watchZoomHome is the
+           primary park detector; this is the backup.) */
+        var recKey = rec.l + "," + rec.t;
+        if (zoomParkWatch._lastRec === recKey) {
+          s.zoomHomeDone = true; localStorage.setItem("apocVttTuckV1", JSON.stringify(s)); clearInterval(zoomParkWatch);
+        } else { zoomParkWatch._lastRec = recKey; zoomHome(); }
+      }
+    } catch(e){}
+  }, 1500);
+  setTimeout(function(){ clearInterval(zoomParkWatch); }, 45000);
+})();
+</script>
+
+<script>
+/* APOC-V248 bridge (Shaun, 2026-11-10, staging): asset drag for
+   placed stamps + the New Art asset set. Kept OUTSIDE the main
+   module on purpose: it works through the module's public bridges
+   (window.vttDraw items/reorder, window.toXY, window.map) exactly
+   like the v1.71 right-click menu does. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  function $(id){ return document.getElementById(id); }
+  function gmOn(){
+    try { if (typeof window.effectiveGm === "function") return !!window.effectiveGm(); } catch(e){}
+    var b = $("gmBtn"); return !!(b && b.getAttribute("aria-pressed") === "true");
+  }
+  function projecting(){ return document.body.classList.contains("displaying"); }
+
+  /* ============ asset drag: plain press-drag on a placed stamp ============
+     CONVICTION (2026-11-10): stamps render interactive:false; the only
+     drag paths were gated behind the Draw set's Select/move tool or
+     the Assets nest's Edit toggle. This bridge is the plain path:
+     press on a stamp (topmost first, the hitItem radius rule), drag,
+     release — the item translates live and the draw record saves on
+     release. Gates, all read live: not on a display copy; a stamp
+     whose layer is hidden or GM-only (without DM view) never hits;
+     the bridge stands down while ANY tool is armed (Draw set open
+     with a tool chosen, a Lighting/Fog tool armed, marker/place arm,
+     ruler, ping) so the dedicated tools keep their map. */
+  function hitStamp(p){
+    if (!window.vttDraw || !window.vttDraw.items) return null;
+    var items = window.vttDraw.items();
+    /* frame units: toXY gives % of frame; CELL/MW come from the map's
+       own scale through the module's stamp hit radius (size in cells).
+       The 0.72 factor mirrors the Assets Edit path's hit rule. */
+    for (var i = items.length - 1; i >= 0; i--) {
+      var it = items[i];
+      if (it.type !== "stamp") continue;
+      var lay = it.layer || (it.gm ? "gm" : "shared");
+      if (it.gm && !gmOn()) continue;
+      var r = Math.max(1.8, Math.max(it.fw || 0, it.fh || 0, it.size || 1) * 5 * 0.62); /* APOC-V248 (probe294c): hit circle from the rendered footprint — size/fw/fh are CELL counts; a cell is 5 map-% on the 20-wide generated frame */
+      /* r is in %-of-frame units on the Assets path (map % space) */
+      if (Math.hypot(p.x - it.x, p.y - it.y) < r) return it;
+    }
+    return null;
+  }
+  function toolArmed(){
+    try {
+      var dt = $("drawTool");
+      var drawOpen = false;
+      var sets = document.querySelectorAll(".ctl-set:not([hidden])");
+      for (var i = 0; i < sets.length; i++) if (sets[i].id === "set-draw") drawOpen = true;
+      if (drawOpen && dt && dt.value && dt.value !== "") return true;
+      var lb = $("lightBtn"), fb = $("fogBtn");
+      if (lb && lb.getAttribute("aria-pressed") === "true") return true;
+      if (fb && fb.getAttribute("aria-pressed") === "true") return true;
+      var am = $("addMarkerBtn"), ap = $("addPlaceBtn"), pb = $("pingBtn"), rb = $("rulerBtn");
+      if (am && am.getAttribute("aria-pressed") === "true") return true;
+      if (ap && ap.getAttribute("aria-pressed") === "true") return true;
+      if (pb && pb.getAttribute("aria-pressed") === "true") return true;
+      if (rb && rb.getAttribute("aria-pressed") === "true") return true;
+    } catch(e){}
+    return false;
+  }
+  var adrag = null;
+  function bindAssetDrag(){
+    if (!window.map || !window.map.on || bindAssetDrag.done) return;
+    bindAssetDrag.done = true;
+    var mapEl = $("apocMap");
+    /* APOC-V248 (probe294g CONVICTION): the Leaflet map "mousemove"
+       event NEVER fires during a press-drag in this build — the
+       mousedown fires (dragging disables), then nothing: synthetic
+       DOM drags AND real CDP drags both die the same way, while a
+       direct container listener receives every move. The drag
+       therefore rides the CONTAINER's DOM mouse events (converted
+       via mouseEventToLatLng + toXY), the same plumbing the Group
+       block's Ctrl-collect uses — that path is proven live. */
+    if (!mapEl) return;
+    mapEl.addEventListener("mousedown", function(e){
+      if (adrag || projecting() || toolArmed()) return;
+      if (e.button > 0) return;
+      if (e.ctrlKey || e.metaKey) return; /* ctrl press = group collect (Group block owns it) */
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      var hit = hitStamp(p);
+      if (!hit) return;
+      /* APOC-V248: a press on a GROUPED stamp belongs to the Group
+         block's group drag — if this plain path also claimed it, the
+         anchor member moved twice (bridge + group) and the group's
+         relative positions broke. Stand down. */
+      try { var grp = window.__apocGroup ? window.__apocGroup() : []; if (grp.some(function(g){ return g === hit || (g.id && hit.id && g.id === hit.id); })) return; } catch(e){}
+      /* hidden-layer stamps never move: read the layer defs through
+         the draw record the module saved (layers ride saveDraw). */
+      adrag = { it: hit, last: p, moved: false, fresh: true };
+      if (window.map.dragging) window.map.dragging.disable();
+      e.preventDefault();
+    }, true);
+    document.addEventListener("mousemove", function(e){
+      if (!adrag) return;
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      var dx = p.x - adrag.last.x, dy = p.y - adrag.last.y;
+      /* APOC-V248 (probe294q): single-event delta guard — a one-frame
+         layout flip (the blink family) shifts the map rect for one
+         event and converts to a ~15% teleport in y. A real drag step
+         never moves 4% of the frame in one mousemove; outlier events
+         are dropped WITHOUT updating last, so the next honest event
+         resumes from the true position. */
+      if (adrag.fresh) { adrag.fresh = false; adrag.last = p; return; } /* APOC-V248 (probe294r): first move only establishes the conversion basis — a layout settle during the press-hold shifts the basis ~2% and must not drag the asset with it */
+      if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); } /* APOC-V249 (probe310): clamp-and-apply — a coalesced honest move (touch under load, fast flick) still moves the asset by the clamped step and re-anchors via last=p below; discarding the event wholesale starved real drags to a crawl. A true basis flip now costs at most one clamped step. */ /* APOC-V248 (probe294w): basis discontinuities come in two sizes — the ~14% flip and a ~2.4% settle that can strike mid-drag; honest per-event steps are <=0.5%, so the re-anchor threshold is 1.5% (a faster flick event is absorbed, never teleports the asset) */
+      if (dx || dy) {
+        adrag.it.x = Math.max(0, Math.min(100, adrag.it.x + dx));
+        adrag.it.y = Math.max(0, Math.min(100, adrag.it.y + dy));
+        adrag.last = p; adrag.moved = true;
+        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+      }
+    }, true);
+    document.addEventListener("mouseup", function(){
+      if (!adrag) return;
+      var d = adrag; adrag = null;
+      if (window.map.dragging) window.map.dragging.enable();
+      if (d.moved && window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(d.it, 1);
+    }, true);
+    /* APOC-V248 (phone): touch drags arrive as POINTER events, not
+       mouse events — the same start/move/end logic rides them, so a
+       finger drag moves a stamp exactly like a mouse drag. The
+       long-press Group collect (550ms) owns still presses; a moving
+       touch is a drag. */
+    mapEl.addEventListener("pointerdown", function(e){
+      if (e.pointerType !== "touch" || adrag || projecting() || toolArmed()) return;
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      var hit = hitStamp(p);
+      if (!hit) return;
+      try { var grp = window.__apocGroup ? window.__apocGroup() : []; if (grp.some(function(g){ return g === hit || (g.id && hit.id && g.id === hit.id); })) return; } catch(e){}
+      adrag = { it: hit, last: p, moved: false, fresh: true, touch: true, lpAt: window.__apocLpFired || 0 };
+      if (window.map.dragging) window.map.dragging.disable();
+    }, true);
+    document.addEventListener("pointermove", function(e){
+      if (!adrag || !adrag.touch || e.pointerType !== "touch") return;
+      /* a still press that became a long-press COLLECT (Group block)
+         is not a drag: yield without saving (the press was still, so
+         nothing has moved yet) */
+      if (window.__apocLpFired && adrag.lpAt !== window.__apocLpFired) { adrag = null; if (window.map.dragging) window.map.dragging.enable(); return; }
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      var dx = p.x - adrag.last.x, dy = p.y - adrag.last.y;
+      if (adrag.fresh) { adrag.fresh = false; adrag.last = p; return; }
+      if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); } /* APOC-V249 (probe310): clamp-and-apply — a coalesced honest move (touch under load, fast flick) still moves the asset by the clamped step and re-anchors via last=p below; discarding the event wholesale starved real drags to a crawl. A true basis flip now costs at most one clamped step. */
+      if (dx || dy) {
+        adrag.it.x = Math.max(0, Math.min(100, adrag.it.x + dx));
+        adrag.it.y = Math.max(0, Math.min(100, adrag.it.y + dy));
+        adrag.last = p; adrag.moved = true;
+        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+      }
+    }, true);
+    document.addEventListener("pointerup", function(e){
+      if (!adrag || !adrag.touch) return;
+      var d = adrag; adrag = null;
+      if (window.map.dragging) window.map.dragging.enable();
+      if (d.moved && window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(d.it, 1);
+    }, true);
+    document.addEventListener("pointercancel", function(){
+      if (!adrag || !adrag.touch) return;
+      adrag = null;
+      if (window.map.dragging) window.map.dragging.enable();
+    }, true);
+  }
+  var bindIv = setInterval(function(){ bindAssetDrag(); if (bindAssetDrag.done) clearInterval(bindIv); }, 800);
+  setTimeout(function(){ clearInterval(bindIv); }, 120000); /* APOC-V248 (probe294t): 30s was too short under load — if window.map was not ready inside the window, the drag bridge NEVER bound and the map simply panned */
+
+  /* ============ New Art set (Shaun, 2026-11-10 ~14:38) ============
+     "More and much better art for the assets" — a steampunk set at
+     Dungeon Alchemist quality, registered as its own nest inside the
+     Assets tree: click places at the map centre, drag places at the
+     drop point (the shelf's own pattern), pieces are ordinary stamps
+     (the drag bridge above, right-click, layers all apply). Canon
+     checked piece by piece: grey sunless world — no sun, no stars,
+     no golden sky anywhere; flames are lamp/torch flames only.
+     Animated pieces are animated WebP and animate natively as
+     stamps. Files live in the cody-artwork bucket at vtt-assets2/. */
+  var NEWART = [
+    ["door-iron", "Iron Door", "Doors", 2, 1], ["door-portcullis", "Portcullis", "Doors", 2, 1],
+    ["door-wood", "Oak Door", "Doors", 2, 1], ["door-vault", "Vault Door", "Doors", 2, 1],
+    ["sconce", "Wall Sconce", "Lighting fixtures", 1, 1], ["gaslamp", "Gas Lamp", "Lighting fixtures", 1, 1],
+    ["candle-cluster", "Candle Cluster", "Lighting fixtures", 1, 1], ["brazier2", "Iron Brazier", "Lighting fixtures", 1, 1],
+    ["table-long", "Long Table", "Furniture", 3, 1], ["desk-papers", "Desk with Papers", "Furniture", 2, 1],
+    ["bunk-beds", "Bunk Beds", "Furniture", 1, 2], ["altar-table", "Altar Table", "Furniture", 2, 1],
+    ["scrolls", "Scroll Pile", "Clutter & props", 1, 1], ["potions", "Potion Bottles", "Clutter & props", 1, 1],
+    ["gears", "Gear Pile", "Clutter & props", 1, 1], ["books-stack", "Book Stack", "Clutter & props", 1, 1],
+    ["coins", "Coin Pile", "Clutter & props", 1, 1], ["tools", "Work Tools", "Clutter & props", 1, 1],
+    ["anim-torch", "Torch (animated flame)", "Animated", 1, 1], ["anim-water", "Water Pool (animated)", "Animated", 2, 2],
+    ["anim-fog", "Fog Bank (animated drift)", "Animated", 3, 2]
+  ];
+  var PUB2 = "https://gjvebpbxggmumtslidej.supabase.co/storage/v1/object/public/cody-artwork/vtt-assets2/";
+  function arLayerPatch2(){
+    var s = $("drawLayerSel"); var v = s ? s.value : "shared";
+    return v === "gm" ? { layer: "gm", gm: true } : v === "fg" ? { layer: "fg", gm: false, fg: true } : { layer: "shared", gm: false };
+  }
+  function placeNewArt(entry, p){
+    if (!window.vttDraw || !window.vttDraw.items) return false;
+    var it = Object.assign({ type: "stamp", x: p.x, y: p.y, size: Math.max(entry[3], entry[4]), rot: 0, img: PUB2 + entry[0] + ".webp", steam: 0, imgPlain: PUB2 + entry[0] + ".webp", fw: entry[3], fh: entry[4], name: entry[1] }, arLayerPatch2());
+    window.vttDraw.items().push(it);
+    if (window.vttDraw.reorder) window.vttDraw.reorder(it, 1);
+    return true;
+  }
+  function centrePct2(){ try { var c = window.toXY(window.map.getCenter()); return { x: c.x, y: c.y }; } catch(e){ return { x: 50, y: 50 }; } }
+  function dropPoint2(cx, cy){
+    var mapEl = $("apocMap"); if (!mapEl) return { x: 50, y: 50 };
+    var r = mapEl.getBoundingClientRect();
+    return { x: Math.max(2, Math.min(98, (cx - r.left) / r.width * 100)), y: Math.max(2, Math.min(98, (cy - r.top) / r.height * 100)) };
+  }
+  function buildNewArt(){
+    var catsEl = $("assetCats");
+    if (!catsEl || $("newArtNest")) return;
+    var subs = {};
+    NEWART.forEach(function(e){ (subs[e[2]] = subs[e[2]] || []).push(e); });
+    var wrap = document.createElement("div");
+    wrap.className = "nest mr-nest ar-cat"; wrap.id = "newArtNest"; wrap.dataset.cat = "newart";
+    var head = document.createElement("button");
+    head.type = "button"; head.className = "nest-head mr-folder-head"; head.setAttribute("aria-expanded", "false");
+    head.textContent = "New art — steampunk set (" + NEWART.length + ")";
+    var body = document.createElement("div"); body.className = "nest-body mr-body";
+    var grid = document.createElement("div"); grid.className = "ar-subgrid";
+    Object.keys(subs).forEach(function(sub){
+      var n = document.createElement("div"); n.className = "nest mr-nest ar-sub";
+      var h = document.createElement("button"); h.type = "button"; h.className = "nest-head mr-folder-head"; h.setAttribute("aria-expanded", "false");
+      h.textContent = sub + " (" + subs[sub].length + ")";
+      var bd = document.createElement("div"); bd.className = "nest-body mr-body";
+      var gr = document.createElement("div"); gr.className = "lib-grid";
+      subs[sub].forEach(function(e){
+        var b = document.createElement("button");
+        b.type = "button"; b.className = "lib-item ar-tile ar-tile-newart";
+        b.dataset.kind = "newart"; b.dataset.art = e[0]; b.dataset.name = e[1];
+        b.title = e[1] + " — drag onto the map, or tap to place at the centre";
+        var im = document.createElement("img"); im.src = PUB2 + e[0] + ".webp"; im.alt = e[1]; im.loading = "lazy"; im.draggable = false;
+        var cap = document.createElement("span"); cap.className = "lib-cap"; cap.textContent = e[1];
+        b.appendChild(im); b.appendChild(cap); gr.appendChild(b);
+      });
+      bd.appendChild(gr); n.appendChild(h); n.appendChild(bd); grid.appendChild(n);
+    });
+    body.appendChild(grid); wrap.appendChild(head); wrap.appendChild(body);
+    var uploads = catsEl.querySelector("[data-cat='uploads']");
+    if (uploads) catsEl.insertBefore(wrap, uploads); else catsEl.appendChild(wrap);
+    catsEl.addEventListener("click", function(e){
+      var b = e.target && e.target.closest ? e.target.closest(".ar-tile-newart") : null;
+      if (!b) return;
+      e.stopPropagation();
+      var entry = null; NEWART.forEach(function(x){ if (x[0] === b.dataset.art) entry = x; });
+      if (entry) placeNewArt(entry, centrePct2());
+    }, true);
+    catsEl.addEventListener("pointerdown", function(e){
+      var b = e.target && e.target.closest ? e.target.closest(".ar-tile-newart") : null;
+      if (!b || (e.button !== undefined && e.button > 0)) return;
+      e.stopPropagation(); e.preventDefault();
+      var sx = e.clientX, sy = e.clientY, ghost = null, moved = false;
+      function mv(ev){
+        if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) {
+          moved = true;
+          ghost = b.cloneNode(true); ghost.className = (ghost.className || "") + " drag-ghost"; ghost.style.width = b.offsetWidth + "px";
+          document.body.appendChild(ghost);
+        }
+        if (ghost) { ghost.style.left = ev.clientX + "px"; ghost.style.top = ev.clientY + "px"; }
+      }
+      function up(ev){
+        document.removeEventListener("pointermove", mv, true);
+        document.removeEventListener("pointerup", up, true);
+        if (ghost) ghost.remove();
+        if (!moved) return;
+        var entry = null; NEWART.forEach(function(x){ if (x[0] === b.dataset.art) entry = x; });
+        if (entry) placeNewArt(entry, dropPoint2(ev.clientX, ev.clientY));
+        b.dataset.dragged = String(Date.now());
+      }
+      document.addEventListener("pointermove", mv, true);
+      document.addEventListener("pointerup", up, true);
+    }, true);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ setTimeout(buildNewArt, 1500); });
+  else setTimeout(buildNewArt, 1500);
+  setTimeout(buildNewArt, 4500);
+})();
+</script>
+
+<style id="APOC-V248-GRP-CSS">
+/* APOC-V248 Group Grab: collected stamps wear a dashed amber outline
+   (drawn on the stamp's own img/box in its icon) — dark-blue treatment
+   chrome stays for controls; the outline is selection state only. */
+.stamp-icon .apoc-grp-sel{outline:2px dashed #e8a33d;outline-offset:1px;border-radius:4px}
+#apocGrpChip{position:fixed;left:8px;bottom:8px;z-index:1400;display:none;align-items:center;gap:8px;background:rgba(10,12,16,.92);border:1px solid #1e40af;border-radius:8px;color:#f5f5f5;font-size:.8rem;padding:4px 8px}
+#apocGrpChip.on{display:inline-flex}
+#apocGrpChip button{font:inherit;font-size:.78rem;padding:2px 8px;border-radius:6px;border:1px solid #1e40af;background:rgba(30,64,175,.25);color:#fff;cursor:pointer;min-height:0}
+</style>
+<script>
+/* APOC-V248 Group Grab (Shaun, 2026-11-10 ~14:45, corrected spec):
+   Ctrl+left-click an asset to ADD it to the group; Ctrl+click a
+   collected asset to REMOVE it; collected assets show a selection
+   outline; grab ANY collected asset and drag — the whole group moves
+   together, relative positions exact, and the move saves through the
+   draw record like a single move. Plain click stays single
+   selection/drag (the bridge's plain path). Phone: long-press an
+   asset toggles it in/out of the group, then drag any member.
+   Marquee rides along free: a plain press-drag that starts on EMPTY
+   map (no stamp hit, no tool armed) sweeps a box and collects every
+   stamp whose centre lands inside it. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  function $(id){ return document.getElementById(id); }
+  function gmOn(){ try { if (typeof window.effectiveGm === "function") return !!window.effectiveGm(); } catch(e){} var b = $("gmBtn"); return !!(b && b.getAttribute("aria-pressed") === "true"); }
+  function projecting(){ return document.body.classList.contains("displaying"); }
+  var group = [];
+  window.__apocGroup = function(){ return group.slice(); };
+  function chip(){
+    var c = $("apocGrpChip");
+    if (!c) {
+      c = document.createElement("div"); c.id = "apocGrpChip";
+      c.innerHTML = "<span id=\"apocGrpN\"></span>";
+      var cl = document.createElement("button"); cl.type = "button"; cl.textContent = "Clear group";
+      cl.addEventListener("click", function(){ setGroup([]); });
+      c.appendChild(cl);
+      var mq = document.createElement("button"); mq.type = "button"; mq.textContent = "Marquee: off";
+      mq.addEventListener("click", function(){ window.__apocMarqueeArm = !window.__apocMarqueeArm; mq.textContent = window.__apocMarqueeArm ? "Marquee: on" : "Marquee: off"; });
+      c.appendChild(mq); document.body.appendChild(c);
+    }
+    return c;
+  }
+  function refreshChip(){
+    var c = chip();
+    c.classList.toggle("on", group.length > 0 || !!window.__apocMarqueeArm);
+    var n = $("apocGrpN"); if (n) n.textContent = group.length ? (group.length + " grouped — drag any one to move all") : "";
+    markIcons();
+  }
+  function markIcons(){
+    if (!window.map || !window.map.eachLayer || !window.toXY) return;
+    /* collected items are matched to their rendered icons by position
+       (toXY of the marker's latlng == the item's stored x/y). */
+    var pts = group.map(function(it){ return it.x + "," + it.y; });
+    window.map.eachLayer(function(rec){
+      if (!rec || !rec.eachLayer) return;
+      rec.eachLayer(function(l){
+        if (!l || !l._icon || !l.getLatLng) return;
+        var cls = l._icon.querySelector && l._icon.querySelector("img, span");
+        if (!cls) return;
+        var p = window.toXY(l.getLatLng());
+        var on = pts.indexOf(p.x + "," + p.y) >= 0;
+        cls.classList.toggle("apoc-grp-sel", on);
+      });
+    });
+  }
+  function setGroup(items){ group = items.slice(); refreshChip(); }
+  /* APOC-V248 (probe294k): collect identity — the draw items array is
+     REBUILT on every save/render cycle (loadDraw re-parses the stored
+     record into fresh objects), so a collected item OBJECT goes stale:
+     toggle compared object identity and a re-collect after any save
+     read as a NEW item (double-add), and a group drag moved ghosts.
+     Identity is the item's stored position+kind signature instead —
+     positions only change through moves, which re-key on save. */
+  function keyOf(it){ return it ? (it.id ? "id:" + it.id : (it.x + "," + it.y + "," + (it.prop || it.sym || it.img || ""))) : ""; }
+  function inGroup(it){ var k = keyOf(it); return group.some(function(g){ return keyOf(g) === k; }); }
+  function liveOf(it){ if (!window.vttDraw || !window.vttDraw.items) return it; var k = keyOf(it); var f = window.vttDraw.items().find(function(x){ return keyOf(x) === k; }); return f || it; }
+  function toggle(it){
+    var k = keyOf(it), i = -1;
+    for (var j = 0; j < group.length; j++) if (keyOf(group[j]) === k) { i = j; break; }
+    if (i >= 0) group.splice(i, 1); else group.push(liveOf(it));
+    refreshChip();
+  }
+  function hitStamp(p){
+    if (!window.vttDraw || !window.vttDraw.items) return null;
+    var items = window.vttDraw.items();
+    for (var i = items.length - 1; i >= 0; i--) {
+      var it = items[i];
+      if (it.type !== "stamp") continue;
+      if (it.gm && !gmOn()) continue;
+      var r = Math.max(1.8, Math.max(it.fw || 0, it.fh || 0, it.size || 1) * 5 * 0.62); /* APOC-V248 (probe294c): hit circle from the rendered footprint — size/fw/fh are CELL counts; a cell is 5 map-% on the 20-wide generated frame */
+      if (Math.hypot(p.x - it.x, p.y - it.y) < r) return it;
+    }
+    return null;
+  }
+  function toolArmed(){
+    try {
+      var dt = $("drawTool"), drawOpen = false;
+      var sets = document.querySelectorAll(".ctl-set:not([hidden])");
+      for (var i = 0; i < sets.length; i++) if (sets[i].id === "set-draw") drawOpen = true;
+      if (drawOpen && dt && dt.value) return true;
+      var ids = ["addMarkerBtn", "addPlaceBtn", "pingBtn", "rulerBtn", "lightBtn", "fogBtn"];
+      for (var j = 0; j < ids.length; j++) { var b = $(ids[j]); if (b && b.getAttribute("aria-pressed") === "true") return true; }
+    } catch(e){}
+    return false;
+  }
+  /* ---- group drag state, shared with the plain bridge via events ---- */
+  var gdrag = null, marq = null, lpTimer = null, lpPoint = null;
+  function bind(){
+    if (!window.map || !window.map.on || bind.done) return;
+    bind.done = true;
+    var mapEl = $("apocMap");
+    /* Ctrl+click collect — DOM capture on the map element: Leaflet's
+       own click would ALSO fire the single-select paths, so a ctrl
+       press is owned here end-to-end (collect only, no drag). */
+    mapEl.addEventListener("pointerdown", function(e){
+      if (projecting() || toolArmed()) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!window.toXY || !window.map) return;
+      var ll = window.map.mouseEventToLatLng(e);
+      var p = window.toXY(ll);
+      var hit = hitStamp(p);
+      e.preventDefault(); e.stopPropagation();
+      if (hit) toggle(hit);
+    }, true);
+    /* long-press collect (phone) */
+    mapEl.addEventListener("pointerdown", function(e){
+      if (projecting() || toolArmed() || e.ctrlKey || e.metaKey) return;
+      if (e.pointerType !== "touch") return;
+      lpPoint = { x: e.clientX, y: e.clientY };
+      var sx = e.clientX, sy = e.clientY;
+      lpTimer = setTimeout(function(){
+        lpTimer = null;
+        if (!window.toXY || !window.map) return;
+        var ll = window.map.mouseEventToLatLng({ clientX: sx, clientY: sy });
+        var hit = hitStamp(window.toXY(ll));
+        if (hit) { toggle(hit); window.__apocLpFired = Date.now(); }
+      }, 550);
+    }, true);
+    mapEl.addEventListener("pointermove", function(e){
+      if (lpTimer && lpPoint && Math.hypot(e.clientX - lpPoint.x, e.clientY - lpPoint.y) > 10) { clearTimeout(lpTimer); lpTimer = null; }
+    }, true);
+    mapEl.addEventListener("pointerup", function(){ if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; } }, true);
+    /* APOC-V248 (probe294g): group drag + marquee ride the CONTAINER's
+       DOM mouse events — the Leaflet map mousemove chain is dead in
+       this build (see the drag bridge's conviction note). */
+    mapEl.addEventListener("mousedown", function(e){
+      if (projecting() || toolArmed()) return;
+      if (e.button > 0) return;
+      if (e.ctrlKey || e.metaKey) return;
+      if (window.__apocLpFired && Date.now() - window.__apocLpFired < 900) return;
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      var hit = hitStamp(p);
+      if (hit && inGroup(hit)) {
+        gdrag = { members: group.map(liveOf), last: p, moved: false, fresh: true };
+        if (window.map.dragging) window.map.dragging.disable();
+        return;
+      }
+      if (!hit && window.__apocMarqueeArm) {
+        /* APOC-V248 (probe294d): the marquee is a FREE EXTRA and must
+           never claim an ordinary map press — every empty-space press
+           in the battery (viewport checks, chip clicks near the map)
+           got its drag disabled and the press read as a marquee, and
+           on real use it fights the map pan. It arms only after the
+           Group chip's Marquee button is pressed. */
+        marq = { p0: p, cur: p, layer: null };
+        if (window.map.dragging) window.map.dragging.disable();
+      }
+    });
+    document.addEventListener("mousemove", function(e){
+      if (!gdrag && !marq) return;
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      if (gdrag) {
+        var dx = p.x - gdrag.last.x, dy = p.y - gdrag.last.y;
+        if (gdrag.fresh) { gdrag.fresh = false; gdrag.last = p; return; } /* basis-establishing first move (probe294r) */
+        if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); } /* APOC-V249: clamp-and-apply, same as the bridge */ /* basis re-anchor, 1.5% threshold (probe294w) */
+        if (dx || dy) {
+          /* clamp as a group: the shared delta is limited so every
+             member stays inside the frame — nobody is left behind */
+          var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity; /* APOC-V248 (diag-group6): bounds must start at the MEMBERS' extremes — seeding them with the frame (0/100) clamped every group delta to exactly 0 and the group could never move */
+          gdrag.members.forEach(function(it){ minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x); minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y); });
+          var cdx = Math.max(-minX, Math.min(dx, 100 - maxX)), cdy = Math.max(-minY, Math.min(dy, 100 - maxY));
+          gdrag.members.forEach(function(it){ it.x += cdx; it.y += cdy; });
+          gdrag.last = p; gdrag.moved = true;
+          if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+          refreshChip();
+        }
+        return;
+      }
+      if (marq) {
+        marq.cur = p;
+        try {
+          if (marq.layer) { window.map.removeLayer(marq.layer); marq.layer = null; }
+          if (window.L && window.L.rectangle) {
+            var b = [[Math.min(marq.p0.y, p.y), Math.min(marq.p0.x, p.x)], [Math.max(marq.p0.y, p.y), Math.max(marq.p0.x, p.x)]];
+            /* latlng space here is the frame's own: toLatLng inverse */
+            if (window.toLatLng) {
+              var a = window.toLatLng(marq.p0.x, marq.p0.y), c2 = window.toLatLng(p.x, p.y);
+              marq.layer = window.L.rectangle([a, c2], { color: "#1e40af", weight: 1, dashArray: "5 4", fill: false, interactive: false }).addTo(window.map);
+            }
+          }
+        } catch(err){}
+      }
+    });
+    function endAll(){
+      if (gdrag) {
+        var d = gdrag; gdrag = null;
+        if (window.map.dragging) window.map.dragging.enable();
+        if (d.moved && window.vttDraw && window.vttDraw.reorder) {
+          /* one save per member through the canonical path; the draw
+             record is whole-array, so the final state is one record */
+          d.members.forEach(function(it){ window.vttDraw.reorder(it, 1); });
+        }
+        return;
+      }
+      if (marq) {
+        var m = marq; marq = null;
+        if (window.map.dragging) window.map.dragging.enable();
+        if (m.layer) { try { window.map.removeLayer(m.layer); } catch(e){} }
+        var x0 = Math.min(m.p0.x, m.cur.x), x1 = Math.max(m.p0.x, m.cur.x), y0 = Math.min(m.p0.y, m.cur.y), y1 = Math.max(m.p0.y, m.cur.y);
+        if (x1 - x0 > 0.4 || y1 - y0 > 0.4) {
+          var inside = [];
+          if (window.vttDraw && window.vttDraw.items) window.vttDraw.items().forEach(function(it){
+            if (it.type === "stamp" && !(it.gm && !gmOn()) && it.x >= x0 && it.x <= x1 && it.y >= y0 && it.y <= y1) inside.push(it);
+          });
+          if (inside.length) setGroup(inside);
+        }
+      }
+    }
+    document.addEventListener("mouseup", endAll, true);
+    window.map.on("dragend", endAll);
+    /* APOC-V248 (phone): group drag rides touch pointer events — a
+       finger press on a grouped member drags the whole group. */
+    mapEl.addEventListener("pointerdown", function(e){
+      if (e.pointerType !== "touch" || projecting() || toolArmed()) return;
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      var hit = hitStamp(p);
+      if (hit && inGroup(hit)) {
+        gdrag = { members: group.map(liveOf), last: p, moved: false, fresh: true, touch: true };
+        if (window.map.dragging) window.map.dragging.disable();
+      }
+    });
+    document.addEventListener("pointermove", function(e){
+      if (!gdrag || !gdrag.touch || e.pointerType !== "touch") return;
+      if (!window.toXY || !window.map.mouseEventToLatLng) return;
+      var p = window.toXY(window.map.mouseEventToLatLng(e));
+      var dx = p.x - gdrag.last.x, dy = p.y - gdrag.last.y;
+      if (gdrag.fresh) { gdrag.fresh = false; gdrag.last = p; return; }
+      if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); } /* APOC-V249: clamp-and-apply, same as the bridge */
+      if (dx || dy) {
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        gdrag.members.forEach(function(it){ minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x); minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y); });
+        var cdx = Math.max(-minX, Math.min(dx, 100 - maxX)), cdy = Math.max(-minY, Math.min(dy, 100 - maxY));
+        gdrag.members.forEach(function(it){ it.x += cdx; it.y += cdy; });
+        gdrag.last = p; gdrag.moved = true;
+        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+        refreshChip();
+      }
+    }, true);
+    document.addEventListener("pointerup", function(e){ if (gdrag && gdrag.touch) endAll(); }, true);
+    document.addEventListener("pointercancel", function(){ if (gdrag && gdrag.touch) { gdrag = null; if (window.map.dragging) window.map.dragging.enable(); } }, true);
+  }
+  var iv = setInterval(function(){ try { chip(); } catch(e){} bind(); if (bind.done) clearInterval(iv); }, 800);
+  setTimeout(function(){ clearInterval(iv); }, 120000); /* APOC-V248 (probe294t): same bind-window widening as the drag bridge */
+})();
 </script>
 </body>
 </html>
