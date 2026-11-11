@@ -7762,7 +7762,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-10-2000";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-0912";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -16097,6 +16097,35 @@ return module.exports; })();</script>
     }
     setTimeout(function(){ window.dispatchEvent(new Event("resize")); }, 80);
   }
+  function defaultTuck(){
+    /* APOC-V250: the edge tuck is the DEFAULT state (Shaun 2026-11-10:
+       panels live on the side until clicked). v2.47 shipped it opt-in
+       only — libTucked was written solely by the #libTuckBtn glyph, so
+       in Shaun's hands nothing ever tucked. A record that has never
+       decided (no libTucked key) migrates to tucked, capturing the
+       current float rect exactly as tuckLib() does; a record with
+       libTucked:false (he expanded it himself) is respected forever. */
+    if (!mqD()) return;
+    var s = load();
+    if (Object.prototype.hasOwnProperty.call(s, "libTucked")) return;
+    var rp = repoEl(); if (!rp) return;
+    var r = rp.getBoundingClientRect();
+    if (!r.width || r.width <= 40) return;
+    var lib = libEl();
+    save({
+      libTucked: true,
+      libEdge: (r.left + r.width / 2) < window.innerWidth / 2 ? "left" : "right",
+      libAlong: Math.max(0, Math.round(r.top)),
+      libStripH: Math.round(Math.max(120, Math.min(r.height || 300, window.innerHeight))),
+      libWasOpen: !!(lib && lib.classList.contains("open")),
+      libFloatRect: { l: Math.round(r.left), t: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
+    });
+    if (lib && lib.classList.contains("open")) {
+      lib.classList.remove("open");
+      var h = headEl(); if (h) h.setAttribute("aria-expanded", "false");
+    }
+    applyLibTuck();
+  }
   function buildLibTuck(){
     var h = headEl(); if (!h || $("libTuckBtn")) return;
     var tb = document.createElement("span");
@@ -16127,7 +16156,9 @@ return module.exports; })();</script>
       var s = load();
       var H = Math.max(80, Math.min(Math.min(s.libStripH || 571, parseInt(localStorage.getItem("apocVttLibBoxH"), 10) || 571), window.innerHeight));
       var top = Math.max(0, Math.min(s.libAlong || 0, Math.max(0, window.innerHeight - H)));
-      if (rp.style.width !== STRIP_W + "px" || rp.style.height !== H + "px" || rp.style.top !== top + "px") applyLibTuck();
+      var wantL = s.libEdge === "left" ? "0px" : "auto";
+      var wantR = s.libEdge === "left" ? "auto" : "0px";
+      if (rp.style.width !== STRIP_W + "px" || rp.style.height !== H + "px" || rp.style.top !== top + "px" || rp.style.left !== wantL || rp.style.right !== wantR) applyLibTuck();
     });
     tuckMo.observe(rp, { attributes: true, attributeFilter: ["class", "style"] });
   }
@@ -16245,6 +16276,7 @@ return module.exports; })();</script>
         phSave({ barTucked: false }); applyPhoneBar();
       });
     }
+    if (!mqD()) { var ps = phLoad(); if (!Object.prototype.hasOwnProperty.call(ps, "barTucked")) phSave({ barTucked: true }); }
     applyPhoneBar();
   }
   window.addEventListener("resize", function(){ applyPhoneBar(); });
@@ -16264,6 +16296,7 @@ return module.exports; })();</script>
   function boot(){
     buildGroup();
     buildLibTuck();
+    defaultTuck();
     applyLibTuck();
     watchTuck();
     watchSets();
@@ -16272,7 +16305,7 @@ return module.exports; })();</script>
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
-  [1200, 3000].forEach(function(ms){ setTimeout(function(){ buildGroup(); buildLibTuck(); applyLibTuck(); watchTuck(); buildPhoneBar(); }, ms); });
+  [1200, 3000].forEach(function(ms){ setTimeout(function(){ buildGroup(); buildLibTuck(); defaultTuck(); applyLibTuck(); watchTuck(); buildPhoneBar(); }, ms); });
     var zoomParkWatch = setInterval(function(){
     try {
       var s = load(); if (!s.zoomHome247) return;
