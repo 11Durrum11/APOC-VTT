@@ -7794,7 +7794,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-1940";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-1952";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -18808,6 +18808,88 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
     if (/^image\/(png|jpeg|webp|gif)/.test(f.type || "") && typeof window.__apocDropMapFile === "function") window.__apocDropMapFile(f);
     else if (window.__apocDropNote) window.__apocDropNote("That's not a map image — drop a PNG, JPG, WebP or GIF file and it goes straight on the table. The board is unchanged.");
   });
+})();
+</script>
+
+<script>
+/* APOC-V259 — THE BUBBLE STAYS SQUARE (Shaun 2026-11-11 19:39, on v2.55: "The map bubble wants to stay slid up").
+   (Block number 259: APOC-V258 is the horizontal-tabs build landing as v2.58.)
+   Diagnosis (full record: work/full-sweep-report.md): he IS running the current bytes (his flight-recorder
+   boot entry carries the live build stamp). #mapPanel itself never moves — position:fixed !important,
+   rect == viewport in every seeded measurement. The only writers that can slide the panel's INSIDE are the
+   scrollIntoView family: openSet()'s restore scroll (fires at every boot from his saved open set, and on
+   every tab click), the token-form centering scroll, the monster/NPC detail scrolls, the initiative-row
+   scroll, and the Library nest scrolls. The panel carries a permanent ~59px internal overflow, and NO code
+   path ever returns the panel's scroll to the top — so in his real Chrome (scrollbar/DPR/timing differ from
+   the harness, where these calls happened to land on already-visible targets and never moved), any one of
+   those calls that lands on a below-fold target leaves the bubble resting slid up, permanently. His flight
+   recorder could not see it: it wraps scrollTo/scrollBy but never wrapped scrollIntoView.
+   FIX: (1) Element.prototype.scrollIntoView is wrapped — a target INSIDE #mapPanel no longer scrolls the
+   panel at all; the attempt is written to the flight recorder (kind "scrollintoview-blocked", coalesced 1/s)
+   so the glitch hunt can see this family from now on. Targets outside the panel pass through untouched.
+   (2) Rest position: after boot settles, if the panel is scrolled and Shaun has not scrolled it himself,
+   it returns to the top (map square). (3) When a tab click leaves every set closed, the panel returns to
+   the top — closing a set brings the map back square. NO periodic resets: a position Shaun scrolled to
+   himself is never fought (that fight is the standing scroll-pop complaint). */
+(function () {
+  "use strict";
+  var panel = null, userTouched = false;
+  function findPanel() { if (!panel) { try { panel = document.getElementById("mapPanel"); } catch (e) {} } return panel; }
+  function logBlocked(tag) {
+    try {
+      var k = "apocVttGlitchLog", a = [];
+      try { a = JSON.parse(localStorage.getItem(k) || "[]"); if (!Array.isArray(a)) a = []; } catch (e) { a = []; }
+      var now = Date.now(), last = a[a.length - 1];
+      if (last && last.kind === "scrollintoview-blocked" && now - (last._ts || 0) < 1000) return;
+      var build = "";
+      try { if (typeof BUILD_STAMP !== "undefined" && BUILD_STAMP) build = String(BUILD_STAMP); } catch (e) {}
+      a.push({ t: new Date().toISOString(), build: build, kind: "scrollintoview-blocked", detail: { tag: String(tag || "").slice(0, 60) }, _ts: now });
+      while (a.length > 150) a.shift();
+      localStorage.setItem(k, JSON.stringify(a));
+    } catch (e) {}
+  }
+  var origSIV = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = function () {
+    try {
+      var p = findPanel();
+      if (p && this && this !== p && p.contains(this)) { logBlocked(this.id || this.className || this.tagName); return; }
+    } catch (e) {}
+    return origSIV.apply(this, arguments);
+  };
+  function markTouched(e) {
+    try { var p = findPanel(); if (p && e && e.target && p.contains(e.target)) userTouched = true; } catch (err) {}
+  }
+  document.addEventListener("wheel", markTouched, { capture: true, passive: true });
+  document.addEventListener("touchstart", markTouched, { capture: true, passive: true });
+  function restTopBoot() {
+    try { var p = findPanel(); if (p && p.scrollTop > 0 && !userTouched) p.scrollTop = 0; } catch (e) {}
+  }
+  var bootTries = 0;
+  var bootPoll = setInterval(function () {
+    bootTries++;
+    var tabs = null;
+    try { tabs = document.querySelector(".apoc-tab"); } catch (e) {}
+    if (tabs || bootTries > 40) {
+      clearInterval(bootPoll);
+      setTimeout(restTopBoot, 2200);
+      setTimeout(restTopBoot, 5200);
+      setTimeout(restTopBoot, 10000);
+    }
+  }, 400);
+  document.addEventListener("click", function (e) {
+    var t = null;
+    try { t = e.target && e.target.closest ? e.target.closest(".apoc-tab") : null; } catch (err) {}
+    if (!t) return;
+    setTimeout(function () {
+      try {
+        var p = findPanel(); if (!p || p.scrollTop <= 0) return;
+        var sets = p.querySelectorAll(".ctl-set"), allClosed = sets.length > 0;
+        for (var i = 0; i < sets.length; i++) { if (!sets[i].hidden && sets[i].offsetParent !== null) { allClosed = false; break; } }
+        if (allClosed) p.scrollTop = 0;
+      } catch (err) {}
+    }, 450);
+  }, true);
+  findPanel();
 })();
 </script>
 
