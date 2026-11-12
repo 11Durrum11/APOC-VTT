@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1227";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1402";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -15900,16 +15900,31 @@ return module.exports; })();</script>
     try { if (window.__apocShelf && window.__apocShelf.current) return window.__apocShelf.current(); } catch(e){}
     var s = $("mapSelect"); return s ? s.value : null;
   }
-    function clampBubble(){
-    var row = $("ctlRow"); if (!row || !mqD()) return;
-    var r = row.getBoundingClientRect();
-    if (r.bottom > window.innerHeight - 4 && window.scrollY > 0) window.scrollBy(0, -Math.min(window.scrollY, r.bottom - (window.innerHeight - 4)));
-    else if (r.bottom > window.innerHeight - 4) { var d = r.bottom - (window.innerHeight - 4); window.scrollTo(0, window.scrollY + d); }
-    r = row.getBoundingClientRect();
-    if (r.top < 4 && window.scrollY > 0) window.scrollBy(0, r.top - 4);
-  }
-  [1600, 3200, 5200, 8000].forEach(function(ms){ setTimeout(clampBubble, ms); });
-    setInterval(clampBubble, 2500);
+    /* APOC-V267 — clampBubble REMOVED (GH-SCROLLWRITE-CLAMP, the scroll-pop).
+       The clamp was a scrollable-page-era guard: on boot timeouts and a
+       2500ms interval it checked whether #ctlRow sat below the fold and
+       corrected the WINDOW's scroll to keep the bar reachable. Since the
+       v2.55 bubble lock the panel is fixed 100dvw x 100dvh and scrolls
+       internally; the window does not scroll (docH == innerHeight in every
+       intact-layout measurement), so a window-scroll correction can no
+       longer move the row at all — the row's rect is scroll-invariant
+       inside the fixed panel. Its only remaining effects were the harms:
+       whenever the JS-observed innerHeight dipped below the layout truth
+       (the v2.65 viewport-transient family — capture/share, display
+       switch, window restore) the scrollY==0 branch fired a
+       non-converging scrollTo(0, d) every 2.5s forever (his real v2.65
+       session recorder: 24 x scrollTo(0, 86.20999145507812) + 5 x
+       scrollTo(0, 4.20001220703125)), and whenever the window held a
+       scroll position with the row below the fold the scrollY>0 branch
+       scrolled the user back up — "when I scroll down the map screen, it
+       pops back up." The clamp's whole body was window-scroll writes, so
+       there is no scroll-free form of it to preserve; panel-internal
+       scroll rest is already owned by the APOC-V259 rest passes (with
+       their user-scroll guard), and adding a second writer there would
+       recreate the fighting-writers family. Nothing else called
+       clampBubble. The function, its four boot timeouts, and the 2500ms
+       interval are deleted: no timer in this block writes window scroll
+       ever again. */
   async function readRow(key){
     try { var r = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle(); return (r && r.data && r.data.value) || null; } catch(e){ return null; }
   }
