@@ -4507,39 +4507,67 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
       });
     } catch(e) { return []; }
   }
+  /* APOC-V256 — drop feedback: the toast (APOC-V256 block at the end of
+     the body) is visible wherever the drop lands; drawStatus keeps the
+     message too for the Draw set's own record. */
+  function dropNote(msg){
+    try { if (window.__apocDropNote) { window.__apocDropNote(msg); return; } } catch(e) {}
+    if (drawStatusEl) drawStatusEl.textContent = msg;
+  }
   async function addDroppedFile(file){
     if (isDd2vttFile(file)) { await addDd2vttFile(file); return; }
-    if (!file || !/^image\/(png|jpeg|webp|gif)/.test(file.type)) return;
+    if (!file || !/^image\/(png|jpeg|webp|gif)/.test(file.type)) {
+      dropNote("That's not a map image — drop a PNG, JPG, WebP or GIF file and it goes straight on the table. The board is unchanged.");
+      return;
+    }
     const url = URL.createObjectURL(file);
     let dims = null;
     try { const im = await loadCanvasImage(url); dims = { w: im.naturalWidth, h: im.naturalHeight }; } catch(e) { dims = null; }
-    if (!dims || !dims.w || !dims.h) { drawStatusEl.textContent = "That image couldn't be read."; return; }
+    if (!dims || !dims.w || !dims.h) { dropNote("That image couldn't be read — the board is unchanged."); URL.revokeObjectURL(url); return; }
     const id = "drop-" + Date.now().toString(36);
     const name = (file.name || "Dropped map").replace(/\.[a-z0-9]+$/i, "").slice(0, 60) || "Dropped map";
     const ext = file.type === "image/jpeg" ? "jpg" : file.type.split("/")[1];
     const path = `vtt-maps/${id}.${ext}`;
-    await idbPut({ id, name, w: dims.w, h: dims.h, blob: file });
+    /* The dropped file registers WITH its content hash (the sync's
+       dedupe/tombstone key) and a manual flag: a map Shaun drops by
+       hand is present in the registry on its own hash, so the
+       collection sync treats it as already-present and no tombstone
+       from the library emptying can prune it — his own drop beats
+       the tombstone. The tombstone only stops the automatic sync. */
+    let sha = "";
+    try {
+      const dig = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+      sha = [...new Uint8Array(dig)].map(b => b.toString(16).padStart(2, "0")).join("");
+    } catch(e) { sha = ""; }
+    /* Upload FIRST, board second: if the shared upload or the
+       registry save fails, the board stays exactly as it was —
+       no half-loaded map, nothing switched on this device only. */
     let shared = false;
     try {
       const { error } = await db.storage.from(DROP_BUCKET).upload(path, file, { contentType: file.type, upsert: false });
       shared = !error;
     } catch(e) { shared = false; }
-    const rec = { id, name, w: dims.w, h: dims.h, path };
-    if (shared) {
-      dropMaps = [...dropMaps.filter(m => m.id !== id), rec];
-      await saveDropRegistry();
-      registerDropMap(rec);
-      drawStatusEl.textContent = `"${name}" added at full resolution (${dims.w}×${dims.h}).`;
-      switchMap(id);
-      await saveActiveMap();
-    } else {
-      localOnlyIds.add(id);
-      registerDropMap(rec, url);
-      const opt = $("mapSelect").querySelector(`option[value="${id}"]`);
-      if (opt) opt.textContent = `${name} (this device)`;
-      drawStatusEl.textContent = `"${name}" added at full resolution (${dims.w}×${dims.h}) on this device — the shared upload didn't go through, so other screens can't load it yet.`;
-      switchMap(id);
+    if (!shared) {
+      dropNote(`"${name}" couldn't be uploaded to the shared store — the board is unchanged. Check the connection and drop it again.`);
+      URL.revokeObjectURL(url);
+      return;
     }
+    const rec = { id, name, w: dims.w, h: dims.h, path, cat: "Maps", folder: "drop", src: "drop", manual: true };
+    if (sha) rec.sha256 = sha;
+    dropMaps = [...dropMaps.filter(m => m.id !== id), rec];
+    const saved = await saveDropRegistry();
+    if (!saved) {
+      dropMaps = dropMaps.filter(m => m.id !== id);
+      try { await db.storage.from(DROP_BUCKET).remove([path]); } catch(e) {}
+      dropNote(`"${name}" uploaded but the shared registry didn't save — the board is unchanged. Drop it again in a moment.`);
+      URL.revokeObjectURL(url);
+      return;
+    }
+    await idbPut({ id, name, w: dims.w, h: dims.h, blob: file });
+    registerDropMap(rec);
+    dropNote(`"${name}" is on the table at full resolution (${dims.w}x${dims.h}).`);
+    switchMap(id);
+    await saveActiveMap();
   }
   const panelEl = $("mapPanel");
   panelEl.addEventListener("dragenter", e => { e.preventDefault(); $("apocMap").classList.add("drag-over"); });
@@ -4550,12 +4578,18 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     $("apocMap").classList.remove("drag-over");
     const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
     if (!f) return;
-    if (e.target && e.target.closest && e.target.closest("#apocMap") && !isDd2vttFile(f)) {
-      const rect = $("apocMap").getBoundingClientRect();
-      const ll = map.containerPointToLatLng(L.point(e.clientX - rect.left, e.clientY - rect.top));
-      addDroppedTokenFile(f, toXY(ll));
-    } else addDroppedFile(f);
+    if (e.target && e.target.closest && e.target.closest("#assetDrop")) return; /* the Library's own uploads box keeps its meaning — add as an asset */
+    /* APOC-V256 (Shaun, 2026-11-11 19:02 — "Make it so I could drop a
+       map on the table and go from there"): an image file dropped on
+       the table IS the map. From the emptied VTT there is no library
+       detour: the file uploads, registers as a Map, and loads as the
+       active board map. (Before V256 a drop landing on #apocMap
+       became a TOKEN — that shortcut is superseded by this order;
+       addDroppedTokenFile stays in the bytes but the table drop no
+       longer routes to it.) */
+    addDroppedFile(f);
   });
+  window.__apocDropMapFile = addDroppedFile; /* the APOC-V256 page-level drop guard routes files dropped outside the panel here */
   async function addDroppedTokenFile(file, p){
     if (!file || !/^image\/(png|jpeg|webp|gif)/.test(file.type)) return;
     const id = "drop-" + Date.now().toString(36);
@@ -7760,7 +7794,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-1907";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-1940";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -18711,6 +18745,69 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
     }
   } catch (e) {}
   try { push("recorder-boot", { build: build }, true); } catch (e) {}
+})();
+</script>
+
+<style>
+/* APOC-V256 — drop-a-map feedback + affordance (Shaun, 2026-11-11 19:02) */
+#apocDropToast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:3000;max-width:min(92vw,640px);background:#0b0e13;color:#f2f5f9;border:1px solid #2b4a7a;border-radius:8px;padding:10px 16px;font:600 .92rem/1.35 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .25s ease;text-align:center}
+#apocDropToast.show{opacity:1}
+.apoc-map.drag-over::after{content:"Drop the map — it goes on the table";position:absolute;inset:0;z-index:1200;display:flex;align-items:center;justify-content:center;background:rgba(5,8,12,.45);color:#fff;font:700 1.6rem/1.2 system-ui,sans-serif;letter-spacing:.02em;pointer-events:none;text-shadow:0 2px 10px rgba(0,0,0,.8)}
+</style>
+<script>
+"use strict";
+/* APOC-V256 — DROP A MAP ON THE TABLE (Shaun, 2026-11-11 19:02: "Make
+   it so I could drop a map on the table and go from there").
+   The routing itself lives in the main drop handler (the panel drop
+   listener now sends image files to addDroppedFile as MAPS — see the
+   APOC-V256 comment there). This block carries the two things the
+   main closure cannot do for itself:
+   1. __apocDropNote — a toast visible wherever the drop lands (the
+      old feedback element sits inside the Draw set, which may be
+      closed); it also mirrors into #drawStatus for the record.
+   2. A page-level drop guard: a file dropped OUTSIDE the map panel
+      (on the tab tracks, the page margins) must never navigate the
+      browser away from the VTT — it routes to the same map loader
+      (window.__apocDropMapFile) or, for a non-image, the same note.
+      Drops inside the panel are the panel listener's alone (no
+      double handling), and the Library's #assetDrop box keeps its
+      own meaning. */
+(function(){
+  var toast = null, toastTimer = 0;
+  function ensureToast(){
+    if (toast) return toast;
+    toast = document.createElement("div");
+    toast.id = "apocDropToast";
+    toast.setAttribute("role", "status");
+    document.body.appendChild(toast);
+    return toast;
+  }
+  window.__apocDropNote = function(msg){
+    var t = ensureToast();
+    t.textContent = msg;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ t.classList.remove("show"); }, 5200);
+    var ds = document.getElementById("drawStatus");
+    if (ds) ds.textContent = msg;
+  };
+  function hasFiles(e){
+    var t = e.dataTransfer && e.dataTransfer.types;
+    if (!t) return false;
+    for (var i = 0; i < t.length; i++) if (t[i] === "Files") return true;
+    return false;
+  }
+  document.addEventListener("dragover", function(e){ if (hasFiles(e)) e.preventDefault(); });
+  document.addEventListener("drop", function(e){
+    if (!hasFiles(e)) return;
+    var tgt = e.target;
+    if (tgt && tgt.closest && (tgt.closest("#mapPanel") || tgt.closest("#assetDrop"))) return; /* the panel listener / the uploads box own these */
+    e.preventDefault();
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!f) return;
+    if (/^image\/(png|jpeg|webp|gif)/.test(f.type || "") && typeof window.__apocDropMapFile === "function") window.__apocDropMapFile(f);
+    else if (window.__apocDropNote) window.__apocDropNote("That's not a map image — drop a PNG, JPG, WebP or GIF file and it goes straight on the table. The board is unchanged.");
+  });
 })();
 </script>
 
