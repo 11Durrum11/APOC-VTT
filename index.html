@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1402";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1431";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -19392,6 +19392,45 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
   width:max-content !important;max-width:100% !important;
   margin:0 0 2px !important;padding:2px 6px !important;
   min-height:0 !important;line-height:1.15 !important;text-align:left !important}
+</style>
+
+<style id="APOC-V268-CSS">
+/* APOC-V268 (Shaun, 2026-11-12 14:09 MST — "look for anything that's
+   squished together and give it a little space so we could see
+   everything without everything being squished together. Every tree
+   everywhere."): a full census of every tree in the VTT (probe391–395,
+   Shaun's verbatim 2026-11-12-1304 record, desktop 1366×768 + phone
+   390×844) found the tab tracks, all nine ctl sets, the Screens bar,
+   the Fog/Lighting sets, every Library tile grid and the dice tree
+   already comfortable — and exactly two squishes:
+   (1) LIBRARY NEST BODIES ARE CAPPED BY A STALE INLINE MAX-HEIGHT.
+       Every open nest body in the Library carries an inline max-height
+       written from the head's position at some earlier tick, NOT from
+       its content — so any tree whose content outgrows that snapshot
+       is cut: at full-open the Monsters section boxed 14,921px of
+       folders into 523px (phone: 38,642px into 587px), NPCs 1,409px
+       into 249px (phone 3,530 into 282), the Assets section 3,965px
+       into 1,071px, the Maps section 283px into the 140px floor —
+       8 trees capped on desktop, 10 on phone, the caps landing on
+       different trees from session to session. With overflow visible
+       the overflow paints over the sections below instead of pushing
+       them down: trees crowd and hide each other. FIX: an open inner
+       nest body in the Library takes its full natural height — the
+       Library's own outer body keeps its panel sizing and stays the
+       one scroll, so every tree now opens FULLY inside it. The
+       Library's own body is not matched (it is not inside a
+       .nest-body), no handler, DOM order or record is touched, and
+       Shaun's recorded orders (LibSubOrder, dragged arrangements)
+       govern sequence exactly as before — geometry only.
+   (2) THE MAP DROPDOWN'S ROWS TOUCH: #mapDdPanel's grid ran a 1px
+       row gap, so its two-line map rows (38.9px) sat 1px apart,
+       pitch 39.9px. Row gap raised to 5px; the 18px column gap and
+       the panel's own viewport sizing are unchanged.
+   Everything else the census measured stays exactly as it was —
+   minimum footprint stands; this adds air only where content was
+   being hidden or rows were touching. */
+.map-repo #artLibrary .nest-body .nest.open > .nest-body{max-height:none !important;height:auto !important}
+#mapDdPanel .mapdd-grid{gap:5px 18px}
 </style>
 </body>
 </html>
