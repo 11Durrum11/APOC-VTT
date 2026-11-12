@@ -7794,7 +7794,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-1952";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-2011";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -18144,6 +18144,35 @@ body.apoc-tabs254 .apoc-track{display:none!important}
         track.appendChild(el);
       });
     });
+    /* V258: re-seat lock slots at their canonical position — the
+       appends above move every tab to the track end, which floats a
+       slot to the track top and lets a neighbour slide under the
+       pinned tab it was holding space for. The slot's box is then
+       aligned to the pinned tab's fixed rect: if the stack above the
+       seat changed height (a tab dragged off the edge), the canonical
+       seat and the pin diverge, and the margin absorbs the difference
+       so the seat stays exactly under the pin. */
+    EDGES.forEach(function(e){
+      var track = trackEl(e), order = r.edges[e];
+      track.querySelectorAll(":scope > .apoc-tab-slot").forEach(function(ph){
+        var fid = ph.getAttribute("data-for");
+        var myIdx = order.indexOf(fid);
+        if (myIdx < 0) return;
+        ph.style.marginTop = ""; ph.style.marginLeft = "";
+        var before = null;
+        [...track.children].forEach(function(c){
+          if (before || c === ph || !c.classList.contains("apoc-tab")) return;
+          if (order.indexOf(c.id) > myIdx) before = c;
+        });
+        if (before) track.insertBefore(ph, before); else track.appendChild(ph);
+        var lr = r.lockRects[fid];
+        if (lr) {
+          var pr = ph.getBoundingClientRect();
+          if (e === "L" || e === "R") ph.style.marginTop = Math.round(lr.t - pr.top) + "px";
+          else ph.style.marginLeft = Math.round(lr.l - pr.left) + "px";
+        }
+      });
+    });
     /* locked tabs whose canonical edge list no longer names them are
        still placed (defensive; sanitize keeps them listed) */
     TABS.forEach(function(id){
@@ -18621,7 +18650,30 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
         if (!t254.locks[id]) return;
         var tab = $(id);
         if (!tab || !tab.classList.contains("apoc-tab-locked")) return;
-        if (track.querySelector('.apoc-tab-slot[data-for="' + id + '"]')) return;
+        var existing = track.querySelector('.apoc-tab-slot[data-for="' + id + '"]');
+        if (existing) {
+          /* V258: re-seat + align an existing slot (the twin of the
+             pass in apply()): this runs 250ms after every pointerup,
+             so a seat disturbed when the stack above it changes is
+             restored — canonical position first, then the box aligned
+             to the pinned tab's fixed rect by margin, so no neighbour
+             can slide under the pin. */
+          var order0 = t254.edges[e], myIdx0 = order0.indexOf(id);
+          existing.style.marginTop = ""; existing.style.marginLeft = "";
+          var before0 = null;
+          [...track.children].forEach(function(c){
+            if (before0 || c === existing || !c.classList.contains("apoc-tab")) return;
+            if (order0.indexOf(c.id) > myIdx0) before0 = c;
+          });
+          if (before0) track.insertBefore(existing, before0); else track.appendChild(existing);
+          var lr0 = t254.lockRects && t254.lockRects[id];
+          if (lr0) {
+            var pr0 = existing.getBoundingClientRect();
+            if (e === "L" || e === "R") existing.style.marginTop = Math.round(lr0.t - pr0.top) + "px";
+            else existing.style.marginLeft = Math.round(lr0.l - pr0.left) + "px";
+          }
+          return;
+        }
         var ph = document.createElement("div");
         ph.className = "apoc-tab-slot";
         ph.setAttribute("data-for", id);
@@ -18893,5 +18945,24 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
 })();
 </script>
 
+<style id="APOC-V258-CSS">
+/* APOC-V258 (Shaun, 2026-11-11 19:42): "Make the tabs horizontal so I
+   can read them." The side tracks keep their vertical STACK, but every
+   chip in them takes the same horizontal form as the top/bottom chips:
+   132px long x 28px thick, text left-to-right — never rotated, never
+   vertical, never clipped. Pure rendering: edges, order, locks and the
+   tabs254 record are untouched; a chip keeps this exact form on
+   whichever edge it is dragged to.
+   Two cascade convictions ride along: (1) phone-width stylesheets floor
+   button min-height at 36/44px, which the old 132px-tall side tabs
+   masked and the 28px chip cannot — the floor is zeroed for tabs and
+   slots so the chip is 28px thick on phone too; (2) the lock slot's
+   canonical seat is re-asserted inside apply() itself (patched in
+   place there, marked V258) — a bare append pass floats the slot to
+   the track top and lets a neighbour slide under the pinned tab. */
+.apoc-tabtrack.v>.apoc-tab{width:132px;height:28px;writing-mode:horizontal-tb;text-orientation:mixed}
+.apoc-tabtrack>.apoc-tab{min-height:0!important}
+.apoc-tab-slot{width:132px;height:28px;min-height:0!important}
+</style>
 </body>
 </html>
