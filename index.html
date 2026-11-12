@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-2047";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-0804";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -18070,10 +18070,22 @@ body.apoc-tabs254 .apoc-track{display:none!important}
   function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
   function R(n){ return Math.round(n); }
 
-  var HOME = { mapTab:"L", addMarkerBtn:"L", addPlaceBtn:"L", genBtn:"L", gmBtn:"L",
+  /* APOC-V260 (Shaun, 2026-11-12): the seven outside Screens duplicates
+     are OUT of the tab system — Screen 2 (screen2OpenBtn), Screen 2:
+     Send map (screen2SendBtn), Screen 2: Mirror (screen2MirrorBtn),
+     Screen 2: DM (tvDm2Btn), Generate Map (genBtn), Push to TV
+     (pushTvBtn), TV: DM (tvDm1Btn). They duplicate the Screens set's
+     inner buttons, which keep working through these same elements
+     (grp* -> clickIdRetry; dmAll clicks tvDm1Btn/tvDm2Btn directly):
+     the elements stay in the DOM with their handlers, parked invisible
+     in the hidden V251 rails, and are simply no longer tabs. Their ids
+     drop out of any saved tabs254 record at the next apply() — the
+     record re-flows with no gaps, locks on the remaining tabs are
+     untouched, and a reload cannot resurrect the seven because no
+     default-fill names them any more. */
+  var HOME = { mapTab:"L", addMarkerBtn:"L", addPlaceBtn:"L", gmBtn:"L",
     toolsTab:"L", fogTab:"L", lightTab:"L", drawTab:"L", layersTab:"L", diceTab:"L", grpHead:"L",
-    screen2OpenBtn:"R", screen2SendBtn:"R", screen2MirrorBtn:"R", pushTvBtn:"R", tvDm1Btn:"R",
-    tvDm2Btn:"R", ambBtn:"R", libTab253:"R", arLockBtn:"R",
+    ambBtn:"R", libTab253:"R", arLockBtn:"R",
     dmLockBtn:"DM", dmResetLayoutBtn:"DM", dmResetTextBtn:"DM", dmExitBtn:"DM" };
   var TABS = Object.keys(HOME);
   var DMIDS = ["dmLockBtn", "dmResetLayoutBtn", "dmResetTextBtn", "dmExitBtn"];
@@ -18153,7 +18165,14 @@ body.apoc-tabs254 .apoc-track{display:none!important}
 
   function apply(){
     var r = rec254();
-    if (!load().tabs254) saveRec(r);
+    /* V260: persist the sanitized record whenever sanitizing changed
+       it — e.g. the seven removed Screens duplicates dropping out of
+       a saved tabs254. Placement already used the clean record, but
+       the stored one kept naming the removed ids forever. */
+    var stored254 = load().tabs254;
+    if (!stored254 || JSON.stringify(stored254.edges) !== JSON.stringify(r.edges)
+      || JSON.stringify(stored254.locks || {}) !== JSON.stringify(r.locks)
+      || JSON.stringify(stored254.lockRects || {}) !== JSON.stringify(r.lockRects)) saveRec(r);
     clearBtnPark();
     document.body.classList.add("apoc-tabs254");
     EDGES.forEach(function(e){ trackEl(e); });
@@ -18988,6 +19007,21 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
 .apoc-tabtrack.v>.apoc-tab{width:132px;height:28px;writing-mode:horizontal-tb;text-orientation:mixed}
 .apoc-tabtrack>.apoc-tab{min-height:0!important}
 .apoc-tab-slot{width:132px;height:28px;min-height:0!important}
+</style>
+<style id="APOC-V260-CSS">
+/* APOC-V260 (Shaun, 2026-11-12): "Separate the APOC VTT version 2.59
+   from the reset layout button." Inside the title bubble the version
+   label (#siteVersion) and the Reset layout button (#layoutResetBtn)
+   sat as plain flex neighbours, 8px apart — against each other. The
+   version now carries 10px of right margin and the button 14px of
+   left margin with a hairline divider on its left edge: 32px of
+   clear daylight between the version text and the button, inside the
+   bubble's own flex layout, so the separation holds wherever the
+   bubble is parked, at phone width too, and across reloads (pure
+   CSS — nothing can drift back). The button's box only grows into
+   the gap; its hit area stays fully its own. */
+#titleBubble #siteVersion{margin-right:10px}
+#titleBubble #layoutResetBtn{margin-left:14px;border-left:1px solid rgba(157,180,216,.45);padding-left:12px!important}
 </style>
 </body>
 </html>
