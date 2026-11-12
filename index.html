@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-0804";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-0830";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -17651,7 +17651,7 @@ body.apoc-side251 #phBarStrip{display:none!important}
   function mqD(){ return window.matchMedia("(min-width: 821px)").matches; }
   function clamp(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
 
-  var LEFT = ["mapTab","addMarkerBtn","addPlaceBtn","genBtn","gmBtn","toolsTab","fogTab","lightTab","drawTab","layersTab","diceTab","grpHead"];
+  var LEFT = ["mapTab","genBtn","gmBtn","toolsTab","fogTab","lightTab","drawTab","layersTab","diceTab","grpHead"];
   var RIGHT = ["screen2OpenBtn","screen2SendBtn","screen2MirrorBtn","pushTvBtn","tvDm1Btn","tvDm2Btn","ambBtn","libTab253","arLockBtn"];
   var ALL = LEFT.concat(RIGHT);
   /* gmBtn + pushTvBtn keep their btn-roam class as a DO-NOT-TOUCH
@@ -18083,7 +18083,12 @@ body.apoc-tabs254 .apoc-track{display:none!important}
      record re-flows with no gaps, locks on the remaining tabs are
      untouched, and a reload cannot resurrect the seven because no
      default-fill names them any more. */
-  var HOME = { mapTab:"L", addMarkerBtn:"L", addPlaceBtn:"L", gmBtn:"L",
+  /* APOC-V261 (Shaun, 2026-11-12): Add Marker / Add Place are out of
+     the tab registry too — they live inside the Tools set now, right
+     next to Add Token (the APOC-V261 block at the end of the page
+     nests them there). Same migration as V260: their ids drop out of
+     any saved tabs254 at the next apply(). */
+  var HOME = { mapTab:"L", gmBtn:"L",
     toolsTab:"L", fogTab:"L", lightTab:"L", drawTab:"L", layersTab:"L", diceTab:"L", grpHead:"L",
     ambBtn:"R", libTab253:"R", arLockBtn:"R",
     dmLockBtn:"DM", dmResetLayoutBtn:"DM", dmResetTextBtn:"DM", dmExitBtn:"DM" };
@@ -19023,5 +19028,68 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
 #titleBubble #siteVersion{margin-right:10px}
 #titleBubble #layoutResetBtn{margin-left:14px;border-left:1px solid rgba(157,180,216,.45);padding-left:12px!important}
 </style>
+<script>
+/* APOC-V261 (Shaun, 2026-11-12 ~08:29): "nest Add Marker and Add
+   Place inside Tools, right next to the Add Token button" — and their
+   outside tabs come off (V261 registry edit in APOC-V254's HOME, and
+   APOC-V251's LEFT no longer parks them in the rail). This block is
+   the nesting writer: it moves the two REAL buttons (same elements,
+   same arm/open handlers — addMarkerBtn arms the marker flow,
+   addPlaceBtn arms the place flow) into #set-tools immediately after
+   #addTokenBtn: [Ruler] [Ping] [Add Token] [Add Marker] [Add Place].
+   Bounded boot retries only (the house pattern, matching V254's 36s
+   horizon — no watcher, no interval). Once Shaun rearranges them
+   inside the set, the V255 inner-order record names the Tools group:
+   membership in the set is still guaranteed here, but the ORDER is
+   then the record's (applied with applyOrders' own semantics) — his
+   arrangement wins over the default nesting. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  function $(id){ return document.getElementById(id); }
+  function toolsRecord(){
+    try {
+      var o = JSON.parse(localStorage.getItem("apocVttInnerOrder255") || "{}");
+      for (var k in o) {
+        if (k.indexOf("set-tools") !== 0 || !Array.isArray(o[k])) continue;
+        if (o[k].indexOf("#addMarkerBtn") >= 0 || o[k].indexOf("#addPlaceBtn") >= 0) return o[k];
+      }
+    } catch(e){}
+    return null;
+  }
+  function btnKeyOf(b){
+    if (b.dataset && b.dataset.innerKey255) return b.dataset.innerKey255;
+    if (b.id) return "#" + b.id;
+    return (b.textContent || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "btn";
+  }
+  function nest(){
+    var tools = $("set-tools"), tok = $("addTokenBtn"), amb = $("addMarkerBtn"), apb = $("addPlaceBtn");
+    if (!tools || !tok || !amb || !apb) return;
+    [amb, apb].forEach(function(el){
+      el.classList.remove("apoc-tab", "apoc-track-btn", "ctl-tab");
+      delete el.dataset.tabEdge;
+    });
+    var rec = toolsRecord();
+    if (rec) {
+      if (amb.parentElement !== tools) tools.appendChild(amb);
+      if (apb.parentElement !== tools) tools.appendChild(apb);
+      var btns = Array.prototype.slice.call(tools.children).filter(function(c){ return c.tagName === "BUTTON"; });
+      var byKey = {};
+      btns.forEach(function(b){ byKey[btnKeyOf(b)] = b; });
+      var ordered = [];
+      rec.forEach(function(k){ if (byKey[k]) { ordered.push(byKey[k]); delete byKey[k]; } });
+      btns.forEach(function(b){ if (ordered.indexOf(b) < 0) ordered.push(b); });
+      var after = btns.length ? btns[btns.length - 1].nextSibling : null;
+      ordered.forEach(function(b){ tools.insertBefore(b, after); });
+      return;
+    }
+    if (amb.parentElement !== tools || amb.previousElementSibling !== tok) tok.insertAdjacentElement("afterend", amb);
+    if (apb.parentElement !== tools || apb.previousElementSibling !== amb) amb.insertAdjacentElement("afterend", apb);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", nest);
+  else nest();
+  [500, 1200, 2500, 4500, 8000, 14000, 22000, 36000].forEach(function(ms){ setTimeout(nest, ms); });
+})();
+</script>
 </body>
 </html>
