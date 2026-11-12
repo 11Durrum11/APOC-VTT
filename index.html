@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-0830";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-0928";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -10604,8 +10604,13 @@ function floorConnected(L, cols, rows){
     rb.addEventListener("click", function(){
       [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttZoomBarPhoneV1", "apocVttMapSizeV1", "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttPanelParkV1", "apocVttViewV1", "apocVttTuckV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });       location.reload();
     });
-    titleBubble.appendChild(rb);
+    /* APOC-V262: the Reset layout button is NOT appended into the
+       bubble — it is the bubble's next sibling, its own standalone
+       button standing clear of the header (Shaun, 2026-11-12: "The
+       reset layout is its own button"). glueReset() below keeps it
+       parked beside the bubble when the bubble floats. */
     panel.insertBefore(titleBubble, panel.firstChild);
+    panel.insertBefore(rb, titleBubble.nextSibling);
     head.classList.add("head-gone");
   }
 
@@ -10786,6 +10791,7 @@ function floorConnected(L, cols, rows){
     }
     var cr = document.querySelector(".ctl-row"); if (cr && !cr.dataset.fpDone) { cr.dataset.fpDone = "1"; var bar = cr.querySelector(".ctl-bar") || cr; if (!bar.querySelector(":scope > .fp-grip")) { var g2 = document.createElement("span"); g2.className = "fp-grip"; g2.textContent = "\u283f"; g2.title = "Drag to move"; bar.insertBefore(g2, bar.firstChild); makeDraggable(cr, "ctlrow", g2); } addLock(cr, "ctlrow", bar); addHandles(cr, "ctlrow"); var rr = rec.ctlrow; if (rr && typeof rr.x === "number") { detach(cr, { left: clamp(rr.x, -20, window.innerWidth - 60), top: clamp(rr.y, 0, window.innerHeight - 26), width: rr.w || cr.getBoundingClientRect().width, height: rr.h || cr.getBoundingClientRect().height }); applyOrient(cr); } paintLock(cr, "ctlrow"); }
     if (titleBubble && !titleBubble.dataset.fpDone) { titleBubble.dataset.fpDone = "1"; makeDraggable(titleBubble, "title", titleBubble); addLock(titleBubble, "title", titleBubble); addHandles(titleBubble, "title"); var rt = rec.title; if (rt && typeof rt.x === "number") { detach(titleBubble, { left: clamp(rt.x, -20, window.innerWidth - 60), top: clamp(rt.y, 0, window.innerHeight - 26), width: rt.w || titleBubble.getBoundingClientRect().width, height: rt.h || titleBubble.getBoundingClientRect().height }); } paintLock(titleBubble, "title"); }
+    glueReset();
     document.querySelectorAll(".per-group, .map-repo").forEach(function(el){
       if (el.dataset.fpDone) return; el.dataset.fpDone = "1";
       var id = el.classList.contains("map-repo") ? "per-repo" : ("per-" + (el.dataset.perGroup || el.id || "grp"));
@@ -10796,6 +10802,56 @@ function floorConnected(L, cols, rows){
       if (rp && (rp.w || rp.h) && !el.classList.contains("map-repo")) { if (rp.w) el.style.width = rp.w + "px"; if (rp.h) el.style.height = rp.h + "px"; }       paintLock(el, id);
     });
     var zb = document.getElementById("zoomBar"); if (zb && !zb.dataset.fpDone) { zb.dataset.fpDone = "1"; addLock(zb, "zoombar", zb); paintLock(zb, "zoombar"); }
+  }
+
+  /* APOC-V262 — glue for the standalone Reset layout button. When the
+     title bubble floats (fp-piece-float, the form Shaun's saved record
+     gives it), the button floats with it, parked 16px clear of the
+     bubble's right edge, vertically centred on the bubble; when the
+     bubble is inline, the button is plain inline flow with a 16px left
+     margin (APOC-V262 CSS). The observer watches ONLY the bubble's
+     style/class attributes (its drags and resizes are style writes)
+     and writes ONLY the button's position, compared before writing —
+     the button is never observed, so no feedback loop is possible. */
+  var resetGlueDone = false, resetGlueLast = "";
+  function placeReset(){
+    var tb = titleBubble, btn = document.getElementById("layoutResetBtn");
+    if (!tb || !btn) return;
+    if (tb.classList.contains("fp-piece-float")) {
+      var r = tb.getBoundingClientRect();
+      var bw = btn.offsetWidth || 80, bh = btn.offsetHeight || 21;
+      var left, top;
+      if (r.right + 16 + bw <= window.innerWidth - 4) {
+        left = Math.round(r.right) + 16;
+        top = Math.round(r.top + Math.max(0, (r.height - bh) / 2));
+      } else {
+        /* no room beside the bubble (narrow screen, or the bubble is
+           parked against the right edge): stand below its left edge */
+        left = Math.max(0, Math.min(Math.round(r.left), window.innerWidth - bw - 4));
+        top = Math.round(r.bottom) + 8;
+      }
+      var key = "f:" + left + "," + top;
+      if (key === resetGlueLast) return;
+      resetGlueLast = key;
+      btn.classList.add("apoc-reset-float");
+      btn.style.left = left + "px"; btn.style.top = top + "px";
+    } else {
+      if (resetGlueLast === "i") return;
+      resetGlueLast = "i";
+      btn.classList.remove("apoc-reset-float");
+      btn.style.left = ""; btn.style.top = "";
+    }
+  }
+  function glueReset(){
+    placeReset();
+    if (resetGlueDone) return;
+    if (!titleBubble) return;
+    resetGlueDone = true;
+    try {
+      new MutationObserver(function(){ placeReset(); }).observe(titleBubble, { attributes: true, attributeFilter: ["style", "class"] });
+    } catch(e){}
+    window.addEventListener("resize", placeReset);
+    document.addEventListener("pointerup", function(){ setTimeout(placeReset, 60); }, true);
   }
 
   var tries = 0;
@@ -19027,6 +19083,25 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
    the gap; its hit area stays fully its own. */
 #titleBubble #siteVersion{margin-right:10px}
 #titleBubble #layoutResetBtn{margin-left:14px;border-left:1px solid rgba(157,180,216,.45);padding-left:12px!important}
+</style>
+<style id="APOC-V262-CSS">
+/* APOC-V262 (Shaun, 2026-11-12): "I don't see the reset layout button
+   separated from the APOC VTT version 2.60 header" + "The reset layout
+   is its own button." V260 spaced the button INSIDE the bubble — on
+   Shaun's screen the bubble floats at his saved 459x22 rect with the
+   button resident inside the one bordered header pill, so it read as
+   part of the header, not separated from it. The button now stands
+   OUTSIDE the bubble as its own standalone button (moveTitle parks it
+   as the bubble's sibling; the APOC-V180 register glue keeps it 16px
+   clear of the bubble's right edge when the bubble floats, plain
+   inline flow below it, indented past the 132px left tab track so
+   the first tab can never sit on it, when it does not). Its font/padding
+   spec, formerly #titleBubble-scoped in APOC-V180, is restated here
+   unscoped so the button looks exactly as it did. The V260 in-bubble
+   margin/divider rule above is dead once the button is out and is
+   left in place only as the record of that attempt. */
+#layoutResetBtn{font-size:.72rem!important;padding:1px 8px!important;line-height:1.5!important;min-height:0!important;margin:6px 0 0 136px;vertical-align:top;align-self:flex-start}
+#layoutResetBtn.apoc-reset-float{position:fixed;z-index:1801;margin:0}
 </style>
 <script>
 /* APOC-V261 (Shaun, 2026-11-12 ~08:29): "nest Add Marker and Add
