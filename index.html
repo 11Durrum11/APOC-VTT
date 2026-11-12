@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-0928";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1033";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -10796,7 +10796,12 @@ function floorConnected(L, cols, rows){
       if (el.dataset.fpDone) return; el.dataset.fpDone = "1";
       var id = el.classList.contains("map-repo") ? "per-repo" : ("per-" + (el.dataset.perGroup || el.id || "grp"));
       var grip = el.querySelector(".per-grip");
-      addLock(el, id, grip && grip.parentElement === el ? grip : el);
+      /* APOC-V263 (Shaun, 2026-11-12): the Art Library's own lock
+         button is REMOVED — the repo piece gets no fp-lock pin, so
+         the Library follows the plain DM edit-lock like every other
+         element (editing ON = movable, locked = fixed) with no
+         per-piece lock of its own. Every other piece keeps its pin. */
+      if (!el.classList.contains("map-repo")) addLock(el, id, grip && grip.parentElement === el ? grip : el);
       addHandles(el, id);
       var rp = rec[id];
       if (rp && (rp.w || rp.h) && !el.classList.contains("map-repo")) { if (rp.w) el.style.width = rp.w + "px"; if (rp.h) el.style.height = rp.h + "px"; }       paintLock(el, id);
@@ -14789,10 +14794,10 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
     }
     if (head.classList.contains("artlib-head")) {
       items.push({ sep: true });
-      var fl = loadJ(FKEY), repoLock = !!(fl["per-repo"] && fl["per-repo"].lock);
-      items.push({ label: repoLock ? "Unlock the Library" : "Lock the Library here", fn: function(){
-        var f = loadJ(FKEY); f["per-repo"] = Object.assign({}, f["per-repo"] || {}, { lock: !repoLock }); saveJ(FKEY, f);
-      } });
+      /* APOC-V263 (Shaun, 2026-11-12): the "Lock the Library here"
+         menu item is gone with the Library lock button itself —
+         the per-repo lock no longer exists, so nothing here can
+         set it. "Send the Library home" stays. */
       items.push({ label: "Send the Library home", fn: function(){
         var st = loadJ(PKEY); delete st.repo; saveJ(PKEY, st); location.reload();
       } });
@@ -19164,6 +19169,49 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", nest);
   else nest();
   [500, 1200, 2500, 4500, 8000, 14000, 22000, 36000].forEach(function(ms){ setTimeout(nest, ms); });
+})();
+</script>
+<script>
+  /* APOC-V263 (Shaun, 2026-11-12 10:27 MST — "You can get rid of the
+   art library lock button"): the Art Library's own per-piece lock
+   button — the .fp-lock pin APOC-V180's register() used to add to
+   the .map-repo piece (piece id "per-repo", title "Lock/unlock
+   this piece in place") — is REMOVED. The pin is no longer created
+   (register() skips the repo), its right-click face ("Lock the
+   Library here" on the Library head menu) is removed with it, and
+   any saved per-repo lock is stripped below so the Library can
+   never sit stranded-locked with no button left to release it:
+   the Library now follows the standard treatment behaviour —
+   movable while DM editing is ON, fixed while the DM edit-lock is
+   locked — like every other element. The "Lock map" button
+   (arLockBtn, the tab directly beside Art Library in the right
+   track) is a DIFFERENT control: it locks the MAP's pan/zoom
+   (apocVttMapLockV1), not the Library, and is deliberately left
+   in place, fully functional. */
+(function(){
+  "use strict";
+  var FKEY = "apocVttFreeLayoutV1";
+  function strip(){
+    try {
+      var raw = localStorage.getItem(FKEY);
+      if (raw) {
+        var rec = JSON.parse(raw || "{}") || {};
+        if (rec["per-repo"] && rec["per-repo"].lock) {
+          delete rec["per-repo"].lock;
+          if (!Object.keys(rec["per-repo"]).length) delete rec["per-repo"];
+          localStorage.setItem(FKEY, JSON.stringify(rec));
+        }
+      }
+    } catch(e){}
+    var repo = document.querySelector(".map-repo");
+    if (repo) {
+      repo.classList.remove("fp-locked");
+      var pin = repo.querySelector(".fp-lock");
+      if (pin && pin.parentElement) pin.parentElement.removeChild(pin);
+    }
+  }
+  strip();
+  [600, 2000, 4500].forEach(function(ms){ setTimeout(strip, ms); });
 })();
 </script>
 </body>
