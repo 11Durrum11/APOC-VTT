@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1040";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1150";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -10740,7 +10740,7 @@ function floorConnected(L, cols, rows){
     if (resizeState) { storeRect(resizeState.id, resizeState.el); applyOrient(resizeState.el); }
     dragState = null; resizeState = null;
     if (dId === "title" && dMoved) settleTitleDock();
-    else if (rId === "title") { var rec = load(); if (rec.titleDock264 && rec.titleDock264.edge === "R") dockTitle(); }
+    else if (rId === "title") { var rec = load(); if (rec.titleDock264 && rec.titleDock264.edge === "R") dockTitle(true); }
   });
   document.addEventListener("pointerdown", function(e){
     var h = e.target.closest ? e.target.closest(".fp-h") : null;
@@ -10817,17 +10817,58 @@ function floorConnected(L, cols, rows){
      free and his placement stands — docking is seating, not a
      freeze. (The standalone Reset Layout button and its V262 glue
      are gone in this build; nothing follows the bubble any more.) */
-  function dockTitle(){
+  function dockTitle(recompute){
     var el = titleBubble;
     if (!el || !el.classList.contains("fp-piece-float")) return;
     var rec = load(); var mk = rec.titleDock264;
     if (mk && mk.free) return;
     var r = el.getBoundingClientRect(); if (!r.width) return;
+    /* APOC-V265 (Shaun, 2026-11-12 — the v2.64 top-drift, convicted
+       by stack capture in probe375): a late dockTitle pass (the 14s
+       timer) once ran inside a forced-render transient — a
+       screenshot capture — where window.innerWidth/innerHeight
+       momentarily collapsed to the bubble's own size. The clamps
+       below converted the healthy seat (907,8) into (0,0) and the
+       pass PERSISTED the garbage into both the title rect and the
+       dock marker; every later reload faithfully replayed the
+       poisoned 0. Two rules now govern this function:
+       (1) A marked seat is authoritative. Ordinary passes (register,
+       the boot timers) only ENFORCE it: if the bubble already sits
+       on the marker they write nothing at all, and if it sits
+       elsewhere they snap it back to the marker — no viewport math
+       is ever consulted, so a transient viewport cannot move it.
+       Only a genuine re-seat (a window resize, a title resize, or
+       settleTitleDock after a drag) may recompute, and passes that
+       flag recompute. Even then, a recompute whose seat moved
+       purely because the viewport clamped (window no wider than
+       the bubble, or shorter than the marked top needs) is a
+       transient signature, not a resize: it persists nothing.
+       (2) The live rect is cross-checked against the saved record:
+       a floated bubble's width/height are set from its record at
+       detach and change only through its own resize (which stores
+       immediately), so a read that disagrees is a transient, never
+       a seat — abort, persist nothing. */
+    var savedT = rec.title;
+    if (savedT && typeof savedT.w === "number" && typeof savedT.h === "number" && (Math.abs(r.width - savedT.w) > 2 || Math.abs(r.height - savedT.h) > 2)) return;
+    var marked = mk && mk.edge === "R" && typeof mk.l === "number" && typeof mk.t === "number";
+    if (marked && !recompute) {
+      if (Math.round(r.left) === mk.l && Math.round(r.top) === mk.t) return;
+      el.style.left = mk.l + "px"; el.style.top = mk.t + "px";
+      var r2 = el.getBoundingClientRect();
+      if (Math.round(r2.left) === mk.l && Math.round(r2.top) === mk.t) storeRect("title", el);
+      return;
+    }
     var iw = window.innerWidth, ih = window.innerHeight;
     var left = Math.max(0, Math.round(iw - r.width));
     var top = Math.round(clamp((mk && mk.edge === "R" && typeof mk.t === "number") ? mk.t : r.top, 0, Math.max(0, ih - r.height)));
+    if (marked && ((iw - r.width <= 0 && left < mk.l) || (ih - r.height < mk.t && top < mk.t))) return;
+    /* The chip-overlap adjustment below ESTABLISHES a seat: it runs
+       only while no marker exists (the first dock, or a re-dock
+       after settleTitleDock cleared the marker). A marked seat's
+       top is trusted exactly as stored — it was computed against
+       settled chips when it was persisted. */
     var track = document.getElementById("apocTabR");
-    if (track) {
+    if (track && !marked) {
       var chipTop = null, chipLeft = null, chipRight = null;
       track.querySelectorAll(".apoc-tab").forEach(function(c){
         var cr = c.getBoundingClientRect(); if (!cr.width) return;
@@ -10853,14 +10894,14 @@ function floorConnected(L, cols, rows){
     if (window.innerWidth - r.right <= 72) {
       var rec = load();
       if (rec.titleDock264) { delete rec.titleDock264; save(rec); }
-      dockTitle();
+      dockTitle(true);
     } else {
       var rec3 = load(); rec3.titleDock264 = { free: true }; save(rec3);
     }
   }
   window.addEventListener("resize", function(){
     var rec = load();
-    if (rec.titleDock264 && rec.titleDock264.edge === "R") dockTitle();
+    if (rec.titleDock264 && rec.titleDock264.edge === "R") dockTitle(true);
   });
   setTimeout(function(){ dockTitle(); }, 9000);
   setTimeout(function(){ dockTitle(); }, 14000);
