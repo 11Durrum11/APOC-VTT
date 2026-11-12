@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1150";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1227";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -19310,5 +19310,73 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
   document.addEventListener("pointerup", function(){ setTimeout(dockZoom, 140); }, true);
 })();
 </script>
+
+<style id="APOC-V266-CSS">
+/* APOC-V266 (Shaun, voice call 2026-11-12 ~12:23 MST — "under the art
+   library minimize the footprints of all the buttons and put them all
+   to the left" + "and brought up"): every CONTROL button under the
+   Art Library head — the section heads (Maps / NPCs / Monsters /
+   Assets), the token-panel heads, every subcategory / folder /
+   type head below them, and the plain .btn controls in the panel
+   body (steampunk chip, Edit placed assets, Import image, the map
+   rows' move/delete) — gets the standing three treatments:
+   (1) MINIMUM FOOTPRINT: shrink-wrapped to its label at the
+       established sub-head metrics (.85rem, padding 2px 6px,
+       line-height 1.15 — the size most Library heads already wear;
+       nothing is squinched below the size its own label needs, and
+       a head whose label is long simply stays label-wide);
+   (2) LEFT: the v2.00/v2.05 right-stack (margin-left:auto, heads
+       ending flush right inside full-width rows, token panel and
+       folder grids scattered two-across) is retired inside the
+       Library — margins zeroed, every grid under the head runs a
+       single left column with items justified to its left edge, so
+       every button's left edge is the panel's left edge;
+   (3) BROUGHT UP: the body sits flush under the head — body
+       padding-top and the rows' vertical margins are zeroed (one
+       uniform 2px step between direct rows), inner bodies lose
+       their top padding, and #npcOpenBtn — the full-width NPCs
+       button that alone held the body 30px below the head —
+       shrink-wraps to its label like everything else.
+   The art/token TILES (.lib-item) are content, not controls — the
+   standing tile-grid exclusion — and keep their art-grid sizing.
+   CSS only: no handler, no DOM order and no record is touched, so
+   LibSubOrder dragging works exactly as before and any order Shaun
+   has recorded stands — this sets sizes, alignment and gaps only.
+   Scoped to the Library (.map-repo #artLibrary) in both its homes
+   (below-map set and phone drawer); the Art Library HEAD itself is
+   the panel's own chrome and is not under itself — untouched. */
+.map-repo #artLibrary > .nest-body{padding:0 2px 2px !important;margin-top:0 !important;row-gap:2px !important;column-gap:6px !important;align-content:start !important;justify-content:flex-start !important;justify-items:start !important}
+.map-repo #artLibrary .nest-body .nest-body{padding-top:0 !important}
+.map-repo #artLibrary .nest-body .nest{margin-top:0 !important;margin-bottom:0 !important}
+.map-repo #artLibrary > .nest-body > .nest,
+.map-repo #artLibrary > .nest-body > .lib-panel{margin:0 0 2px !important}
+.map-repo #artLibrary > .nest-body > .nest:last-child,
+.map-repo #artLibrary > .nest-body > .lib-panel:last-child{margin-bottom:0 !important}
+.map-repo #artLibrary > .nest-body button:not(.lib-item){
+  margin-left:0 !important;
+  min-height:0 !important;height:auto !important;
+  padding:2px 6px !important;line-height:1.15 !important;
+  text-align:left !important;justify-self:start !important}
+.map-repo #artLibrary > .nest-body .nest-head,
+.map-repo #artLibrary > .nest-body .mr-folder-head{
+  width:max-content !important;max-width:100% !important;
+  font-size:.85rem !important;justify-content:flex-start !important}
+#mapPanel .map-repo #artLibrary #tokenLib,
+#mapPanel .map-repo #artLibrary .mr-list,
+#mapPanel .map-repo #artLibrary #libMonsters,
+#mapPanel .map-repo #artLibrary #libNpcs{grid-template-columns:1fr !important;justify-items:start !important;align-content:start !important;row-gap:2px !important}
+/* the v2.04 block kept exactly three section heads (Maps / Monsters /
+   Assets) on the old right stack behind a two-ID margin-left:auto
+   that outranked the general rule above — visible the moment one of
+   those sections opens and its row goes full width. Retired here on
+   the same word: those three heads sit left like all the others. */
+#mapPanel .map-repo #artLibrary > .nest-body > #mapsNest > .nest-head,
+#mapPanel .map-repo #artLibrary > .nest-body > #monsterNest > .nest-head,
+#mapPanel .map-repo #artLibrary > .nest-body > #assetsNest > .nest-head{margin-left:0 !important}
+.map-repo #artLibrary > #npcOpenBtn{
+  width:max-content !important;max-width:100% !important;
+  margin:0 0 2px !important;padding:2px 6px !important;
+  min-height:0 !important;line-height:1.15 !important;text-align:left !important}
+</style>
 </body>
 </html>
