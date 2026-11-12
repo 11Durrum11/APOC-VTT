@@ -7762,7 +7762,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-1711";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-1848";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -7996,6 +7996,7 @@ function floorConnected(L, cols, rows){
     if (!r || typeof r !== "object") return false;
     if (r.r20 && typeof r.r20 === "object") return false;
     if (r.cat === "Visuals") return true;
+    if (r.cat === "Pictures") return true;
     if (r.cat === "Maps") return false;
     var s = (r.src || ""), p = (r._parent || ""), n = (r.name || "").trim().toLowerCase();
     if (/(^|\/)first person views(\/|$)/i.test(s)) return true;
@@ -8253,7 +8254,7 @@ function floorConnected(L, cols, rows){
       mRows.forEach(function(r){ (isOverlandRec(r) ? oRows : nRows).push(r); });
       if (oRows.length) emitGroup(overBox, key + "|mo", title, oRows, false, "o");
       if (nRows.length) emitGroup(nonBox, key + "|mn", title, nRows, false, "n");
-      if (vRows.length) emitGroup(visBox, key + "|v", title, vRows, true);
+      /* APOC-SUBDIV (Shaun, 2026-11-11): vRows are NOT emitted here — Pictures/Visuals live outside the Maps repository now. They stay reachable via the map dropdown Visuals group + picture viewer. */
     }
     function emitGroup(box, key, title, rows, isVis, cls){
       liveGroups[key] = true;
@@ -8370,7 +8371,7 @@ function floorConnected(L, cols, rows){
     if (mapsBox.childNodes.length) { var cm = groupNest("Maps (" + shown + ")", !!f); cm.body.appendChild(mapsBox); listEl.appendChild(cm.wrap); }
     if (visBox.childNodes.length) { var cv = groupNest("Visuals (" + visShown + ")", !!f); cv.body.appendChild(visBox); listEl.appendChild(cv.wrap); }
     if (!shown && !visShown) listEl.innerHTML = "<p class=\"muted small\">No maps match.</p>";
-    if (countEl) countEl.textContent = "— " + (BUILTINS.length + recs.length) + " maps";
+    if (countEl) countEl.textContent = "— " + (BUILTINS.length + recs.filter(function(r){ return !isVisualRec(r); }).length) + " maps";
   }
   var deb = null;
   if (searchEl) searchEl.addEventListener("input", function(){
