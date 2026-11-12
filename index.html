@@ -2182,10 +2182,13 @@ setInterval(loadSharedEntries, 60000);
           for (const c of hexCenters()) { const d = (c[0] - lng) * (c[0] - lng) + (c[1] - lat) * (c[1] - lat); if (d < bd) { bd = d; best = c; } }
           if (best) p = { x: Math.round(best[0] / MW * 10000) / 100, y: Math.round((1 - best[1] / MH) * 10000) / 100 };
         } else if (gridOn) {
-          p = {
-            x: Math.round(((Math.floor((p.x / 100 * MW) / CELL) + 0.5) * CELL / MW * 100) * 100) / 100,
-            y: Math.round(((Math.floor((p.y / 100 * MH) / CELL) + 0.5) * CELL / MH * 100) * 100) / 100
-          };
+          /* V259: snap in lat space (cells counted from the drawn lines at
+             lat 0), not percent-from-top: from-top counting offsets the
+             rest point by MH mod CELL whenever the map height is not a
+             whole number of cells (Faerun 5 units, Saint James 27). */
+          const lngS = p.x / 100 * MW, latS = MH * (1 - p.y / 100);
+          const sxS = (Math.floor(lngS / CELL) + 0.5) * CELL, syS = (Math.floor(latS / CELL) + 0.5) * CELL;
+          p = { x: Math.round(sxS / MW * 10000) / 100, y: Math.round((1 - syS / MH) * 10000) / 100 };
         }
         tk.x = p.x; tk.y = p.y;
         const ok = await saveTokens();
@@ -2332,14 +2335,34 @@ setInterval(loadSharedEntries, 60000);
   /* Ruler: with Ruler on, drag on the map measures (map panning pauses). */
   let rulerOn = false, rulerLine = null, rulerTip = null, rulerStart = null;
   function rulerText(a, b){
-    const units = Math.hypot(b.lng - a.lng, b.lat - a.lat);
-    const cells = units / CELL;
+    let cells;
+    if (gridType === "hex") {
+      /* V259: count HEXES, not euclidean distance: fractional axial
+         distance on the flat-top hex lattice (centres at R + 1.5R per
+         column, sqrt(3)R per row, R = CELL*0.575). Euclidean/CELL read
+         a 2-hex east run as 1.7 hex. */
+      const R = CELL * 0.575;
+      const ax = ll => { const n = llUnrot(ll.lat, ll.lng); const u = (n.lng - R) / R, v = (n.lat - R) / R; const q = (2 / 3) * u, r = -(1 / 3) * u + (Math.sqrt(3) / 3) * v; return [q, r, -q - r]; };
+      const A = ax(a), B = ax(b);
+      cells = (Math.abs(B[0] - A[0]) + Math.abs(B[1] - A[1]) + Math.abs(B[2] - A[2])) / 2;
+    } else {
+      cells = Math.hypot(b.lng - a.lng, b.lat - a.lat) / CELL;
+    }
     const feet = cells * feetPerSquare;
     const dist = scaleUnit === "mi" ? `${(feet / 5280).toFixed(2)} mi` : (feet >= 5280 ? `${(feet / 5280).toFixed(2)} mi` : `${Math.round(feet)} ft`);
     return `${cells.toFixed(1)} ${gridType === "hex" ? "hex" : "sq"} · ${dist}`;
   }
   function rulerSnap(ll){
-    if (!gridOn || gridType !== "square") return ll;
+    if (!gridOn) return ll;
+    if (gridType === "hex") {
+      /* V259: hex endpoints snap to hex centres, parity with square mode */
+      const n = llUnrot(ll.lat, ll.lng);
+      let best = null, bd = Infinity;
+      for (const c of hexCenters()) { const d = (c[0] - n.lng) * (c[0] - n.lng) + (c[1] - n.lat) * (c[1] - n.lat); if (d < bd) { bd = d; best = c; } }
+      if (!best) return ll;
+      const f = llRot(best[1], best[0]);
+      return L.latLng(f[0], f[1]);
+    }
     if (!mapRot) return L.latLng((Math.floor(ll.lat / CELL) + 0.5) * CELL, (Math.floor(ll.lng / CELL) + 0.5) * CELL);
         const n = llUnrot(ll.lat, ll.lng);
     const f = llRot((Math.floor(n.lat / CELL) + 0.5) * CELL, (Math.floor(n.lng / CELL) + 0.5) * CELL);
@@ -4825,8 +4848,10 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
   }
   buildTplLib();
   function snapPct(p){
-    const ux = Math.round((p.x / 100 * MW) / CELL) * CELL, uy = Math.round((p.y / 100 * MH) / CELL) * CELL;
-    return { x: Math.round(ux / MW * 10000) / 100, y: Math.round(uy / MH * 10000) / 100 };
+    /* V259: y measured in lat space like the token snap; from-top
+       counting offsets the point by MH mod CELL vs the drawn grid */
+    const ux = Math.round((p.x / 100 * MW) / CELL) * CELL, uy = Math.round((MH * (1 - p.y / 100)) / CELL) * CELL;
+    return { x: Math.round(ux / MW * 10000) / 100, y: Math.round((1 - uy / MH) * 10000) / 100 };
   }
   let tplLenBefore = 0;
   map.on("mousedown", () => { if ($("drawTool").value === "template") tplLenBefore = drawItems.length; });
@@ -7794,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-2011";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-2047";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
