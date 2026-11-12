@@ -32,10 +32,9 @@
     --input:hsl(220 16% 26%);
     --ring:hsl(38 92% 50%);
     --radius:12px;
-    /* Interim hotlink: the scene files sit in this repo under
-       assets/scenes/ (same paths as the tracker) once uploaded; until
-       then the backdrop loads them from the tracker site. */
-    --scene-image:url("assets/scenes/bastion-streets.webp");
+    /* APOC-V255 (Shaun, 2026-11-11 18:20 — "Yeah, the slideshow. You
+       can kill it."): the rotating scene backdrop is REMOVED — no
+       scene image variable remains; the page background is plain. */
   }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth;overflow-x:hidden;overflow-x:clip}
@@ -51,8 +50,7 @@ body{
    ::after scrim is display:none here too. */
 body::before{
     content:"";position:fixed;left:0;top:0;width:100%;height:100vh;height:100lvh;z-index:-2;
-    background-image:var(--scene-image);background-size:cover;background-position:center;
-    opacity:var(--bg-opacity,.45);transition:opacity 1.5s ease;
+    background:none;
   }
 body::after{display:none}
 a{color:var(--primary)}
@@ -126,7 +124,7 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .apoc-on .leaflet-image-layer{filter:grayscale(.55) sepia(.14) brightness(.93) contrast(1.03)}
 #apocMap:fullscreen{height:100%;width:100%;border:none;border-radius:0}
 body.map-expanded{overflow:hidden}
-body.map-expanded #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:1600;overflow-y:auto;display:flex;flex-direction:column;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:5px;margin:0;border-radius:0}
+body.map-expanded #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;z-index:1600;overflow-y:auto;display:flex;flex-direction:column;background:#05070a;padding:8px;gap:5px;margin:0;border-radius:0}
 body.map-expanded .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
 body.map-expanded .apoc-map{height:100%;min-height:0}
 body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-top:0;width:100%}
@@ -350,7 +348,7 @@ input,select,textarea{font-size:16px}
    steps aside, every control stays — docked along the edges (toolbars
    top, dice/initiative bottom, repository beside the map) and
    transparent like everywhere else on the APOC sites, over the scene. */
-#mapPanel:fullscreen{display:flex;flex-direction:column;height:100%;overflow-y:auto;background-image:var(--scene-image);background-size:cover;background-position:center;padding:8px;gap:5px}
+#mapPanel:fullscreen{display:flex;flex-direction:column;height:100%;overflow-y:auto;background:#05070a;padding:8px;gap:5px}
 #mapPanel:fullscreen .map-tools{flex:none}
 #mapPanel:fullscreen .map-stage{flex:1 1 auto;min-height:0;width:100%;margin-top:0}
 #mapPanel:fullscreen .apoc-map{height:100%;min-height:0}
@@ -7762,7 +7760,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-11-1848";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-11-1907";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -7782,53 +7780,6 @@ function floorConnected(L, cols, rows){
           })
           .catch(function () {});
       </script>
-<script>
-"use strict";
-(function(){
-  const SCENE_BASE = "";
-  const SCENES = {
-    "bastion-streets":      "assets/scenes/bastion-streets.webp",
-    "market-guild-streets": "assets/scenes/market-guild-streets.webp",
-    "lower-quarter":        "assets/scenes/lower-quarter.webp",
-    "city-approach":        "assets/scenes/city-approach.webp",
-    "winding-dock-road":    "assets/scenes/winding-dock-road.webp",
-    "watch-precinct":       "assets/scenes/watch-precinct.webp",
-    "broad-avenue":         "assets/scenes/broad-avenue.webp"
-  };
-  const BG_FILES = [...new Set(Object.values(SCENES).map(f => SCENE_BASE + f))];
-  let bgIdx = 0;
-  BG_FILES.forEach(f => { const im = new Image(); im.src = f; });
-  function paintBackdrop(){
-    document.body.style.setProperty("--scene-image", `url("${BG_FILES[bgIdx]}")`);
-  }
-  function cycleBackdrop(){
-    document.body.style.setProperty("--bg-opacity", "0");
-    setTimeout(() => {
-      bgIdx = (bgIdx + 1) % BG_FILES.length;
-      paintBackdrop();
-      document.body.style.setProperty("--bg-opacity", ".45");
-    }, 1500);
-  }
-  function jumpBackdropTo(sceneKey){
-    const f = SCENES[sceneKey];
-    const i = f ? BG_FILES.indexOf(SCENE_BASE + f) : -1;
-    if (i >= 0) { bgIdx = i; paintBackdrop(); document.body.dataset.scene = sceneKey; }
-  }
-  if (BG_FILES.length > 1) {
-    setInterval(cycleBackdrop, 14000);
-  }
-  let lastScene = null;
-  async function syncScene(){
-    if (!db) return;
-    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", "campaign_status").maybeSingle();
-    if (error || !data || !data.value) return;
-    const s = data.value.scene;
-    if (s && s !== lastScene) { lastScene = s; jumpBackdropTo(s); }
-  }
-  syncScene();
-  setInterval(syncScene, 60000);
-})();
-</script>
 <script>
 (function(){
   var MAP_SCENE = { 'faerun':'world', 'saint-james':'quests' };
@@ -18392,6 +18343,374 @@ body.apoc-tabs254 .apoc-track{display:none!important}
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
   else boot();
   [700, 1250, 3050, 6550, 12550, 16050, 18000, 24000, 30000, 36000].forEach(function(ms){ setTimeout(boot, ms); });
+})();
+</script>
+
+<style id="APOC-V255-CSS">
+/* APOC-V255 (Shaun, 2026-11-11 18:20-18:24):
+   (1) the background slideshow is KILLED in the base bytes (the
+       SCENES/cycleBackdrop block and the --scene-image CSS are gone);
+       this block carries the rest.
+   (2) MAXIMIZE + LOCK THE MAP BUBBLE — the bubble (#mapPanel), NOT
+       the map: the frame fills the viewport top-to-bottom and
+       left-to-right and is locked there. No record, handle, or float
+       may move or shrink it; the map inside keeps pan/zoom/layers/
+       tokens exactly as before (its box follows the bubble, as in
+       the old Expand mode). The old per-device map-size record no
+       longer sizes the box. Sets open in flow below the stage inside
+       the locked bubble at FULL natural height — the bubble scrolls
+       internally to reach them, nothing is capped or squashed.
+   (3) INSIDE THE SETS: every button at minimum footprint, sitting
+       cleaned-up next to its neighbours (uniform gaps, no stray
+       margins), and every inner opener opens FULLY (the Library
+       category grid's 56vh cap is removed).
+   (4) Inner buttons are REARRANGEABLE by dragging (see the script):
+       a drag reorders within the group and the clean in-flow slot is
+       what persists — a drop can never land ragged. */
+#mapPanel{position:fixed!important;left:0!important;top:0!important;width:100vw!important;width:100dvw!important;height:100vh!important;height:100dvh!important;max-width:none!important;max-height:none!important;margin:0!important;border-radius:0!important;z-index:1000!important;display:flex!important;flex-direction:column!important;overflow-y:auto!important;overflow-x:hidden!important;background:#05070a!important}
+#mapPanel .stage-row{display:contents!important}
+#mapPanel .map-stage{flex:1 0 auto!important;min-height:0!important;width:100%!important;margin-top:0!important}
+#mapPanel .map-side{height:100%!important;min-height:0!important}
+#mapPanel .apoc-map{height:100%!important;min-height:0!important}
+#mapPanel .map-rsz{display:none!important}
+#mapPanel .ctl-set{position:static!important;max-height:none!important;height:auto!important}
+#mapPanel .map-repo.lib-set253 .artlib.open > .nest-body{max-height:none!important}
+.apoc-tabtrack{z-index:1800!important}
+.apoc-tab.apoc-tab-locked{z-index:1805!important}
+body.apoc-bubble255 .expand-exit-wrap{display:none!important}
+/* inner buttons: minimum footprint + clean arrangement */
+#ctlRow .btn,#mapPanel .vtt-panel .btn,#mapPanel form .btn{min-height:0!important;padding:3px 8px!important;line-height:1.15!important}
+#set-map{grid-template-columns:repeat(3,max-content)!important;justify-content:start!important;justify-items:start!important}
+#set-map > .btn{width:auto!important}
+.apoc-tab-slot{display:block;flex:0 0 auto;width:28px;height:132px;box-sizing:border-box}
+.apoc-tabtrack.h > .apoc-tab-slot{width:132px;height:28px}
+@media (max-width:820px){#set-map{grid-template-columns:repeat(2,max-content)!important}}
+#ctlRow .btn,#ctlRow button{margin-top:0!important;margin-bottom:0!important}
+#ctlRow .ctl-set{gap:6px 8px!important}
+.apoc-inner-drag{opacity:.55;outline:2px solid rgba(30,64,175,.65);outline-offset:1px;cursor:grabbing!important}
+</style>
+<script>
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  function $(id){ return document.getElementById(id); }
+
+  /* ---------- (2) bubble lock ---------- */
+  var panel = $("mapPanel");
+  function lockBubble(){
+    if (!panel) panel = $("mapPanel");
+    if (!panel) return;
+    panel.classList.remove("per-float", "per-parked", "per-group");
+    ["left", "top", "width", "height", "position", "z-index", "zIndex"].forEach(function(p){ try { panel.style.removeProperty(p); } catch(e){} });
+    document.body.classList.add("apoc-bubble255");
+  }
+  lockBubble();
+  [700, 2000, 5000, 12000].forEach(function(ms){ setTimeout(lockBubble, ms); });
+  window.addEventListener("resize", lockBubble);
+  /* the Expand toggle must not un-maximize the locked bubble */
+  document.addEventListener("click", function(e){
+    var t = e.target && e.target.closest ? e.target.closest("#mapExpandBtn, .expand-exit-wrap") : null;
+    if (t) { e.preventDefault(); e.stopImmediatePropagation(); lockBubble(); }
+  }, true);
+
+  /* ---------- (4) inner-button reorder drag ----------
+     Reorder-in-flow only: the button never leaves its group, so the
+     drop always settles into the group's own alignment and spacing,
+     and the persisted record is the clean order. Persistence:
+     localStorage apocVttInnerOrder255 { groupKey: [btnKey, ...] }.
+     Excluded (named in the build report): buttons inside the Art
+     Library (their section order is owned by the LibSubOrder
+     system), Leaflet/map controls, per-row data buttons (layers,
+     lists, grids), swatch/tile grids, and buttons already parked
+     free by the BtnPark system (his parked arrangement stands). */
+  var RK = "apocVttInnerOrder255";
+  function loadO(){ try { var v = JSON.parse(localStorage.getItem(RK) || "{}"); return (v && typeof v === "object") ? v : {}; } catch(e){ return {}; } }
+  function saveO(o){ try { localStorage.setItem(RK, JSON.stringify(o)); } catch(e){} }
+  function slug(s){ return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "btn"; }
+  function btnKey(b){
+    if (b.dataset && b.dataset.innerKey255) return b.dataset.innerKey255;
+    if (b.id) return "#" + b.id;
+    var base = slug(b.textContent), n = 0, p = b.parentElement;
+    if (p) { for (var i = 0; i < p.children.length; i++){ var c = p.children[i]; if (c === b) break; if (c.tagName === "BUTTON" && !c.id && slug(c.textContent) === base) n++; } }
+    return n ? base + "~" + (n + 1) : base;
+  }
+  function segOf(el){
+    var c = (typeof el.className === "string" ? el.className.split(/\s+/)[0] : "") || el.tagName.toLowerCase();
+    var idx = 0, s = el;
+    while ((s = s.previousElementSibling)) if (s.tagName === el.tagName && (typeof s.className === "string" ? s.className.split(/\s+/)[0] : "") === (typeof el.className === "string" ? el.className.split(/\s+/)[0] : "")) idx++;
+    return c + "[" + idx + "]";
+  }
+  function grpKey(g, set){
+    var segs = [], el = g, guard = 0;
+    while (el && el !== set && guard++ < 8) { segs.unshift(segOf(el)); el = el.parentElement; }
+    return (set.id || "set") + ">" + segs.join(">");
+  }
+  var NORE = ".mr-list, .lib-grid, .nest-body, .init-list, .layer-rows, .lib-tiles, table, .swatches, .palette";
+  function eligible(b){
+    if (!b || b.tagName !== "BUTTON") return null;
+    if (b.classList.contains("apoc-tab") || b.classList.contains("btn-roam") || b.classList.contains("fp-lock")) return null;
+    if (b.closest("#apocMap") || b.closest(".leaflet") || b.closest("#artLibrary") || b.closest("#btnCtxMenu") || b.closest("#apocTabMenu") || b.closest("#ctxMenu")) return null;
+    if (b.closest(NORE)) return null;
+    var set = b.closest(".ctl-set, #screenBar, .ctl-bar, .map-tools, .marker-form, .vtt-panel");
+    if (!set) return null;
+    var g = b.parentElement;
+    if (!g) return null;
+    var n = 0;
+    for (var i = 0; i < g.children.length; i++) if (g.children[i].tagName === "BUTTON") n++;
+    if (n < 2) return null;
+    return { g: g, set: set };
+  }
+  function groupBtns(g){
+    var out = [];
+    for (var i = 0; i < g.children.length; i++) if (g.children[i].tagName === "BUTTON") out.push(g.children[i]);
+    return out;
+  }
+  function applyOrders(){
+    var o = loadO(), keys = Object.keys(o);
+    if (!keys.length) return;
+    document.querySelectorAll(".ctl-set, #screenBar, .ctl-bar, .map-tools, .marker-form, .vtt-panel").forEach(function(set){
+      /* candidate groups: every descendant element holding >=2 buttons */
+      var cand = [];
+      set.querySelectorAll("*").forEach(function(el){ var n = 0; for (var i = 0; i < el.children.length; i++) if (el.children[i].tagName === "BUTTON") n++; if (n >= 2) cand.push(el); });
+      if (set.children) { var n0 = 0; for (var j = 0; j < set.children.length; j++) if (set.children[j].tagName === "BUTTON") n0++; if (n0 >= 2) cand.push(set); }
+      cand.forEach(function(g){
+        var k = grpKey(g, set), want = o[k];
+        if (!Array.isArray(want) || !want.length) return;
+        var btns = groupBtns(g);
+        var byKey = {};
+        btns.forEach(function(b){ byKey[btnKey(b)] = b; });
+        var ordered = [];
+        want.forEach(function(wk){ if (byKey[wk]) { ordered.push(byKey[wk]); delete byKey[wk]; } });
+        btns.forEach(function(b){ if (ordered.indexOf(b) < 0) ordered.push(b); });
+        /* re-insert in order just before whatever followed the last
+           button child (moving each in sequence preserves the order) */
+        var after = btns.length ? btns[btns.length - 1].nextSibling : null;
+        ordered.forEach(function(b){ g.insertBefore(b, after); });
+      });
+    });
+  }
+  var drag = null, suppressB = { el: null, until: 0 };
+  document.addEventListener("pointerdown", function(e){
+    if (e.button !== undefined && e.button !== 0) return;
+    var b = e.target && e.target.closest ? e.target.closest("button") : null;
+    if (!b) return;
+    var el = eligible(b);
+    if (!el) return;
+    drag = { btn: b, g: el.g, set: el.set, pid: e.pointerId, x: e.clientX, y: e.clientY, on: false };
+  }, true);
+  window.addEventListener("pointermove", function(e){
+    if (!drag || e.pointerId !== drag.pid) return;
+    if (!drag.on) {
+      if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+      drag.on = true;
+      drag.btn.classList.add("apoc-inner-drag");
+      try { drag.btn.setPointerCapture(e.pointerId); } catch(err){}
+    }
+    if (e.cancelable) e.preventDefault();
+    e.stopImmediatePropagation();
+    var g = drag.g, btns = groupBtns(g).filter(function(x){ return x !== drag.btn; });
+    if (!btns.length) return;
+    /* band-aware insertion (the tabs' proven method): cluster the
+       siblings into bands along the cross axis, pick the band the
+       pointer is in, insert by centre along the band. Stable on
+       grids and wraps — no axis oscillation. Orientation: bands are
+       rows unless every sibling shares one row (then one band). */
+    var rects = btns.map(function(b){ return { b: b, r: b.getBoundingClientRect() }; });
+    var tops = rects.map(function(o){ return Math.round(o.r.top); });
+    var lefts = rects.map(function(o){ return Math.round(o.r.left); });
+    var multiRow = (Math.max.apply(null, tops) - Math.min.apply(null, tops)) > 6;
+    var multiCol = (Math.max.apply(null, lefts) - Math.min.apply(null, lefts)) > 6;
+    var before = null;
+    if (multiRow || !multiCol) {
+      /* row bands */
+      var bands = {}, keys = [];
+      rects.forEach(function(o){ var k = Math.round(o.r.top); var bk = null; keys.forEach(function(kk){ if (Math.abs(kk - k) <= 6) bk = kk; }); if (bk === null) { bk = k; keys.push(bk); bands[bk] = []; } bands[bk].push(o); });
+      keys.sort(function(a, b){ return a - b; });
+      var chosen = keys[keys.length - 1];
+      for (var i = 0; i < keys.length; i++) { var band = bands[keys[i]]; var bot = Math.max.apply(null, band.map(function(o){ return o.r.bottom; })); if (e.clientY <= bot + 10) { chosen = keys[i]; break; } }
+      var colKids = bands[chosen];
+      if (colKids.length === 1) {
+        var o1 = colKids[0];
+        before = (e.clientY < (o1.r.top + o1.r.bottom) / 2) ? o1.b : o1.b.nextElementSibling;
+      } else {
+        for (var j = 0; j < colKids.length; j++) { var c = (colKids[j].r.left + colKids[j].r.right) / 2; if (e.clientX < c) { before = colKids[j].b; break; } }
+        if (!before) { var last = colKids[colKids.length - 1].b; before = last.nextElementSibling; }
+      }
+    } else {
+      /* single row, many columns — plain centre order */
+      for (var m = 0; m < rects.length; m++) { var cc = (rects[m].r.left + rects[m].r.right) / 2; if (e.clientX < cc) { before = rects[m].b; break; } }
+      if (!before) before = null;
+    }
+    if (before) { if (before !== drag.btn) g.insertBefore(drag.btn, before); }
+    else g.appendChild(drag.btn);
+  }, true);
+  function endDrag(e){
+    if (!drag) return;
+    if (e && e.pointerId !== undefined && e.pointerId !== drag.pid) return;
+    var d = drag; drag = null;
+    if (!d.on) return;
+    d.btn.classList.remove("apoc-inner-drag");
+    suppressB = { el: d.btn, until: Date.now() + 800 };
+    var o = loadO();
+    o[grpKey(d.g, d.set)] = groupBtns(d.g).map(btnKey);
+    saveO(o);
+  }
+  window.addEventListener("pointerup", endDrag, true);
+  window.addEventListener("pointercancel", endDrag, true);
+  document.addEventListener("click", function(e){
+    if (suppressB.el && Date.now() < suppressB.until) {
+      var b = e.target && e.target.closest ? e.target.closest("button") : null;
+      if (b && b === suppressB.el) { e.stopPropagation(); e.preventDefault(); suppressB.el = null; }
+    }
+  }, true);
+  /* ---------- tab lock slots ----------
+     V254's lock pins the tab as a fixed body child, which takes it
+     out of its track's flow: the next tab slides into the vacated
+     slot UNDER the pinned one and can no longer be grabbed (found
+     by probe346/347: the neighbour of a locked tab fails to drag).
+     Reserve the slot with a same-size placeholder so the line keeps
+     its shape and every neighbour stays reachable. */
+  function reserveSlots(){
+    var tk = null;
+    try { tk = JSON.parse(localStorage.getItem("apocVttTuckV1") || "{}"); } catch(e){}
+    var t254 = tk && tk.tabs254;
+    document.querySelectorAll(".apoc-tab-slot").forEach(function(ph){
+      var id = ph.getAttribute("data-for");
+      var tab = id && $(id);
+      if (!tab || !tab.classList.contains("apoc-tab-locked")) ph.remove();
+    });
+    if (!t254 || !t254.edges || !t254.locks) return;
+    ["L", "R", "T", "B"].forEach(function(e){
+      var track = $("apocTab" + e);
+      if (!track) return;
+      (t254.edges[e] || []).forEach(function(id){
+        if (!t254.locks[id]) return;
+        var tab = $(id);
+        if (!tab || !tab.classList.contains("apoc-tab-locked")) return;
+        if (track.querySelector('.apoc-tab-slot[data-for="' + id + '"]')) return;
+        var ph = document.createElement("div");
+        ph.className = "apoc-tab-slot";
+        ph.setAttribute("data-for", id);
+        ph.setAttribute("aria-hidden", "true");
+        /* insert at the locked tab's canonical position among the
+           track's slot-holders (tabs + placeholders), by edge order */
+        var order = t254.edges[e];
+        var holders = [...track.children].filter(function(c){ return c.classList.contains("apoc-tab") || c.classList.contains("apoc-tab-slot"); });
+        var myIdx = order.indexOf(id), before = null;
+        for (var i = 0; i < holders.length; i++) {
+          var hid = holders[i].classList.contains("apoc-tab-slot") ? holders[i].getAttribute("data-for") : holders[i].id;
+          if (order.indexOf(hid) > myIdx) { before = holders[i]; break; }
+        }
+        if (before) track.insertBefore(ph, before); else track.appendChild(ph);
+      });
+    });
+  }
+
+  document.addEventListener("click", function(e){ if (e.target && e.target.closest && e.target.closest("#apocTabMenu")) setTimeout(reserveSlots, 250); }, true);
+  window.addEventListener("pointerup", function(){ setTimeout(reserveSlots, 250); }, true);
+
+  function boot255(){ lockBubble(); reserveSlots(); applyOrders(); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot255);
+  else boot255();
+  [900, 2200, 5200, 12500].forEach(function(ms){ setTimeout(boot255, ms); });
+})();
+</script>
+
+<script>
+/* APOC-V257 — GLITCH FLIGHT RECORDER (Shaun, 2026-11-11 19:04: catch the
+   glitches while HE plays). Extends the APOC-V230 blink recorder's idea
+   into a general session glitch log: window errors, unhandled promise
+   rejections, long tasks (>200ms), script-driven scroll-position writes,
+   and map-geometry changes — the probe345 signal set. Sibling key
+   apocVttGlitchLog (the blink key apocVttBlinkLog is untouched and stays
+   readable). Ring buffer: last 150 entries, each {t, build, kind, detail}.
+   localStorage ONLY — writes nothing to shared state. Every path is
+   try/caught and coalesced: the recorder must never throw, block, or
+   change the page's behaviour. */
+(function () {
+  "use strict";
+  var KEY = "apocVttGlitchLog", CAP = 150;
+  var build = "unknown";
+  try { if (typeof BUILD_STAMP !== "undefined" && BUILD_STAMP) build = String(BUILD_STAMP); } catch (e) {}
+  try {
+    fetch("version.json", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (j) {
+      if (j && (j.version || j.display)) build = String(j.version || "") + "/" + String(j.display || "");
+    }).catch(function () {});
+  } catch (e) {}
+  var lastByKind = {};
+  function push(kind, detail, always) {
+    try {
+      var now = Date.now();
+      if (!always && lastByKind[kind] && now - lastByKind[kind] < 1000) return;
+      lastByKind[kind] = now;
+      var log = [];
+      try { log = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { log = []; }
+      if (!Array.isArray(log)) log = [];
+      log.push({ t: new Date(now).toISOString(), build: build, kind: kind, detail: detail || {} });
+      while (log.length > CAP) log.shift();
+      localStorage.setItem(KEY, JSON.stringify(log));
+    } catch (e) {}
+  }
+  try {
+    window.addEventListener("error", function (ev) {
+      try { push("error", { msg: String(ev && ev.message || "error").slice(0, 200), src: String(ev && ev.filename || "").slice(-60), line: ev && ev.lineno || 0 }, true); } catch (e) {}
+    }, true);
+    window.addEventListener("unhandledrejection", function (ev) {
+      try { var r = ev && ev.reason; push("rejection", { msg: String(r && r.message || r || "rejection").slice(0, 200) }, true); } catch (e) {}
+    });
+  } catch (e) {}
+  try {
+    if (typeof PerformanceObserver !== "undefined") {
+      var po = new PerformanceObserver(function (list) {
+        try {
+          var es = list.getEntries();
+          for (var i = 0; i < es.length; i++) if (es[i].duration > 200) push("longtask", { ms: Math.round(es[i].duration) });
+        } catch (e) {}
+      });
+      po.observe({ entryTypes: ["longtask"] });
+    }
+  } catch (e) {}
+  try {
+    var wTo = window.scrollTo, wBy = window.scrollBy;
+    window.scrollTo = function () { try { push("scroll-write", { api: "window.scrollTo", args: Array.prototype.slice.call(arguments).map(function (a) { return (a && typeof a === "object") ? { top: Math.round(a.top || 0), left: Math.round(a.left || 0) } : a; }) }); } catch (e) {} return wTo.apply(window, arguments); };
+    window.scrollBy = function () { try { push("scroll-write", { api: "window.scrollBy", args: Array.prototype.slice.call(arguments).map(function (a) { return (a && typeof a === "object") ? { top: Math.round(a.top || 0), left: Math.round(a.left || 0) } : a; }) }); } catch (e) {} return wBy.apply(window, arguments); };
+    if (window.Element && Element.prototype) {
+      var eTo = Element.prototype.scrollTo, eBy = Element.prototype.scrollBy;
+      if (eTo) Element.prototype.scrollTo = function () { try { push("scroll-write", { api: "el.scrollTo", id: this && this.id || "", args: Array.prototype.slice.call(arguments).map(function (a) { return (a && typeof a === "object") ? { top: Math.round(a.top || 0), left: Math.round(a.left || 0) } : a; }) }); } catch (e) {} return eTo.apply(this, arguments); };
+      if (eBy) Element.prototype.scrollBy = function () { try { push("scroll-write", { api: "el.scrollBy", id: this && this.id || "" }); } catch (e) {} return eBy.apply(this, arguments); };
+    }
+  } catch (e) {}
+  try {
+    var geoEls = [];
+    ["apocMap", "mapPanel"].forEach(function (id) { var el = document.getElementById(id); if (el) geoEls.push(el); });
+    var mb = document.querySelector(".map-box"); if (mb && geoEls.indexOf(mb) < 0) geoEls.push(mb);
+    if (geoEls.length && typeof ResizeObserver !== "undefined") {
+      var lastGeo = {};
+      var ro = new ResizeObserver(function (entries) {
+        try {
+          for (var i = 0; i < entries.length; i++) {
+            var el = entries[i].target, r = el.getBoundingClientRect();
+            var k = el.id || "map-box", cur = Math.round(r.width) + "x" + Math.round(r.height);
+            if (lastGeo[k] && lastGeo[k] !== cur) push("map-geometry", { el: k, from: lastGeo[k], to: cur });
+            lastGeo[k] = cur;
+          }
+        } catch (e) {}
+      });
+      geoEls.forEach(function (el) { try { ro.observe(el); } catch (e) {} });
+    }
+    if (geoEls.length && typeof MutationObserver !== "undefined") {
+      var mo = new MutationObserver(function (muts) {
+        try {
+          for (var i = 0; i < muts.length; i++) {
+            var t = muts[i].target;
+            if (t && (t.id === "apocMap" || t.id === "mapPanel")) push("map-geometry", { el: t.id || "?", via: "style-mutation" });
+          }
+        } catch (e) {}
+      });
+      geoEls.forEach(function (el) { try { mo.observe(el, { attributes: true, attributeFilter: ["style"] }); } catch (e) {} });
+    }
+  } catch (e) {}
+  try { push("recorder-boot", { build: build }, true); } catch (e) {}
 })();
 </script>
 
