@@ -7819,7 +7819,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1033";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1040";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -10597,20 +10597,12 @@ function floorConnected(L, cols, rows){
     while (title.firstChild) titleBubble.appendChild(title.firstChild);
     var ver = titleBubble.querySelector("#siteVersion");
     if (ver) ver.hidden = false;
-    var rb = document.createElement("button");
-    rb.type = "button"; rb.className = "btn"; rb.id = "layoutResetBtn";
-    rb.textContent = "Reset layout";
-    rb.title = "Return every piece to the default layout (clears your saved positions, sizes and locks on this device)";
-    rb.addEventListener("click", function(){
-      [KEY, "apocVttLibSubOrderV1", "apocVttBtnParkV1", "apocVttPerimeterV2", "apocVttFsFloatV1", "apocVttZoomBarV1", "apocVttZoomBarPhoneV1", "apocVttMapSizeV1", "apocVttLibBoxH", "apocVttLibPhoneW", "apocVttPanelParkV1", "apocVttViewV1", "apocVttTuckV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });       location.reload();
-    });
-    /* APOC-V262: the Reset layout button is NOT appended into the
-       bubble — it is the bubble's next sibling, its own standalone
-       button standing clear of the header (Shaun, 2026-11-12: "The
-       reset layout is its own button"). glueReset() below keeps it
-       parked beside the bubble when the bubble floats. */
+    /* APOC-V264 (Shaun, 2026-11-12): the standalone Reset layout
+       button (layoutResetBtn — "the little reset, the one on top,
+       right next to the version") is REMOVED at his order. The
+       bubble now carries only the title, the version and its lock
+       glyph. Its V262 parking glue is removed in this build too. */
     panel.insertBefore(titleBubble, panel.firstChild);
-    panel.insertBefore(rb, titleBubble.nextSibling);
     head.classList.add("head-gone");
   }
 
@@ -10742,9 +10734,13 @@ function floorConnected(L, cols, rows){
     }
   });
   document.addEventListener("pointerup", function(){
+    var dId = dragState ? dragState.id : null, dMoved = !!(dragState && dragState.moved);
+    var rId = resizeState ? resizeState.id : null;
     if (dragState && dragState.moved) { storeRect(dragState.id, dragState.el); applyOrient(dragState.el); suppressClick = true; setTimeout(function(){ suppressClick = false; }, 350); }
     if (resizeState) { storeRect(resizeState.id, resizeState.el); applyOrient(resizeState.el); }
     dragState = null; resizeState = null;
+    if (dId === "title" && dMoved) settleTitleDock();
+    else if (rId === "title") { var rec = load(); if (rec.titleDock264 && rec.titleDock264.edge === "R") dockTitle(); }
   });
   document.addEventListener("pointerdown", function(e){
     var h = e.target.closest ? e.target.closest(".fp-h") : null;
@@ -10791,7 +10787,7 @@ function floorConnected(L, cols, rows){
     }
     var cr = document.querySelector(".ctl-row"); if (cr && !cr.dataset.fpDone) { cr.dataset.fpDone = "1"; var bar = cr.querySelector(".ctl-bar") || cr; if (!bar.querySelector(":scope > .fp-grip")) { var g2 = document.createElement("span"); g2.className = "fp-grip"; g2.textContent = "\u283f"; g2.title = "Drag to move"; bar.insertBefore(g2, bar.firstChild); makeDraggable(cr, "ctlrow", g2); } addLock(cr, "ctlrow", bar); addHandles(cr, "ctlrow"); var rr = rec.ctlrow; if (rr && typeof rr.x === "number") { detach(cr, { left: clamp(rr.x, -20, window.innerWidth - 60), top: clamp(rr.y, 0, window.innerHeight - 26), width: rr.w || cr.getBoundingClientRect().width, height: rr.h || cr.getBoundingClientRect().height }); applyOrient(cr); } paintLock(cr, "ctlrow"); }
     if (titleBubble && !titleBubble.dataset.fpDone) { titleBubble.dataset.fpDone = "1"; makeDraggable(titleBubble, "title", titleBubble); addLock(titleBubble, "title", titleBubble); addHandles(titleBubble, "title"); var rt = rec.title; if (rt && typeof rt.x === "number") { detach(titleBubble, { left: clamp(rt.x, -20, window.innerWidth - 60), top: clamp(rt.y, 0, window.innerHeight - 26), width: rt.w || titleBubble.getBoundingClientRect().width, height: rt.h || titleBubble.getBoundingClientRect().height }); } paintLock(titleBubble, "title"); }
-    glueReset();
+    dockTitle();
     document.querySelectorAll(".per-group, .map-repo").forEach(function(el){
       if (el.dataset.fpDone) return; el.dataset.fpDone = "1";
       var id = el.classList.contains("map-repo") ? "per-repo" : ("per-" + (el.dataset.perGroup || el.id || "grp"));
@@ -10809,55 +10805,65 @@ function floorConnected(L, cols, rows){
     var zb = document.getElementById("zoomBar"); if (zb && !zb.dataset.fpDone) { zb.dataset.fpDone = "1"; addLock(zb, "zoombar", zb); paintLock(zb, "zoombar"); }
   }
 
-  /* APOC-V262 — glue for the standalone Reset layout button. When the
-     title bubble floats (fp-piece-float, the form Shaun's saved record
-     gives it), the button floats with it, parked 16px clear of the
-     bubble's right edge, vertically centred on the bubble; when the
-     bubble is inline, the button is plain inline flow with a 16px left
-     margin (APOC-V262 CSS). The observer watches ONLY the bubble's
-     style/class attributes (its drags and resizes are style writes)
-     and writes ONLY the button's position, compared before writing —
-     the button is never observed, so no feedback loop is possible. */
-  var resetGlueDone = false, resetGlueLast = "";
-  function placeReset(){
-    var tb = titleBubble, btn = document.getElementById("layoutResetBtn");
-    if (!tb || !btn) return;
-    if (tb.classList.contains("fp-piece-float")) {
-      var r = tb.getBoundingClientRect();
-      var bw = btn.offsetWidth || 80, bh = btn.offsetHeight || 21;
-      var left, top;
-      if (r.right + 16 + bw <= window.innerWidth - 4) {
-        left = Math.round(r.right) + 16;
-        top = Math.round(r.top + Math.max(0, (r.height - bh) / 2));
-      } else {
-        /* no room beside the bubble (narrow screen, or the bubble is
-           parked against the right edge): stand below its left edge */
-        left = Math.max(0, Math.min(Math.round(r.left), window.innerWidth - bw - 4));
-        top = Math.round(r.bottom) + 8;
+  /* APOC-V264 (Shaun, 2026-11-12): the header bubble docks to the
+     RIGHT side and extends all the way to the right edge — its seat
+     is flush against the viewport's right edge, stacked clear of
+     the right track's chips, the whole unit (title + version + its
+     lock glyph) moving as one. The seat persists in his FreeLayout
+     record (a titleDock264 marker, the homeZoom pattern): a seat
+     the page set is re-applied on boot and on viewport resize; a
+     drag dropped within the tabs' 72px attraction of the right
+     edge re-docks; a drag dropped anywhere else marks the seat
+     free and his placement stands — docking is seating, not a
+     freeze. (The standalone Reset Layout button and its V262 glue
+     are gone in this build; nothing follows the bubble any more.) */
+  function dockTitle(){
+    var el = titleBubble;
+    if (!el || !el.classList.contains("fp-piece-float")) return;
+    var rec = load(); var mk = rec.titleDock264;
+    if (mk && mk.free) return;
+    var r = el.getBoundingClientRect(); if (!r.width) return;
+    var iw = window.innerWidth, ih = window.innerHeight;
+    var left = Math.max(0, Math.round(iw - r.width));
+    var top = Math.round(clamp((mk && mk.edge === "R" && typeof mk.t === "number") ? mk.t : r.top, 0, Math.max(0, ih - r.height)));
+    var track = document.getElementById("apocTabR");
+    if (track) {
+      var chipTop = null, chipLeft = null, chipRight = null;
+      track.querySelectorAll(".apoc-tab").forEach(function(c){
+        var cr = c.getBoundingClientRect(); if (!cr.width) return;
+        if (chipTop === null || cr.top < chipTop) chipTop = cr.top;
+        if (chipLeft === null || cr.left < chipLeft) chipLeft = cr.left;
+        if (chipRight === null || cr.right > chipRight) chipRight = cr.right;
+      });
+      if (chipTop !== null && left + r.width > chipLeft && left < chipRight && top < chipTop && top + r.height > chipTop) {
+        var above = Math.round(chipTop - r.height);
+        if (above >= 0) top = above;
       }
-      var key = "f:" + left + "," + top;
-      if (key === resetGlueLast) return;
-      resetGlueLast = key;
-      btn.classList.add("apoc-reset-float");
-      btn.style.left = left + "px"; btn.style.top = top + "px";
+    }
+    if (mk && mk.edge === "R" && Math.round(r.left) === left && Math.round(r.top) === top) return;
+    if (Math.round(r.left) !== left) el.style.left = left + "px";
+    if (Math.round(r.top) !== top) el.style.top = top + "px";
+    storeRect("title", el);
+    var rec2 = load(); rec2.titleDock264 = { edge: "R", l: left, t: top }; save(rec2);
+  }
+  function settleTitleDock(){
+    var el = titleBubble;
+    if (!el || !el.classList.contains("fp-piece-float")) return;
+    var r = el.getBoundingClientRect(); if (!r.width) return;
+    if (window.innerWidth - r.right <= 72) {
+      var rec = load();
+      if (rec.titleDock264) { delete rec.titleDock264; save(rec); }
+      dockTitle();
     } else {
-      if (resetGlueLast === "i") return;
-      resetGlueLast = "i";
-      btn.classList.remove("apoc-reset-float");
-      btn.style.left = ""; btn.style.top = "";
+      var rec3 = load(); rec3.titleDock264 = { free: true }; save(rec3);
     }
   }
-  function glueReset(){
-    placeReset();
-    if (resetGlueDone) return;
-    if (!titleBubble) return;
-    resetGlueDone = true;
-    try {
-      new MutationObserver(function(){ placeReset(); }).observe(titleBubble, { attributes: true, attributeFilter: ["style", "class"] });
-    } catch(e){}
-    window.addEventListener("resize", placeReset);
-    document.addEventListener("pointerup", function(){ setTimeout(placeReset, 60); }, true);
-  }
+  window.addEventListener("resize", function(){
+    var rec = load();
+    if (rec.titleDock264 && rec.titleDock264.edge === "R") dockTitle();
+  });
+  setTimeout(function(){ dockTitle(); }, 9000);
+  setTimeout(function(){ dockTitle(); }, 14000);
 
   var tries = 0;
   function boot(){ register(); fitLib(); if (++tries < 4) setTimeout(boot, 1600); }
@@ -11047,13 +11053,13 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
       if (!on) endEdit(false);
       paint();
     });
-    var rl = document.createElement("button"); rl.type = "button"; rl.id = "dmResetLayoutBtn"; rl.textContent = "Reset Layout";
-    rl.title = "Return every piece to the default layout (same as Reset layout in the title bubble)";
-    rl.addEventListener("click", function(){
-      var b = document.getElementById("layoutResetBtn");
-      if (b) { b.click(); return; }
-      ["apocVttLibSubOrderV1","apocVttBtnParkV1","apocVttFreeLayoutV1","apocVttPerimeterV2","apocVttFsFloatV1","apocVttZoomBarV1","apocVttZoomBarPhoneV1","apocVttMapSizeV1","apocVttLibBoxH","apocVttLibPhoneW","apocVttPanelParkV1","apocVttViewV1","apocVttTuckV1"].forEach(function(k){ try { localStorage.removeItem(k); } catch(e){} });       location.reload();
-    });
+    /* APOC-V264 (Shaun, 2026-11-12): the DM cluster's duplicate
+       "Reset Layout" button (dmResetLayoutBtn — the rightmost Reset
+       Layout, riding the right track at (1234,154) in his record)
+       is REMOVED at his order ("the one all the way to the right —
+       go away"). The standalone header Reset Layout button is
+       removed in this same build; no Reset Layout button remains
+       anywhere on the page. */
     var rt = document.createElement("button"); rt.type = "button"; rt.id = "dmResetTextBtn"; rt.textContent = "Reset Text";
     rt.title = "Clear every renamed label (shared store + this device) and reload";
     rt.addEventListener("click", async function(){
@@ -11068,7 +11074,7 @@ body.vtt-dm-edit [data-v181-ed]{outline:1px dashed rgba(30,64,175,.95);outline-o
       var u = new URL(location.href); u.searchParams.delete("dm");
       location.replace(u.toString());
     });
-    bar.appendChild(lock); bar.appendChild(rl); bar.appendChild(rt); bar.appendChild(ex);
+    bar.appendChild(lock); bar.appendChild(rt); bar.appendChild(ex);
     document.body.appendChild(bar);
     paint();
   }
@@ -12141,39 +12147,15 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
 
     var LOCK_KEY = "apocVttMapLockV1";
   function lockOn(){ try { return localStorage.getItem(LOCK_KEY) === "1"; } catch(e){ return false; } }
-  var lockBtn = document.createElement("button");
-  lockBtn.type = "button"; lockBtn.className = "btn"; lockBtn.id = "arLockBtn";
-  lockBtn.title = "Lock the map where it sits: no panning or zooming until you unlock it.";
-  var lockBadge = document.createElement("div");
-  lockBadge.id = "arLockBadge"; lockBadge.textContent = "🔒 MAP LOCKED"; lockBadge.hidden = true;
-  function applyLock(){
-    var on = lockOn(), m = window.map;
-    if (m) {
-      if (m.dragging) { if (on && m.dragging.enabled()) m.dragging.disable(); if (!on && !m.dragging.enabled()) m.dragging.enable(); }
-      if (on) {
-                ["scrollWheelZoom", "touchZoom", "doubleClickZoom", "boxZoom"].forEach(function(h){ var hh = m[h]; if (hh && hh.enabled()) hh.disable(); });
-      } else if (window.__apocPinchApply) {
-                try { window.__apocPinchApply(); } catch(e){}
-      }
-    }
-    lockBtn.setAttribute("aria-pressed", String(on));
-    lockBtn.textContent = on ? "🔒 Map locked" : "Lock map";
-    lockBadge.hidden = !on;
-  }
-  lockBtn.addEventListener("click", function(){
-    try { localStorage.setItem(LOCK_KEY, lockOn() ? "0" : "1"); } catch(e){}
-    applyLock();
-    sayAr(lockOn() ? "Map locked here — it can't be panned or zoomed until you unlock it." : "Map unlocked — panning and zoom are back.");
-  });
-  (function mountLock(){
-    var gm = $("gmBtn");
-    if (gm && gm.parentElement) gm.parentElement.insertBefore(lockBtn, gm.nextSibling);
-    else { var bar = document.querySelector(".ctl-bar") || document.querySelector(".map-tools"); if (bar) bar.appendChild(lockBtn); }
-    var mapEl = $("apocMap");
-    if (mapEl && mapEl.parentElement) { mapEl.parentElement.appendChild(lockBadge); }
-    applyLock();
-    setInterval(applyLock, 2500);
-  })();
+  /* APOC-V264 (Shaun, 2026-11-12): the far-right tab beside Art
+     Library (arLockBtn, labelled "Lock map") is REMOVED at his
+     order ("that dock library button all the way to the right —
+     that goes away"). Its proven function was locking the MAP in
+     place; that toggle dies with the button and is NOT rehomed.
+     The badge, applyLock and its 2.5s interval go with it.
+     lockOn() above stays as a reader (the stamp-drag handler in
+     this same script still consults it), and APOC-V264 clears
+     apocVttMapLockV1 so it reads false everywhere. */
 
     (function gate3D(){
     var host = $("tdCanvas"); if (!host || host._arGate) return; host._arGate = 1;
@@ -18151,10 +18133,10 @@ body.apoc-tabs254 .apoc-track{display:none!important}
      any saved tabs254 at the next apply(). */
   var HOME = { mapTab:"L", gmBtn:"L",
     toolsTab:"L", fogTab:"L", lightTab:"L", drawTab:"L", layersTab:"L", diceTab:"L", grpHead:"L",
-    ambBtn:"R", libTab253:"R", arLockBtn:"R",
-    dmLockBtn:"DM", dmResetLayoutBtn:"DM", dmResetTextBtn:"DM", dmExitBtn:"DM" };
+    ambBtn:"R", libTab253:"R",
+    dmLockBtn:"DM", dmResetTextBtn:"DM", dmExitBtn:"DM" };
   var TABS = Object.keys(HOME);
-  var DMIDS = ["dmLockBtn", "dmResetLayoutBtn", "dmResetTextBtn", "dmExitBtn"];
+  var DMIDS = ["dmLockBtn", "dmResetTextBtn", "dmExitBtn"];
   var EDGES = ["L", "R", "T", "B"];
   var EDGE_NAME = { L: "left", R: "right", T: "top", B: "bottom" };
 
@@ -19212,6 +19194,79 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
   }
   strip();
   [600, 2000, 4500].forEach(function(ms){ setTimeout(strip, ms); });
+})();
+</script>
+
+<style id="APOC-V264-CSS">
+/* APOC-V264 (Shaun, 2026-11-12): "Put the zoom toggle button on the
+   same layer as the other buttons." The zoom assembly (#zoomBar:
+   grip + slider + the Pinch toggle — one assembly in the bytes)
+   floated at z-index 960, under the button system. It now rides
+   the tab tracks' own plane (z-index 1800). */
+#zoomBar{z-index:1800}
+</style>
+<script>
+/* APOC-V264 (Shaun, 2026-11-12 — the go-away + docking package):
+   (a) zoom assembly docks/locks in with the side; (b) the dead
+   map-lock key is cleared; (c) defensive sweep for the three
+   controls this build removes (their creation sites are gone;
+   this only mops up a stray from an older cached script). */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+
+  /* (c) sweep: no Reset Layout button anywhere, no library dock tab */
+  function sweep(){
+    ["layoutResetBtn", "dmResetLayoutBtn", "arLockBtn", "arLockBadge"].forEach(function(id){
+      var el = document.getElementById(id);
+      if (el && el.parentElement) el.parentElement.removeChild(el);
+    });
+  }
+  sweep();
+  [600, 2000, 4500].forEach(function(ms){ setTimeout(sweep, ms); });
+
+  /* (b) the map-lock toggle died with arLockBtn — leave no armed
+     lock state behind on any device */
+  try { localStorage.removeItem("apocVttMapLockV1"); } catch(e){}
+
+  /* (a) zoom dock: the bar keeps its own drag and its own record
+     (apocVttZoomBarV1 / apocVttZoomBarPhoneV1); what changes is
+     the seating. When the bar sits within the tabs' 72px edge
+     attraction of a side edge — at boot, or dropped there — it
+     snaps FLUSH to that edge and the seat persists in its record,
+     locked in with the side. Dropped mid-screen it stays where
+     Shaun left it (his move stands). Seating the dock also sets
+     the Tuck record's zoomHomeDone — the homing systems' own
+     "seat settled" signal — so neither homer can fight the dock,
+     and the V254 homer additionally freezes itself out because
+     the bar's record no longer equals its zoomHomeFor marker. */
+  var ZK_D = "apocVttZoomBarV1", ZK_P = "apocVttZoomBarPhoneV1", SKEY = "apocVttTuckV1";
+  function dockZoom(){
+    var zb = document.getElementById("zoomBar");
+    if (!zb || zb.hidden || !zb.offsetWidth) return;
+    var r = zb.getBoundingClientRect(); if (!r.width) return;
+    var iw = window.innerWidth;
+    var gapL = Math.round(r.left), gapR = Math.round(iw - r.right), dx = 0;
+    if (gapR <= 72 && gapR >= -2) dx = Math.round(iw - r.right);
+    else if (gapL <= 72 && gapL >= -2) dx = -Math.round(r.left);
+    else return;
+    try {
+      var t = JSON.parse(localStorage.getItem(SKEY) || "{}") || {};
+      if (!t.zoomHomeDone) { t.zoomHomeDone = true; localStorage.setItem(SKEY, JSON.stringify(t)); }
+    } catch(e){}
+    if (!dx) return;
+    var key = window.matchMedia("(max-width: 820px)").matches ? ZK_P : ZK_D;
+    var rec = null;
+    try { rec = JSON.parse(localStorage.getItem(key) || "null"); } catch(e){}
+    var curL = (rec && typeof rec.l === "number") ? rec.l : parseInt(zb.style.left, 10);
+    var curT = (rec && typeof rec.t === "number") ? rec.t : parseInt(zb.style.top, 10);
+    if (isNaN(curL) || isNaN(curT)) return;
+    var nl = curL + dx;
+    try { localStorage.setItem(key, JSON.stringify({ l: nl, t: curT })); } catch(e){}
+    zb.style.left = nl + "px";
+  }
+  [7000, 11000].forEach(function(ms){ setTimeout(dockZoom, ms); });
+  document.addEventListener("pointerup", function(){ setTimeout(dockZoom, 140); }, true);
 })();
 </script>
 </body>
