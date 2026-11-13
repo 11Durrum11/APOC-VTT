@@ -925,6 +925,9 @@ body.map-expanded .stage-row{display:contents}
       <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>DM view: ON</button>
       <span class="muted small" id="tokenStatus"></span>
       <span class="muted small" id="gmStatus"></span>
+      <button type="button" class="btn" id="toolWallBtn" aria-pressed="false">Wall</button>
+      <button type="button" class="btn" id="toolDoorBtn" aria-pressed="false">Door</button>
+      <button type="button" class="btn" id="toolWindowBtn" aria-pressed="false">Window</button>
       <span style="display:contents" id="tplControls">
         <button type="button" class="btn" id="tplConeBtn">Tpl: Cone</button>
         <button type="button" class="btn" id="tplCircleBtn">Tpl: Circle</button>
@@ -941,6 +944,7 @@ body.map-expanded .stage-row{display:contents}
       <button type="button" class="btn" id="fogHideBtn" aria-pressed="false">Hide area</button>
       <button type="button" class="btn" id="fogAllBtn">Reveal all (fog off)</button>
       <button type="button" class="btn" id="fogNoneBtn">Hide all</button>
+      <span class="field" style="flex:0 1 auto"><label for="fogOpacity">Fog darkness</label><input id="fogOpacity" type="range" min="0.75" max="1" step="0.01" value="0.93" style="width:110px"></span>
     </div>
     <div class="map-tools" id="lightControls" hidden>
       <label class="atlas-toggle"><input type="checkbox" id="lightEnabled"> Dynamic lighting on this map</label>
@@ -960,6 +964,7 @@ body.map-expanded .stage-row{display:contents}
       <button type="button" class="btn" id="lightPlaceBtn" aria-pressed="false">Place light</button>
       <button type="button" class="btn" id="wallEraseBtn" aria-pressed="false">Erase wall / door / window</button>
       <button type="button" class="btn" id="wallClearBtn">Clear walls</button>
+      <span class="field" style="flex:0 1 auto"><label for="ambientRange">Ambient darkness</label><input id="ambientRange" type="range" min="0" max="1" step="0.05" value="1" style="width:110px"></span>
       <span class="muted small" id="lightStatus"></span>
     </div>
     <div class="map-tools">
@@ -1365,6 +1370,10 @@ body.map-expanded .stage-row{display:contents}
         <div class="field full" id="tokenLightField">
           <label for="tokenLight">Light / vision radius (ft)</label>
           <input id="tokenLight" type="number" min="0" step="5" placeholder="0">
+        </div>
+        <div class="field full" id="tokenLightColorField">
+          <label for="tokenLightColor">Light colour</label>
+          <input id="tokenLightColor" type="color" value="#ffb347">
         </div>
         <div class="field full">
           <label class="atlas-toggle"><input type="checkbox" id="tokenFlip"> Flip (mirror)</label>
@@ -2154,9 +2163,11 @@ setInterval(loadSharedEntries, 60000);
   });
 
   async function loadTokens(quiet){
+    const forMap271 = currentMapId;
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", tokensKey()).maybeSingle();
     if (error) { if (!quiet) tokenStatusEl.textContent = "Tokens could not be loaded — try again in a few seconds."; return; }
     tokens = (data && data.value && Array.isArray(data.value.tokens)) ? data.value.tokens : [];
+    window.__apocTokensLoadedFor = forMap271;
     drawTokens();
     tokenStatusEl.textContent = tokens.length ? `${tokens.length} token${tokens.length === 1 ? "" : "s"} on the table.` : "No tokens yet — Add token drops one at the center of the view.";
   }
@@ -2165,6 +2176,7 @@ setInterval(loadSharedEntries, 60000);
       { key: tokensKey(), value: { tokens }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
+    if (!error && window.__apocFogReady) { try { renderFog(); } catch (e) {} }
     return !error;
   }
 
@@ -2269,6 +2281,7 @@ setInterval(loadSharedEntries, 60000);
     $("tokenSym").value = tk.sym || "";
     $("tokenGm").checked = !!tk.gm;
     $("tokenLight").value = tk.light || "";
+    if ($("tokenLightColor")) $("tokenLightColor").value = tk.lightColor || "#ffb347";
     $("tokenFlip").checked = !!tk.flip;
     $("tokenLock").checked = !!tk.lock;
     draftStatus = [...(tk.status || [])];
@@ -2354,6 +2367,7 @@ setInterval(loadSharedEntries, 60000);
       entryId: $("tokenLink").value,
       gm: $("tokenGm").checked,
       light: parseFloat($("tokenLight").value) || 0,
+      lightColor: $("tokenLightColor") ? $("tokenLightColor").value : "",
       flip: $("tokenFlip").checked,
       lock: $("tokenLock").checked
     });
@@ -2562,7 +2576,7 @@ setInterval(loadSharedEntries, 60000);
   const previewLayer = L.layerGroup().addTo(map);
   const fogKey = () => currentMapId === "faerun" ? "vtt_fog" : `vtt_fog_${currentMapId}`;
   const drawKey = () => currentMapId === "faerun" ? "vtt_draw" : `vtt_draw_${currentMapId}`;
-  let fogState = { enabled: false, revealed: [] };
+  let fogState = { enabled: false, revealed: [], opacity: 0.93, explored: null };
   let drawItems = [];
   const drawStatusEl = $("drawStatus");
     const DEFAULT_DRAW_LAYERS = [{ id: "shared", name: "Player", gm: false, hidden: false }, { id: "gm", name: "DM", gm: true, hidden: false }, { id: "fg", name: "Foreground", gm: false, hidden: false }, { id: "map", name: "Map", gm: false, hidden: false, opacity: 1 }];   let drawLayers = DEFAULT_DRAW_LAYERS.map(l => ({ ...l }));
@@ -2654,13 +2668,18 @@ setInterval(loadSharedEntries, 60000);
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", fogKey()).maybeSingle();
     if (error) return;
     fogState = (data && data.value && typeof data.value === "object")
-      ? { enabled: !!data.value.enabled, revealed: Array.isArray(data.value.revealed) ? data.value.revealed : [] }
-      : { enabled: false, revealed: [] };
+      ? { enabled: !!data.value.enabled, revealed: Array.isArray(data.value.revealed) ? data.value.revealed : [],
+          opacity: (typeof data.value.opacity === "number") ? Math.min(1, Math.max(0.75, data.value.opacity)) : 0.93,
+          explored: (data.value.explored && data.value.explored.bits && data.value.explored.cell > 0) ? data.value.explored : null }
+      : { enabled: false, revealed: [], opacity: 0.93, explored: null };
     $("fogEnabled").checked = fogState.enabled;
+    if ($("fogOpacity")) $("fogOpacity").value = fogState.opacity;
     renderFog();
   }
   async function saveFog(){
-    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: fogKey(), value: fogState, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    const val = { enabled: fogState.enabled, revealed: fogState.revealed, opacity: (typeof fogState.opacity === "number" ? fogState.opacity : 0.93),
+      explored: fogState.explored ? { cell: fogState.explored.cell, cols: fogState.explored.cols, rows: fogState.explored.rows, bits: fogState.explored.bits } : null };
+    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: fogKey(), value: val, updated_at: new Date().toISOString() }, { onConflict: "key" });
     return !error;
   }
     function maskedShade(group, rectRing, holeRingsLL, fillOpacity, maskId){
@@ -2701,19 +2720,136 @@ setInterval(loadSharedEntries, 60000);
       return null;
     }
   }
+  /* APOC-V271 (L3) — FOG DEPTH. Fog is three-state now: pinned-revealed
+     rects, an explored-memory bitmap (one bit per grid cell of the frame),
+     and visible-now — the union of the revealed rects, every non-GM
+     token's vision (its light radius, or 1.5 cells when it carries no
+     light) and, while lighting is on, every light's dim area, all blocked
+     by the same walls that block light. Players see unseen at the fog
+     darkness slider, explored-only at a memory shade, visible-now clear
+     with a feathered edge; the GM reads the same picture lighter. The
+     picture is one canvas overlay; rotated maps keep the older rect
+     render. Explored memory persists inside the fog row. */
+  function fogVisiblePolys(){
+    const polys = [];
+    for (const r of fogState.revealed) {
+      const [ax, ay] = toUnits({ x: r.x, y: r.y }), [bx, by] = toUnits({ x: r.x + r.w, y: r.y + r.h });
+      polys.push([{ x: ax, y: ay }, { x: bx, y: ay }, { x: bx, y: by }, { x: ax, y: by }]);
+    }
+    try {
+      const segs = lightBlockers();
+      const ftU = ftToUnits(1);
+      for (const tk of tokens) {
+        if (tk.gm) continue;
+        const [ux, uy] = toUnits(tk);
+        const rad = tk.light > 0 ? tk.light * ftU : 1.5 * cellNow();
+        const p = visPoly(ux, uy, rad, segs);
+        if (p.length > 2) polys.push(p);
+      }
+      if (lightState.enabled) for (const src of lightState.lights) {
+        if (src.on === false || !(src.dim > 0)) continue;
+        const [ux, uy] = toUnits(src);
+        const p = visPoly(ux, uy, src.dim * ftU, segs);
+        if (p.length > 2) polys.push(p);
+      }
+    } catch (e) {}
+    return polys;
+  }
+  function fogExploredGrid(){
+    const cell = Math.max(1, Math.ceil(Math.max(frameW() / 200, frameH() / 150)));
+    const cols = Math.ceil(frameW() / cell), rows = Math.ceil(frameH() / cell);
+    if (!fogState.explored || fogState.explored.cell !== cell || fogState.explored.cols !== cols || fogState.explored.rows !== rows)
+      fogState.explored = { cell, cols, rows, bits: "" };
+    return fogState.explored;
+  }
+  function fogBitsArr(g){
+    const n = g.cols * g.rows;
+    if (g._arr && g._arr.length === n) return g._arr;
+    const arr = new Uint8Array(n);
+    if (g.bits) { try { const bin = atob(g.bits); for (let i = 0; i < n; i++) arr[i] = (bin.charCodeAt(i >> 3) >> (i & 7)) & 1; } catch (e) {} }
+    g._arr = arr;
+    return arr;
+  }
+  function fogBitsSave(g){
+    const arr = fogBitsArr(g), bytes = new Uint8Array(Math.ceil(arr.length / 8));
+    for (let i = 0; i < arr.length; i++) if (arr[i]) bytes[i >> 3] |= (1 << (i & 7));
+    let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
+    g.bits = btoa(bin);
+  }
   function renderFog(){
     fogLayer.clearLayers();
     if (!fogState.enabled) return;
-    const holes = fogState.revealed.map(r => {
-      const a = toLatLng(r.x, r.y), b = toLatLng(r.x + r.w, r.y + r.h);
-      return [[a[0], a[1]], [a[0], b[1]], [b[0], b[1]], [b[0], a[1]]];
-    });
-    maskedShade(fogLayer, [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]], holes, effectiveGm() ? 0.45 : 0.93, "apocFogMask");     if (effectiveGm()) for (const r of fogState.revealed)
+    if (mapRot) {
+      const holes = fogState.revealed.map(r => {
+        const a = toLatLng(r.x, r.y), b = toLatLng(r.x + r.w, r.y + r.h);
+        return [[a[0], a[1]], [a[0], b[1]], [b[0], b[1]], [b[0], a[1]]];
+      });
+      maskedShade(fogLayer, [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]], holes, effectiveGm() ? 0.45 : (fogState.opacity || 0.93), "apocFogMask");
+      if (effectiveGm()) for (const r of fogState.revealed)
+        fogLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { pane: "layerGm", color: "#e8a33d", weight: 1, fill: false, interactive: false }));
+      return;
+    }
+    const gm = effectiveGm();
+    const W = 800, H = Math.max(50, Math.round(800 * frameH() / frameW()));
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d");
+    const X = ux => ux / frameW() * W, Y = uy => (1 - uy / frameH()) * H;
+    const polys = fogVisiblePolys();
+    const g = fogExploredGrid(), arr = fogBitsArr(g);
+    let changed = false;
+    if (window.__apocTokensLoadedFor === currentMapId && window.__apocLightLoadedFor === currentMapId) for (let row = 0; row < g.rows; row++) for (let col = 0; col < g.cols; col++) {
+      const i = row * g.cols + col;
+      if (arr[i]) continue;
+      const cx = (col + 0.5) * g.cell, cy = (row + 0.5) * g.cell;
+      if (polys.some(p => pointInPolyU(cx, cy, p))) { arr[i] = 1; changed = true; }
+    }
+    if (changed) { fogBitsSave(g); saveFog(); }
+    const unseen = gm ? 0.45 : (fogState.opacity || 0.93), memory = gm ? 0.25 : 0.55;
+    ctx.fillStyle = `rgba(4,6,10,${unseen})`;
+    ctx.fillRect(0, 0, W, H);
+    // explored cells are painted on integer-snapped rects (shared edges):
+    // a padded rect would stack the shade over itself wherever cells meet.
+    const cellRect = (col, row) => {
+      const rx0 = Math.round(X(col * g.cell)), rx1 = Math.round(X((col + 1) * g.cell));
+      const ry0 = Math.round(Y((row + 1) * g.cell)), ry1 = Math.round(Y(row * g.cell));
+      return [rx0, ry0, Math.max(1, rx1 - rx0), Math.max(1, ry1 - ry0)];
+    };
+    ctx.fillStyle = "#000";
+    ctx.globalCompositeOperation = "destination-out";
+    for (let row = 0; row < g.rows; row++) for (let col = 0; col < g.cols; col++) {
+      if (!arr[row * g.cols + col]) continue;
+      ctx.fillRect(...cellRect(col, row));
+    }
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = `rgba(4,6,10,${memory})`;
+    for (let row = 0; row < g.rows; row++) for (let col = 0; col < g.cols; col++) {
+      if (!arr[row * g.cols + col]) continue;
+      ctx.fillRect(...cellRect(col, row));
+    }
+    const mask = document.createElement("canvas"); mask.width = W; mask.height = H;
+    const mctx = mask.getContext("2d");
+    mctx.fillStyle = "#fff";
+    for (const p of polys) {
+      mctx.beginPath();
+      p.forEach((pt, k) => { const px = X(pt.x), py = Y(pt.y); if (k === 0) mctx.moveTo(px, py); else mctx.lineTo(px, py); });
+      mctx.closePath(); mctx.fill();
+    }
+    ctx.globalCompositeOperation = "destination-out";
+    try { ctx.filter = `blur(${Math.max(2, Math.round(g.cell / frameW() * W * 0.6))}px)`; } catch (e) {}
+    ctx.drawImage(mask, 0, 0);
+    try { ctx.filter = "none"; } catch (e) {}
+    ctx.globalCompositeOperation = "source-over";
+    fogLayer.addLayer(L.imageOverlay(cv.toDataURL("image/png"), frameBounds(), { pane: "layerLight", interactive: false }));
+    if (gm) for (const r of fogState.revealed)
       fogLayer.addLayer(L.rectangle([toLatLng(r.x, r.y), toLatLng(r.x + r.w, r.y + r.h)], { pane: "layerGm", color: "#e8a33d", weight: 1, fill: false, interactive: false }));
+    window.__apocFogVisible = polys.length;
   }
   $("fogEnabled").addEventListener("change", async () => { fogState.enabled = $("fogEnabled").checked; await saveFog(); renderFog(); });
   $("fogAllBtn").addEventListener("click", async () => { fogState.enabled = false; $("fogEnabled").checked = false; await saveFog(); renderFog(); });
-  $("fogNoneBtn").addEventListener("click", async () => { if (!confirm("Hide the whole map? Every revealed area is forgotten.")) return; fogState = { enabled: true, revealed: [] }; $("fogEnabled").checked = true; await saveFog(); renderFog(); });
+  $("fogNoneBtn").addEventListener("click", async () => { if (!confirm("Hide the whole map? Every revealed area is forgotten.")) return; fogState = { enabled: true, revealed: [], opacity: (typeof fogState.opacity === "number" ? fogState.opacity : 0.93), explored: null }; $("fogEnabled").checked = true; await saveFog(); renderFog(); });
+  if ($("fogOpacity")) $("fogOpacity").addEventListener("input", async () => { fogState.opacity = Math.min(1, Math.max(0.75, parseFloat($("fogOpacity").value) || 0.93)); renderFog(); await saveFog(); });
+  window.__apocFogReady = true;
+  window.__apocFogTest = { state: () => fogState, render: renderFog, visible: fogVisiblePolys };
 
     async function loadDraw(quiet){
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", drawKey()).maybeSingle();
@@ -5491,7 +5627,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     if (t === "template") refreshTplUi();
   });
   $("tplShape").addEventListener("change", () => { $("tplWidthField").hidden = !($("drawTool").value === "template" && $("tplShape").value === "line"); });
-  setInterval(() => { $("tokenLightField").hidden = !gmView; }, 1000);
+    setInterval(() => { $("tokenLightField").hidden = !gmView; const cf = $("tokenLightColorField"); if (cf) cf.hidden = !gmView; }, 1000);
 
     let swallowBtn = null;
   document.addEventListener("click", e => {
@@ -5559,7 +5695,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
 
 
     const lightKey = () => currentMapId === "faerun" ? "vtt_light" : `vtt_light_${currentMapId}`;
-  let lightState = { enabled: false, walls: [], lights: [], layerHidden: false, layerOpacity: 1 };   window.__apocLightLayer = { hidden: () => lightState.layerHidden === true, opacity: () => (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1), setOpacityLive: v => { lightState.layerOpacity = v; renderLighting(); }, setOpacity: async v => { lightState.layerOpacity = v; renderLighting(); return saveLighting(); }, toggle: async () => { lightState.layerHidden = !(lightState.layerHidden === true); renderLighting(); const ok = await saveLighting(); if (!ok) loadLighting(true); return ok; } };   let lightPreview = false, lightEditingId = null, lightSegStart = null, lightFlickerTimer = null;
+  let lightState = { enabled: false, walls: [], lights: [], layerHidden: false, layerOpacity: 1, ambient: 1 };   window.__apocLightLayer = { hidden: () => lightState.layerHidden === true, opacity: () => (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1), setOpacityLive: v => { lightState.layerOpacity = v; renderLighting(); }, setOpacity: async v => { lightState.layerOpacity = v; renderLighting(); return saveLighting(); }, toggle: async () => { lightState.layerHidden = !(lightState.layerHidden === true); renderLighting(); const ok = await saveLighting(); if (!ok) loadLighting(true); return ok; } };   let lightPreview = false, lightEditingId = null, lightSegStart = null, lightFlickerTimer = null;
   const wallFx = L.layerGroup().addTo(map);
   const doorFx = L.layerGroup().addTo(map);
   const doorAnimFx = L.layerGroup().addTo(map);
@@ -5633,11 +5769,14 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     return L.divIcon({ className: "light-icon", html: `<span class="light-dot" style="background:${esc(col)};box-shadow:${off ? "none" : "0 0 14px 5px " + esc(col)}"></span><span class="light-name">${esc(src.name || "Light")}${off ? " (off)" : ""}</span>`, iconAnchor: [9, 9] });
   }
   async function loadLighting(quiet){
+    const forMap271 = currentMapId;
     if (!db) return;
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", lightKey()).maybeSingle();
     if (error) return;
     const v = (data && data.value && typeof data.value === "object") ? data.value : {};
-    lightState = { enabled: !!v.enabled, walls: Array.isArray(v.walls) ? v.walls : [], lights: Array.isArray(v.lights) ? v.lights : [], layerHidden: v.layerHidden === true, layerOpacity: (typeof v.layerOpacity === "number" ? v.layerOpacity : 1) };     $("lightEnabled").checked = lightState.enabled;
+    lightState = { enabled: !!v.enabled, walls: Array.isArray(v.walls) ? v.walls : [], lights: Array.isArray(v.lights) ? v.lights : [], layerHidden: v.layerHidden === true, layerOpacity: (typeof v.layerOpacity === "number" ? v.layerOpacity : 1), ambient: (typeof v.ambient === "number" ? Math.min(1, Math.max(0, v.ambient)) : 1) };     $("lightEnabled").checked = lightState.enabled;
+    if ($("ambientRange")) $("ambientRange").value = lightState.ambient;
+    window.__apocLightLoadedFor = forMap271;
     window.__apocLightOn = lightState.enabled;
     renderLighting();
     try { buildLayerUi(); } catch(e) {}   }
@@ -5650,11 +5789,26 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     const t = performance.now(), h = (src.id || "lt").length * 1.7 + ((src.id || "lt").charCodeAt(3) || 0);
     return 1 + 0.022 * Math.sin(t / 110 + h) + 0.012 * Math.sin(t / 53 + h * 2.1);
   }
+  /* APOC-V271 (L3): a soft radial glow inside each light's own visible
+     polygon — the disc is sized to the polygon's bounding box in screen
+     px and clipped by the polygon itself, so walls shape the glow.
+     Recomputed whenever lighting re-renders (zoom included). */
+  function glowDisc(polyU, color){
+    if (!polyU || polyU.length < 3) return;
+    let x0 = 1e18, x1 = -1e18, y0 = 1e18, y1 = -1e18;
+    for (const p of polyU) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); }
+    const c1 = map.latLngToContainerPoint(uToLatLng(x0, y1)), c2 = map.latLngToContainerPoint(uToLatLng(x1, y0));
+    const wpx = Math.max(10, Math.round(Math.abs(c2.x - c1.x))), hpx = Math.max(10, Math.round(Math.abs(c2.y - c1.y)));
+    const clip = polyU.map(p => `${((p.x - x0) / ((x1 - x0) || 1) * 100).toFixed(1)}% ${((p.y - y0) / ((y1 - y0) || 1) * 100).toFixed(1)}%`).join(",");
+    const ghtml = `<div style="width:${wpx}px;height:${hpx}px;background:radial-gradient(circle, ${color}59 0%, ${color}26 45%, transparent 72%);clip-path:polygon(${clip});-webkit-clip-path:polygon(${clip})"></div>`;
+    lightFx.addLayer(L.marker(uToLatLng((x0 + x1) / 2, (y0 + y1) / 2), { pane: "layerLight", interactive: false, icon: L.divIcon({ className: "apoc-glow-wrap", html: ghtml, iconSize: [wpx, hpx], iconAnchor: [Math.round(wpx / 2), Math.round(hpx / 2)] }) }));
+  }
   function renderLighting(){
     wallFx.clearLayers(); lightFx.clearLayers(); lightEditFx.clearLayers(); doorFx.clearLayers();
     flickerTints = [];     window.__apocLightOn = lightState.enabled;
     const playerView = !effectiveGm() || lightPreview;
-    const lightOpF = (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1);         if (lightState.layerHidden !== true && effectiveGm() && !lightPreview) {       for (const w of lightState.walls) {
+    const lightOpF = (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1);
+    const ambF = (typeof lightState.ambient === "number" ? lightState.ambient : 1);         if (lightState.layerHidden !== true && effectiveGm() && !lightPreview) {       for (const w of lightState.walls) {
         const a = toLatLng(w.a[0], w.a[1]), b = toLatLng(w.b[0], w.b[1]);
         if (w.kind === "door") { const vis = L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }); wallFx.addLayer(vis); if (w.open && !doorAnimating.has(w)) wallFx.addLayer(L.polyline([a, doorLeafEndLL(w)], { pane: "layerGm", color: "#58b368", weight: 5, interactive: false })); addDoorHit(a, b, w, vis); }
         else if (w.kind === "window") {           wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#3d7ea6", weight: 5, opacity: 0.9, dashArray: w.open ? "3 6" : null, interactive: false }));
@@ -5679,6 +5833,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     }
     if (!lightState.enabled || lightState.layerHidden === true) {       for (const tk of tokens) { const m = tokenMarkers[tk.id]; if (m && !tokenLayer.hasLayer(m)) tokenLayer.addLayer(m); }
       manageFlicker(false);
+      if (window.__apocFogReady) { try { renderFog(); } catch (e) {} }
       return;
     }
     const segs = lightBlockers();
@@ -5693,15 +5848,20 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     for (const tk of tokens) {
       if (tk.gm || !(tk.light > 0)) continue;
       const p = polysOf(tk.x, tk.y, tk.light);
-      if (p.length > 2) dimPolys.push(p);
+      if (p.length > 2) { dimPolys.push(p); tints.push({ poly: p, color: tk.lightColor || "#ffb347", src: tk, f: 1, token: true }); }
+      const pb = polysOf(tk.x, tk.y, tk.light / 2);
+      if (pb.length > 2) brightPolys.push(pb);
     }
     const toLL = poly => poly.map(p => uToLatLng(p.x, p.y));
     const rect = [[0, 0], [0, frameW()], [frameH(), frameW()], [frameH(), 0]];
     if (!playerView) {
+            for (const t of tints) glowDisc(t.poly, t.color);
             for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.10 * lightOpF * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.10 * lightOpF, src: t.src });  }       manageFlicker(lightState.lights.some(s => s.flame && s.on !== false));
+      if (window.__apocFogReady) { try { renderFog(); } catch (e) {} }
       return;
     }
-    for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16 * lightOpF * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.16 * lightOpF, src: t.src });  }     if (brightPolys.length) maskedShade(lightFx, rect, brightPolys.map(toLL), 0.38 * lightOpF, "apocBrightMask");      maskedShade(lightFx, rect, dimPolys.map(toLL), 0.93 * lightOpF, "apocDimMask");     const visibleAt = (x, y) => { const [ux, uy] = toUnits({ x, y }); return dimPolys.some(p => pointInPolyU(ux, uy, p)); };
+    for (const t of tints) glowDisc(t.poly, t.color);
+    for (const t of tints) { const ly = L.polygon(toLL(t.poly), { pane: "layerLight", color: "transparent", weight: 0, fillColor: t.color, fillOpacity: 0.16 * lightOpF * (1 + ((t.f || 1) - 1) * 3), interactive: false }); lightFx.addLayer(ly); flickerTints.push({ layer: ly, base: 0.16 * lightOpF, src: t.src });  }     if (brightPolys.length) maskedShade(lightFx, rect, brightPolys.map(toLL), 0.38 * lightOpF * ambF, "apocBrightMask");      maskedShade(lightFx, rect, dimPolys.map(toLL), 0.93 * lightOpF * ambF, "apocDimMask");     const visibleAt = (x, y) => { const [ux, uy] = toUnits({ x, y }); return dimPolys.some(p => pointInPolyU(ux, uy, p)); };
     for (const tk of tokens) {
       const m = tokenMarkers[tk.id];
       if (!m) continue;
@@ -5709,9 +5869,10 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
       else if (tokenLayer.hasLayer(m)) tokenLayer.removeLayer(m);
     }
     for (const t of tints) {
-      if (visibleAt(t.src.x, t.src.y)) lightFx.addLayer(L.marker(toLatLng(t.src.x, t.src.y), { pane: "layerLight", interactive: false, icon: lightIcon(t.src) }));
+      if (!t.token && visibleAt(t.src.x, t.src.y)) lightFx.addLayer(L.marker(toLatLng(t.src.x, t.src.y), { pane: "layerLight", interactive: false, icon: lightIcon(t.src) }));
     }
     manageFlicker(lightState.lights.some(s => s.flame && s.on !== false));
+    if (window.__apocFogReady) { try { renderFog(); } catch (e) {} }
   }
     let flickerTints = [];
   function flickerTick(){
@@ -5815,6 +5976,14 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     }
   }
   window.__apocDoorTest = { walls: () => lightState.walls, hitCount: () => doorFx.getLayers().length, leafEndU: w => doorLeafEndU(w) };
+  /* APOC-V271 (L3): the Tools set arms the same wall/door/window drawing
+     mode the Lighting set owns — one armed mode, two doors into it — and
+     the Lighting set gains the ambient-darkness slider. */
+  for (const [bid, mode] of [["toolWallBtn", "wall"], ["toolDoorBtn", "door"], ["toolWindowBtn", "window"]]) { const b = $(bid); if (b) b.addEventListener("click", () => setLightArmed(armedMode === mode ? null : mode)); }
+  if ($("ambientRange")) $("ambientRange").addEventListener("input", async () => { lightState.ambient = Math.min(1, Math.max(0, parseFloat($("ambientRange").value))); renderLighting(); await saveLighting(); });
+  window.__apocLightTest.armed = () => armedMode;
+  window.__apocLightTest.state = () => lightState;
+  map.on("zoomend", () => { if (lightState.enabled) { try { renderLighting(); } catch (e) {} } });
   { const db269 = $("drawDoorBtn");
     if (db269) db269.addEventListener("click", async () => {
       const it = window.__apocDoorSel; if (!it || it.type !== "stamp") return;
@@ -5831,7 +6000,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
   document.addEventListener("visibilitychange", () => renderLighting());
     function setLightArmed(mode){
     setArmed(mode);
-    for (const [id, m] of [["wallBtn", "wall"], ["doorBtn", "door"], ["windowBtn", "window"], ["lightPlaceBtn", "light-place"], ["wallEraseBtn", "wall-erase"]])
+    for (const [id, m] of [["wallBtn", "wall"], ["doorBtn", "door"], ["windowBtn", "window"], ["lightPlaceBtn", "light-place"], ["wallEraseBtn", "wall-erase"], ["toolWallBtn", "wall"], ["toolDoorBtn", "door"], ["toolWindowBtn", "window"]])
       $(id).setAttribute("aria-pressed", String(mode === m));
     if (mode !== "wall" && mode !== "door" && mode !== "window") { lightSegStart = null; previewLayer.clearLayers(); }
   }
@@ -8095,7 +8264,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1926";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-2018";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
