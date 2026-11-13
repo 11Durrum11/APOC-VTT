@@ -1583,22 +1583,27 @@ setInterval(loadSharedEntries, 60000);
   let markers = [];
   let editing = null;
   let tempPin = null;
-  /* APOC-V277 (2026-11-13): press-travel click recovery for read pins.
-     A press that starts on a read pin and is released within 24px is a
-     click with travel: the map may have panned a hair under the pointer,
-     so the DOM click can land off the icon and Leaflet never delivers
-     the marker click. draw() records the press (v277Press) and each
-     marker's own click marks it delivered; on pointerup, if no click
-     was delivered for that press, the pin's open runs here. Travel
-     beyond 24px is a pan — left alone. */
-  let v277Press = null;
+  /* APOC-V278 (2026-11-13): read pins are draggable AND clickable —
+     the press/drag discriminator. draw() records a press on a read pin
+     here (v278Press). Three paths can resolve a press, and exactly one
+     wins — the press's `resolved` flag is the arbiter:
+       1. the marker's own click (a clean press; Leaflet delivers it)
+          marks the press resolved and opens the pin;
+       2. a drag ending within the 24px click envelope is resolved by
+          dragend: the pin snaps back, nothing saves, the card opens;
+       3. this recovery: a press released within 24px that neither the
+          click nor a drag resolved (the DOM click landed off the icon)
+          opens the pin from here.
+     A press released beyond 24px belongs to a pan or a real drag and
+     is left alone here; a real drag's save happens in dragend. */
+  let v278Press = null;
   document.addEventListener("pointerup", ev => {
-    const p = v277Press; v277Press = null;
+    const p = v278Press;
     if (!p) return;
-    if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 24) return;
-    setTimeout(() => { if (!p.delivered) { try { p.open(); } catch(e){} } }, 80);
+    if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 24) { v278Press = null; return; }
+    setTimeout(() => { if (v278Press === p) v278Press = null; if (!p.resolved) { p.resolved = true; try { p.open(); } catch(e){} } }, 80);
   }, true);
-  document.addEventListener("pointercancel", () => { v277Press = null; }, true);
+  document.addEventListener("pointercancel", () => { v278Press = null; }, true);
   const newId = () => "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   window.map = map; window.toXY = toXY; window.newId = newId;
   function setStatus(msg){ statusEl.textContent = msg; }
@@ -1639,35 +1644,63 @@ setInterval(loadSharedEntries, 60000);
          never sees them either. */
       if (mk.gm && !effectiveGm()) continue;
       const kind = KINDS.includes(mk.kind) ? mk.kind : "place";
-      /* APOC-V277 (defect fix, 2026-11-13): a pin carrying pictures is a
-         READ pin — its click opens the place card. It must never be
-         draggable: Leaflet starts a marker drag after 3px of press
-         travel, so a human "click" on a read pin silently dragged it
-         and dragend re-saved its position for everybody instead of
-         opening the card (Shaun's session 2026-11-13 ~01:32 MST moved
-         two landscape pins this way). Bare markers (no pictures) open
-         the editor on click and stay draggable as before. */
-      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting() && !(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length), icon: iconFor(kind, mk.name, false, mk._under) }).addTo(layer);
+      /* APOC-V278 (2026-11-13): a pin carrying pictures is a READ pin —
+         its click opens the place card. Shaun's ruling (2026-11-13
+         ~01:58 MST): read pins must do BOTH — drag to move AND click to
+         open. So read pins are draggable again (v2.77's draggable:false
+         is reverted); the dragstart/dragend discriminator below decides
+         per press: travel within the 24px envelope = a click (snap
+         back, no save, card opens), travel beyond it = a move (save,
+         no card). Bare markers (no pictures) open the editor on click
+         and drag as they always have. */
+      const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length);
+      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting(), icon: iconFor(kind, mk.name, false, mk._under) }).addTo(layer);
       const openMk = () => {
         const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
         if (imgs.length) { showPinCard(mk); return; }
         openEditor({ mode: "edit", mk });
       };
-      m.on("click", () => { if (v277Press && v277Press.id === mk.id) v277Press.delivered = true; openMk(); });
-      if (Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) {
+      let dragStartLL = null, dragEndAt = 0;
+      m.on("click", () => {
+        if (isRead) {
+          /* A dragend within this press already resolved it (snap-back
+             open or a saved move) — a trailing DOM click must not run
+             the open a second time. */
+          if (Date.now() - dragEndAt < 350) return;
+          if (v278Press && v278Press.id === mk.id) v278Press.resolved = true;
+        }
+        openMk();
+      });
+      if (isRead) {
         const iconEl = m.getElement();
         if (iconEl) iconEl.addEventListener("pointerdown", ev => {
           if (ev.button !== undefined && ev.button !== 0) return;
-          v277Press = { id: mk.id, x: ev.clientX, y: ev.clientY, delivered: false, open: openMk };
+          v278Press = { id: mk.id, x: ev.clientX, y: ev.clientY, resolved: false, open: openMk };
         }, { passive: true });
+        m.on("dragstart", () => { dragStartLL = m.getLatLng(); });
       }
       m.on("dragend", async () => {
-        if (isProjecting()) { loadMarkers(true); return; }         const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
+        if (isRead && dragStartLL) {
+          /* APOC-V278 discriminator: judge the drag by the pin's own
+             on-screen displacement (container points) against the same
+             24px envelope the press recovery uses — exactly 24px falls
+             on the CLICK side. The drag path owns the press either way:
+             mark it resolved so neither the marker click nor the
+             recovery can open the card after a real move. */
+          const startLL = dragStartLL; dragStartLL = null;
+          const pa = map.latLngToContainerPoint(startLL), pb = map.latLngToContainerPoint(m.getLatLng());
+          const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+          dragEndAt = Date.now();
+          if (v278Press && v278Press.id === mk.id) v278Press.resolved = true;
+          if (dist <= 24) { m.setLatLng(startLL); openMk(); return; }
+        }
+        if (isProjecting()) { loadMarkers(true); return; }
+        const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
         setStatus(`Saving ${mk.name}'s new position\u2026`);
         const ok = await saveMarkers();
-        if (ok) setStatus(`${mk.name} moved — saved for everybody.`);
-        else { setStatus("That move didn't save — drag it again or refresh."); loadMarkers(true); }
+        if (ok) setStatus(`${mk.name} moved \u2014 saved for everybody.`);
+        else { setStatus("That move didn't save \u2014 drag it again or refresh."); loadMarkers(true); }
       });
     }
         if (tempPin) layer.addLayer(tempPin);
@@ -8400,7 +8433,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0143";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0200";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
