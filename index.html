@@ -133,6 +133,15 @@ body.map-expanded .vtt-panel{flex:none;max-height:32vh;overflow-y:auto;margin-to
 .expand-exit-wrap{display:none}
 body.map-expanded .expand-exit-wrap{display:block}
 body.map-fs .expand-exit-wrap{display:block}
+/* APOC-V269 (L1): Expand = MAP FOCUS — in the locked-bubble layout the panel
+   already fills the viewport, so focusing hides every non-map row of the
+   panel plus the floating chrome (tab tracks, title bubble, zoom bar) and
+   the stage takes the whole screen. Exit restores everything exactly. */
+body.map-expanded #mapPanel > *:not(.map-stage):not(.stage-row){display:none!important}
+body.map-expanded .apoc-tabtrack{display:none!important}
+body.map-expanded #titleBubble{display:none!important}
+body.map-expanded #zoomBar{display:none!important}
+body.map-expanded #mapPanel{overflow:hidden!important}
 .map-stage:fullscreen{position:relative;width:100%;height:100%;background:#05070a;align-items:stretch}
 .map-stage:fullscreen .map-side{display:flex;flex-direction:column}
 .map-stage:fullscreen .apoc-map{flex:1 1 auto;height:100%;min-height:0}
@@ -1113,6 +1122,7 @@ body.map-expanded .stage-row{display:contents}
       <button type="button" class="btn" id="drawBackBtn" hidden>To back</button>
       <button type="button" class="btn" id="tplAnchorBtn" hidden>Anchor to token</button>
       <button type="button" class="btn danger" id="drawDelSelBtn" hidden>Delete selected</button>
+      <button type="button" class="btn" id="drawDoorBtn" hidden aria-pressed="false">Working door</button>
       <span class="muted small" id="drawStatus"></span>
       <button type="button" class="btn" id="fsBtn">Full screen</button>
       <button type="button" class="btn" id="view3dBtn">3D view</button>
@@ -1955,19 +1965,18 @@ setInterval(loadSharedEntries, 60000);
 
     function setExpanded(on){
     document.body.classList.toggle("map-expanded", on);
-    $("mapExpandBtn").textContent = on ? "⛶ Exit full screen" : "⛶ Expand map";
+    $("mapExpandBtn").textContent = on ? "⛶ Exit map focus" : "⛶ Expand map";
     setTimeout(() => map.invalidateSize(), 280);
   }
+  window.__apocSetExpanded = setExpanded;
   $("mapExpandBtn").addEventListener("click", () => {
-        if (document.fullscreenElement) { document.exitFullscreen(); return; }
-    if (document.body.classList.contains("map-expanded")) { setExpanded(false); return; }
-    const el = document.querySelector(".map-stage");
-    let started = false;
-    try {
-      if (el.requestFullscreen) { const r = el.requestFullscreen(); started = true; if (r && r.catch) r.catch(() => setExpanded(true)); }
-      else if (el.webkitRequestFullscreen) { el.webkitRequestFullscreen(); started = true; }
-    } catch(e) {  }
-    if (!started) setExpanded(true);
+    /* APOC-V269 (L1): Expand is the MAP-FOCUS toggle, full stop — it no
+       longer also tries true fullscreen (that made it a duplicate of the
+       Full screen button, and a denied request left it looking dead). The
+       Full screen button keeps real fullscreen; this one hides the chrome
+       and gives the map the whole screen, reversibly. */
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    setExpanded(!document.body.classList.contains("map-expanded"));
   });
   const expandExitCtl = L.control({ position: "topright" });
   expandExitCtl.onAdd = () => {
@@ -1980,6 +1989,9 @@ setInterval(loadSharedEntries, 60000);
     return d;
   };
   expandExitCtl.addTo(map);
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && document.body.classList.contains("map-expanded") && !document.fullscreenElement) setExpanded(false);
+  });
     let fsFloatHomes = null;
   let fsRailEl = null;
   try { window.localStorage.removeItem("apocVttFsFloatV1"); } catch(e) {}
@@ -2481,6 +2493,10 @@ setInterval(loadSharedEntries, 60000);
       } catch(e) {  }
       hint(gmView ? "DM view on." : "DM view off.");
       applyGmUi();
+      /* APOC-V269 (L1): the lighting picture never re-rendered on a DM-view
+         toggle, so the player lighting view (incl. open-door leaves) could
+         not appear until some unrelated trigger repainted it. Re-render. */
+      try { renderLighting(); } catch (e) {}
     });
   })();
       var gmArmed200 = false;
@@ -2574,6 +2590,7 @@ setInterval(loadSharedEntries, 60000);
   let drawHist = { undo: [], redo: [], applying: false, last: null };
   function drawSnapshot(){ return JSON.stringify({ items: drawItems, layers: drawLayers }); }
   async function saveDraw(){
+    syncDoorSegs();
     const snap = drawSnapshot();
     if (drawHist.last !== null && snap !== drawHist.last && !drawHist.applying) {
       drawHist.undo.push(drawHist.last);
@@ -3490,6 +3507,7 @@ setInterval(loadSharedEntries, 60000);
     if (!items.length) { selItem = null; selExtra = []; }
     const ok = items.length > 0;
     $("drawDupBtn").hidden = $("drawDelSelBtn").hidden = $("drawFrontBtn").hidden = $("drawBackBtn").hidden = !ok;
+    apocDoorBtnSync(items);
     $("tplAnchorBtn").hidden = !(items.length === 1 && items[0].type === "template");
     if (items.length === 1 && items[0].type === "template" && items[0].anchor) $("tplAnchorBtn").textContent = "Unanchor";
     else $("tplAnchorBtn").textContent = "Anchor to token";
@@ -4001,10 +4019,18 @@ setInterval(loadSharedEntries, 60000);
   $("fsBtn").addEventListener("click", () => {
     if (document.fullscreenElement) { document.exitFullscreen(); return; }
     const el = document.querySelector(".map-stage");
-    try { if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(() => {}); } }
-    catch(err) { /* fullscreen unavailable here — the Expand view still works */ }
+    /* APOC-V269 (L1): a denied/unavailable fullscreen no longer reads as a
+       dead button — it falls back to the Expand map-focus view, so a click
+       always does something visible. */
+    const fallback = () => { if (window.__apocSetExpanded) window.__apocSetExpanded(true); };
+    try {
+      if (el.requestFullscreen) { const r = el.requestFullscreen(); if (r && r.catch) r.catch(fallback); }
+      else fallback();
+    }
+    catch(err) { fallback(); }
   });
   document.addEventListener("fullscreenchange", () => setTimeout(() => window.dispatchEvent(new Event("resize")), 120));
+  document.addEventListener("fullscreenchange", () => { const b = $("fsBtn"); if (b) b.textContent = document.fullscreenElement ? "Exit full screen" : "Full screen"; });
 
   /* ---- Drag-and-drop maps: original bytes, never re-encoded. The file
      goes to the shared artwork bucket (vtt-maps/) so every screen can
@@ -5394,6 +5420,8 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     const lightKey = () => currentMapId === "faerun" ? "vtt_light" : `vtt_light_${currentMapId}`;
   let lightState = { enabled: false, walls: [], lights: [], layerHidden: false, layerOpacity: 1 };   window.__apocLightLayer = { hidden: () => lightState.layerHidden === true, opacity: () => (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1), setOpacityLive: v => { lightState.layerOpacity = v; renderLighting(); }, setOpacity: async v => { lightState.layerOpacity = v; renderLighting(); return saveLighting(); }, toggle: async () => { lightState.layerHidden = !(lightState.layerHidden === true); renderLighting(); const ok = await saveLighting(); if (!ok) loadLighting(true); return ok; } };   let lightPreview = false, lightEditingId = null, lightSegStart = null, lightFlickerTimer = null;
   const wallFx = L.layerGroup().addTo(map);
+  const doorFx = L.layerGroup().addTo(map);
+  const doorAnimFx = L.layerGroup().addTo(map);
   const lightFx = L.layerGroup().addTo(map);
   const lightEditFx = L.layerGroup().addTo(map);
   const fgFx = L.layerGroup().addTo(map);   const lightStatusEl = $("lightStatus");
@@ -5482,12 +5510,12 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     return 1 + 0.022 * Math.sin(t / 110 + h) + 0.012 * Math.sin(t / 53 + h * 2.1);
   }
   function renderLighting(){
-    wallFx.clearLayers(); lightFx.clearLayers(); lightEditFx.clearLayers();
+    wallFx.clearLayers(); lightFx.clearLayers(); lightEditFx.clearLayers(); doorFx.clearLayers();
     flickerTints = [];     window.__apocLightOn = lightState.enabled;
     const playerView = !effectiveGm() || lightPreview;
     const lightOpF = (typeof lightState.layerOpacity === "number" ? lightState.layerOpacity : 1);         if (lightState.layerHidden !== true && effectiveGm() && !lightPreview) {       for (const w of lightState.walls) {
         const a = toLatLng(w.a[0], w.a[1]), b = toLatLng(w.b[0], w.b[1]);
-        if (w.kind === "door") wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }));
+        if (w.kind === "door") { const vis = L.polyline([a, b], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, dashArray: w.open ? "3 6" : null, interactive: false }); wallFx.addLayer(vis); if (w.open && !doorAnimating.has(w)) wallFx.addLayer(L.polyline([a, doorLeafEndLL(w)], { pane: "layerGm", color: "#58b368", weight: 5, interactive: false })); addDoorHit(a, b, w, vis); }
         else if (w.kind === "window") {           wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#3d7ea6", weight: 5, opacity: 0.9, dashArray: w.open ? "3 6" : null, interactive: false }));
           wallFx.addLayer(L.polyline([a, b], { pane: "layerGm", color: "#bfe6f5", weight: 2, opacity: 0.95, interactive: false }));
         }
@@ -5503,6 +5531,10 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
           if (!ok) loadLighting(true);
         });
       }
+    }
+    if (playerView && lightState.layerHidden !== true) for (const w of lightState.walls) {
+      if (w.kind !== "door" || !w.open || doorAnimating.has(w)) continue;
+      lightFx.addLayer(L.polyline([toLatLng(w.a[0], w.a[1]), doorLeafEndLL(w)], { pane: "layerLight", color: "#c9a86a", weight: 4, opacity: 0.95, interactive: false }));
     }
     if (!lightState.enabled || lightState.layerHidden === true) {       for (const tk of tokens) { const m = tokenMarkers[tk.id]; if (m && !tokenLayer.hasLayer(m)) tokenLayer.addLayer(m); }
       manageFlicker(false);
@@ -5552,6 +5584,109 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     const ok = want && lightState.enabled && lightBlockers().length <= 120 && lightState.lights.length <= 25 && !document.hidden;
     if (ok && !lightFlickerTimer) lightFlickerTimer = setInterval(() => { if (document.hidden) return; flickerTick(); }, 200);     if (!ok && lightFlickerTimer) { clearInterval(lightFlickerTimer); lightFlickerTimer = null; }
   }
+  /* APOC-V269 (L1) — DOOR MANIPULATION. Doors were state without a handle:
+     the only toggle was arming the Door tool in the Lighting set (or a
+     right-click menu). Now, in DM view, every door segment carries an
+     invisible fat hit line: hover fattens the visible line, one click swings
+     it via vttLights.toggleDoor. Open doors draw their swung leaf (hinge at
+     a, swung 80 degrees to the side away from the nearest wall) in the GM
+     view and as map dressing in the player view; closed doors stay wall art
+     for players. Placed door stamps get a "Working door" toggle in the Draw
+     set: it links the stamp to a real wall segment that blocks light and
+     sight exactly like a drawn door. */
+  const doorAnimating = new Set();
+  function doorLeafEndU(w){
+    const A = toUnits({ x: w.a[0], y: w.a[1] }), B = toUnits({ x: w.b[0], y: w.b[1] });
+    const dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy) || 1;
+    const cand = s => {
+      const th = s * 80 * Math.PI / 180, c = Math.cos(th), sn = Math.sin(th);
+      return [A[0] + dx * c - dy * sn, A[1] + dx * sn + dy * c];
+    };
+    const ePlus = cand(1), eMinus = cand(-1);
+    let dPlus = Infinity, dMinus = Infinity;
+    for (const o of lightState.walls) {
+      if (o === w) continue;
+      const oa = toUnits({ x: o.a[0], y: o.a[1] }), ob = toUnits({ x: o.b[0], y: o.b[1] });
+      const mx = (oa[0] + ob[0]) / 2, my = (oa[1] + ob[1]) / 2;
+      dPlus = Math.min(dPlus, Math.hypot(ePlus[0] - mx, ePlus[1] - my));
+      dMinus = Math.min(dMinus, Math.hypot(eMinus[0] - mx, eMinus[1] - my));
+    }
+    return dMinus >= dPlus ? eMinus : ePlus;
+  }
+  function doorLeafEndLL(w){ const u = doorLeafEndU(w); return uToLatLng(u[0], u[1]); }
+  function animateDoorSwing(w, wasOpen){
+    const A = toUnits({ x: w.a[0], y: w.a[1] }), B = toUnits({ x: w.b[0], y: w.b[1] });
+    const E = doorLeafEndU(w);
+    const from = wasOpen ? E : B, to = wasOpen ? B : E;
+    doorAnimating.add(w);
+    const t0 = performance.now(), DUR = 260;
+    const step = now => {
+      const k = Math.min(1, (now - t0) / DUR), e = 1 - Math.pow(1 - k, 2);
+      const px = from[0] + (to[0] - from[0]) * e, py = from[1] + (to[1] - from[1]) * e;
+      doorAnimFx.clearLayers();
+      doorAnimFx.addLayer(L.polyline([uToLatLng(A[0], A[1]), uToLatLng(px, py)], { pane: "layerGm", color: w.open ? "#58b368" : "#e07b39", weight: 5, interactive: false }));
+      if (k < 1) requestAnimationFrame(step);
+      else { doorAnimating.delete(w); doorAnimFx.clearLayers(); renderLighting(); }
+    };
+    requestAnimationFrame(step);
+  }
+  function addDoorHit(a, b, w, vis){
+    const hit = L.polyline([a, b], { pane: "layerGm", color: "#ffffff", weight: 12, opacity: 0, interactive: true });
+    hit.on("mouseover", () => { try { vis.setStyle({ weight: 8 }); } catch (e) {} });
+    hit.on("mouseout", () => { try { vis.setStyle({ weight: 5 }); } catch (e) {} });
+    hit.on("click", () => { if (window.vttLights) window.vttLights.toggleDoor(w); });
+    doorFx.addLayer(hit);
+    try { const el = hit.getElement(); if (el) el.style.cursor = "pointer"; } catch (e) {}
+  }
+  function doorSegEnds(it){
+    const half = ((typeof it.fw === "number" && it.fw > 0) ? it.fw : (it.size || 2)) * CELL / 2;
+    const ang = (it.rot || 0) * Math.PI / 180;
+    const dx = Math.cos(ang) * half / MW * 100, dy = Math.sin(ang) * half / MH * 100;
+    const r2 = v => Math.round(v * 100) / 100;
+    return { a: [r2(it.x - dx), r2(it.y - dy)], b: [r2(it.x + dx), r2(it.y + dy)] };
+  }
+  function syncDoorSegs(){
+    let changed = false;
+    const claimed = new Set();
+    for (const it of drawItems) {
+      if (!it || !it.doorSeg) continue;
+      const seg = lightState.walls.find(w => w.id === it.doorSeg);
+      if (!seg) { delete it.doorSeg; continue; }
+      claimed.add(seg.id);
+      const ends = doorSegEnds(it);
+      if (seg.a[0] !== ends.a[0] || seg.a[1] !== ends.a[1] || seg.b[0] !== ends.b[0] || seg.b[1] !== ends.b[1]) { seg.a = ends.a; seg.b = ends.b; changed = true; }
+    }
+    for (let i = lightState.walls.length - 1; i >= 0; i--) {
+      const w = lightState.walls[i];
+      if (w.id && String(w.id).indexOf("door-stamp-") === 0 && !claimed.has(w.id)) { lightState.walls.splice(i, 1); changed = true; }
+    }
+    if (changed) { saveLighting(); renderLighting(); }
+  }
+  function apocDoorBtnSync(items){
+    const btn = $("drawDoorBtn"); if (!btn) return;
+    const it = (items && items.length === 1 && items[0].type === "stamp") ? items[0] : null;
+    window.__apocDoorSel = it;
+    btn.hidden = !it;
+    if (it) {
+      const on = !!(it.doorSeg && lightState.walls.some(w => w.id === it.doorSeg));
+      btn.setAttribute("aria-pressed", String(on));
+      btn.textContent = on ? "Working door: on" : "Working door";
+    }
+  }
+  window.__apocDoorTest = { walls: () => lightState.walls, hitCount: () => doorFx.getLayers().length, leafEndU: w => doorLeafEndU(w) };
+  { const db269 = $("drawDoorBtn");
+    if (db269) db269.addEventListener("click", async () => {
+      const it = window.__apocDoorSel; if (!it || it.type !== "stamp") return;
+      if (!it.id) it.id = "st" + Date.now().toString(36);
+      const segId = "door-stamp-" + it.id;
+      const idx = lightState.walls.findIndex(w => w.id === segId);
+      if (idx >= 0) { lightState.walls.splice(idx, 1); delete it.doorSeg; }
+      else { const ends = doorSegEnds(it); lightState.walls.push({ id: segId, kind: "door", a: ends.a, b: ends.b, open: false }); it.doorSeg = segId; }
+      await saveLighting();
+      await saveDraw();
+      renderLighting(); renderDraw(); apocDoorBtnSync([it]);
+      drawStatusEl.textContent = it.doorSeg ? "Working door on — in DM view, click its doorway line on the map to open and shut it." : "Working door off — the stamp is plain art again.";
+    }); }
   document.addEventListener("visibilitychange", () => renderLighting());
     function setLightArmed(mode){
     setArmed(mode);
@@ -5687,7 +5822,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     openEditor: openLightEditor, state: () => lightState,
     del: async src => { lightState.lights = lightState.lights.filter(s => s.id !== src.id); const ok = await saveLighting(); renderLighting(); return ok; },
     delWall: async w => { lightState.walls = lightState.walls.filter(x => x !== w); const ok = await saveLighting(); renderLighting(); return ok; },
-    toggleDoor: async w => { w.open = !w.open; const ok = await saveLighting(); renderLighting(); return ok; },
+    toggleDoor: async w => { const wasOpen = !!w.open; w.open = !w.open; animateDoorSwing(w, wasOpen); const ok = await saveLighting(); renderLighting(); return ok; },
     toggleOn: async src => { src.on = src.on === false; const ok = await saveLighting(); renderLighting(); return ok; }   };
   $("lightCancel").addEventListener("click", () => { $("lightForm").hidden = true; lightEditingId = null; });
   $("lightColorBtn").addEventListener("click", () => {
@@ -7819,7 +7954,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1431";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1914";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -18588,7 +18723,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
 #mapPanel .map-repo.lib-set253 .artlib.open > .nest-body{max-height:none!important}
 .apoc-tabtrack{z-index:1800!important}
 .apoc-tab.apoc-tab-locked{z-index:1805!important}
-body.apoc-bubble255 .expand-exit-wrap{display:none!important}
+/* APOC-V269: the exit wrap is no longer suppressed — Expand is a working map-focus toggle again (L1). */
 /* inner buttons: minimum footprint + clean arrangement */
 #ctlRow .btn,#mapPanel .vtt-panel .btn,#mapPanel form .btn{min-height:0!important;padding:3px 8px!important;line-height:1.15!important}
 #set-map{grid-template-columns:repeat(3,max-content)!important;justify-content:start!important;justify-items:start!important}
@@ -18618,11 +18753,11 @@ body.apoc-bubble255 .expand-exit-wrap{display:none!important}
   lockBubble();
   [700, 2000, 5000, 12000].forEach(function(ms){ setTimeout(lockBubble, ms); });
   window.addEventListener("resize", lockBubble);
-  /* the Expand toggle must not un-maximize the locked bubble */
-  document.addEventListener("click", function(e){
-    var t = e.target && e.target.closest ? e.target.closest("#mapExpandBtn, .expand-exit-wrap") : null;
-    if (t) { e.preventDefault(); e.stopImmediatePropagation(); lockBubble(); }
-  }, true);
+  /* APOC-V269 (L1): the v2.55 capture-phase intercept that swallowed every
+     Expand / exit click is DELETED (Shaun, 2026-11-12: the Expand button was
+     dead). The bubble lock above never depended on it — lockBubble still runs
+     on its timers + resize; the bubble's maximized geometry is the
+     body.apoc-bubble255 CSS. Expand is now the map-focus toggle below. */
 
   /* ---------- (4) inner-button reorder drag ----------
      Reorder-in-flow only: the button never leaves its group, so the
