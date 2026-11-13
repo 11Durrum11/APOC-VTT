@@ -1583,6 +1583,22 @@ setInterval(loadSharedEntries, 60000);
   let markers = [];
   let editing = null;
   let tempPin = null;
+  /* APOC-V277 (2026-11-13): press-travel click recovery for read pins.
+     A press that starts on a read pin and is released within 24px is a
+     click with travel: the map may have panned a hair under the pointer,
+     so the DOM click can land off the icon and Leaflet never delivers
+     the marker click. draw() records the press (v277Press) and each
+     marker's own click marks it delivered; on pointerup, if no click
+     was delivered for that press, the pin's open runs here. Travel
+     beyond 24px is a pan — left alone. */
+  let v277Press = null;
+  document.addEventListener("pointerup", ev => {
+    const p = v277Press; v277Press = null;
+    if (!p) return;
+    if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 24) return;
+    setTimeout(() => { if (!p.delivered) { try { p.open(); } catch(e){} } }, 80);
+  }, true);
+  document.addEventListener("pointercancel", () => { v277Press = null; }, true);
   const newId = () => "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   window.map = map; window.toXY = toXY; window.newId = newId;
   function setStatus(msg){ statusEl.textContent = msg; }
@@ -1623,13 +1639,29 @@ setInterval(loadSharedEntries, 60000);
          never sees them either. */
       if (mk.gm && !effectiveGm()) continue;
       const kind = KINDS.includes(mk.kind) ? mk.kind : "place";
-      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting(), icon: iconFor(kind, mk.name, false, mk._under) }).addTo(layer);
-      m.on("click", () => {
+      /* APOC-V277 (defect fix, 2026-11-13): a pin carrying pictures is a
+         READ pin — its click opens the place card. It must never be
+         draggable: Leaflet starts a marker drag after 3px of press
+         travel, so a human "click" on a read pin silently dragged it
+         and dragend re-saved its position for everybody instead of
+         opening the card (Shaun's session 2026-11-13 ~01:32 MST moved
+         two landscape pins this way). Bare markers (no pictures) open
+         the editor on click and stay draggable as before. */
+      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting() && !(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length), icon: iconFor(kind, mk.name, false, mk._under) }).addTo(layer);
+      const openMk = () => {
         const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
         if (imgs.length) { showPinCard(mk); return; }
         openEditor({ mode: "edit", mk });
-      });
+      };
+      m.on("click", () => { if (v277Press && v277Press.id === mk.id) v277Press.delivered = true; openMk(); });
+      if (Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) {
+        const iconEl = m.getElement();
+        if (iconEl) iconEl.addEventListener("pointerdown", ev => {
+          if (ev.button !== undefined && ev.button !== 0) return;
+          v277Press = { id: mk.id, x: ev.clientX, y: ev.clientY, delivered: false, open: openMk };
+        }, { passive: true });
+      }
       m.on("dragend", async () => {
         if (isProjecting()) { loadMarkers(true); return; }         const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
         setStatus(`Saving ${mk.name}'s new position\u2026`);
@@ -8368,7 +8400,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0131";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0143";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
