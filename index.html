@@ -142,6 +142,10 @@ body.map-expanded .apoc-tabtrack{display:none!important}
 body.map-expanded #titleBubble{display:none!important}
 body.map-expanded #zoomBar{display:none!important}
 body.map-expanded #mapPanel{overflow:hidden!important}
+/* APOC-V270 (L2): spell-template markers + list chips */
+.tpl-dot{display:block;width:13px;height:13px;border-radius:50%;background:#e8a33d;border:2px solid #0b0e14;box-shadow:0 0 6px #e8a33d;cursor:move}
+.tpl-rot{display:flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:50%;background:#10131a;color:#e8a33d;border:1px solid #e8a33d;font-size:13px;cursor:move}
+.tpl-chip{display:inline-flex;gap:4px;align-items:center;border:1px solid #2a2f3a;border-radius:999px;padding:2px 6px;font-size:.78rem;color:#f2e7c8}
 .map-stage:fullscreen{position:relative;width:100%;height:100%;background:#05070a;align-items:stretch}
 .map-stage:fullscreen .map-side{display:flex;flex-direction:column}
 .map-stage:fullscreen .apoc-map{flex:1 1 auto;height:100%;min-height:0}
@@ -900,6 +904,9 @@ body.map-expanded .stage-row{display:contents}
           <option value="hex">Hexes</option>
         </select>
       </div>
+      <button type="button" class="btn" id="calibBtn" aria-pressed="false">Calibrate grid</button>
+      <button type="button" class="btn" id="calibResetBtn">Reset calibration</button>
+      <span class="muted small" id="calibStatus"></span>
     </div>
     <div class="map-tools">
       <div class="field" style="flex:0 1 auto">
@@ -918,6 +925,15 @@ body.map-expanded .stage-row{display:contents}
       <button type="button" class="btn" id="gmBtn" aria-pressed="false" hidden>DM view: ON</button>
       <span class="muted small" id="tokenStatus"></span>
       <span class="muted small" id="gmStatus"></span>
+      <span style="display:contents" id="tplControls">
+        <button type="button" class="btn" id="tplConeBtn">Tpl: Cone</button>
+        <button type="button" class="btn" id="tplCircleBtn">Tpl: Circle</button>
+        <button type="button" class="btn" id="tplLineBtn">Tpl: Line</button>
+        <button type="button" class="btn" id="tplSquareBtn">Tpl: Square</button>
+        <span class="field" style="flex:0 1 auto"><label for="tplSize">Template size (cells)</label><input id="tplSize" type="number" min="1" max="30" step="1" value="3" style="width:64px"></span>
+        <span id="tplList" style="display:contents"></span>
+        <span class="muted small" id="tplStatus"></span>
+      </span>
     </div>
     <div class="map-tools" id="fogControls" hidden>
       <label class="atlas-toggle"><input type="checkbox" id="fogEnabled"> Fog of war on this map</label>
@@ -2051,13 +2067,14 @@ setInterval(loadSharedEntries, 60000);
   const tokenForm = $("tokenForm");
   let editingToken = null, draftStatus = [];
 
-  function hexR(){ return CELL * 0.575; }
+  function hexR(){ return cellNow() * 0.575; }
   function hexCenters(){
     const R = hexR(), dx = 1.5 * R, dy = Math.sqrt(3) * R, out = [];
     let col = 0;
-    for (let cx = R; cx < MW + dx; cx += dx, col++) {
+    const ox270 = ((gridOX % dx) + dx) % dx, oy270 = ((gridOY % dy) + dy) % dy;
+    for (let cx = R + ox270; cx < MW + dx; cx += dx, col++) {
       const off = (col % 2) ? dy / 2 : 0;
-      for (let cy = R + off; cy < MH + dy; cy += dy) out.push([cx, cy]);
+      for (let cy = R + off + oy270; cy < MH + dy; cy += dy) out.push([cx, cy]);
     }
     return out;
   }
@@ -2078,8 +2095,9 @@ setInterval(loadSharedEntries, 60000);
       }
       return;
     }
-    for (let gx = 0; gx <= MW; gx += CELL) gridLayer.addLayer(L.polyline([llRot(0, gx), llRot(MH, gx)], opts));
-    for (let gy = 0; gy <= MH; gy += CELL) gridLayer.addLayer(L.polyline([llRot(gy, 0), llRot(gy, MW)], opts));
+    const C270 = cellNow(), ox270 = ((gridOX % C270) + C270) % C270, oy270 = ((gridOY % C270) + C270) % C270;
+    for (let gx = ox270; gx <= MW; gx += C270) gridLayer.addLayer(L.polyline([llRot(0, gx), llRot(MH, gx)], opts));
+    for (let gy = oy270; gy <= MH; gy += C270) gridLayer.addLayer(L.polyline([llRot(gy, 0), llRot(gy, MW)], opts));
   }
   $("gridToggle").addEventListener("change", ev => {
     gridOn = ev.target.checked;
@@ -2105,6 +2123,9 @@ setInterval(loadSharedEntries, 60000);
       if (data.value.gridType === "hex" || data.value.gridType === "square") gridType = data.value.gridType;
       if (typeof data.value.gridOn === "boolean" && data.value.gridOn !== gridOn) { gridOn = data.value.gridOn; $("gridToggle").checked = gridOn; drawGrid(); if (gridOn) gridLayer.addTo(map); else map.removeLayer(gridLayer); }       const rotIn = Number(data.value.rotation);
       if ([0, 1, 2, 3].includes(rotIn) && rotIn !== mapRot) { mapRot = rotIn; applyMapRotation(); }
+      gridCellOverride = Number(data.value.cell) > 0 ? Number(data.value.cell) : 0;
+      gridOX = Number(data.value.gridOX) || 0;
+      gridOY = Number(data.value.gridOY) || 0;
       if (document.activeElement !== $("scaleFeet")) $("scaleFeet").value = scaleInputVal();
       $("scaleUnit").value = scaleUnit;
       $("gridType").value = gridType;
@@ -2113,7 +2134,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveVttSettings(){
     const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot }, updated_at: new Date().toISOString() },
+      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot, cell: gridCellOverride, gridOX, gridOY }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
     return !error;
@@ -2199,7 +2220,7 @@ setInterval(loadSharedEntries, 60000);
              rest point by MH mod CELL whenever the map height is not a
              whole number of cells (Faerun 5 units, Saint James 27). */
           const lngS = p.x / 100 * MW, latS = MH * (1 - p.y / 100);
-          const sxS = (Math.floor(lngS / CELL) + 0.5) * CELL, syS = (Math.floor(latS / CELL) + 0.5) * CELL;
+          const CS = cellNow(); const sxS = (Math.floor((lngS - gridOX) / CS) + 0.5) * CS + gridOX, syS = (Math.floor((latS - gridOY) / CS) + 0.5) * CS + gridOY;
           p = { x: Math.round(sxS / MW * 10000) / 100, y: Math.round((1 - syS / MH) * 10000) / 100 };
         }
         tk.x = p.x; tk.y = p.y;
@@ -2353,12 +2374,12 @@ setInterval(loadSharedEntries, 60000);
          distance on the flat-top hex lattice (centres at R + 1.5R per
          column, sqrt(3)R per row, R = CELL*0.575). Euclidean/CELL read
          a 2-hex east run as 1.7 hex. */
-      const R = CELL * 0.575;
+      const R = cellNow() * 0.575;
       const ax = ll => { const n = llUnrot(ll.lat, ll.lng); const u = (n.lng - R) / R, v = (n.lat - R) / R; const q = (2 / 3) * u, r = -(1 / 3) * u + (Math.sqrt(3) / 3) * v; return [q, r, -q - r]; };
       const A = ax(a), B = ax(b);
       cells = (Math.abs(B[0] - A[0]) + Math.abs(B[1] - A[1]) + Math.abs(B[2] - A[2])) / 2;
     } else {
-      cells = Math.hypot(b.lng - a.lng, b.lat - a.lat) / CELL;
+      cells = Math.hypot(b.lng - a.lng, b.lat - a.lat) / cellNow();
     }
     const feet = cells * feetPerSquare;
     const dist = scaleUnit === "mi" ? `${(feet / 5280).toFixed(2)} mi` : (feet >= 5280 ? `${(feet / 5280).toFixed(2)} mi` : `${Math.round(feet)} ft`);
@@ -2375,9 +2396,9 @@ setInterval(loadSharedEntries, 60000);
       const f = llRot(best[1], best[0]);
       return L.latLng(f[0], f[1]);
     }
-    if (!mapRot) return L.latLng((Math.floor(ll.lat / CELL) + 0.5) * CELL, (Math.floor(ll.lng / CELL) + 0.5) * CELL);
+    if (!mapRot) { const C = cellNow(); return L.latLng((Math.floor((ll.lat - gridOY) / C) + 0.5) * C + gridOY, (Math.floor((ll.lng - gridOX) / C) + 0.5) * C + gridOX); }
         const n = llUnrot(ll.lat, ll.lng);
-    const f = llRot((Math.floor(n.lat / CELL) + 0.5) * CELL, (Math.floor(n.lng / CELL) + 0.5) * CELL);
+    const C2 = cellNow(); const f = llRot((Math.floor((n.lat - gridOY) / C2) + 0.5) * C2 + gridOY, (Math.floor((n.lng - gridOX) / C2) + 0.5) * C2 + gridOX);
     return L.latLng(f[0], f[1]);
   }
   $("rulerBtn").addEventListener("click", () => {
@@ -2408,11 +2429,131 @@ setInterval(loadSharedEntries, 60000);
     rulerTip.setIcon(L.divIcon({ className: "atlas-icon", html: `<span class="ruler-label">${rulerText(rulerStart, end)}</span>`, iconAnchor: [0, 0] }));
   });
 
+  /* APOC-V270 (L2) — SPELL TEMPLATES + GRID CALIBRATION.
+     Templates: own per-map store (vtt_templates[_<id>], house pattern),
+     shapes on the tokens pane — drag the amber dot to move (origin snaps
+     by the ruler rules, hex centres included), drag the round handle to
+     aim (5-degree steps), size from the Tools list. Grid calibration: the
+     grid gains a per-map origin offset + cell override, carried in the
+     map's settings row; drawGrid, hexCenters, the ruler snap and the
+     token snap all read the same calibrated lattice. */
+  const tplKey = () => currentMapId === "faerun" ? "vtt_templates" : `vtt_templates_${currentMapId}`;
+  let tplItems = [];
+  let tplShapes = {};
+  const tplLayer = L.layerGroup().addTo(map);
+  async function loadTemplates(quiet){
+    if (!db) return;
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", tplKey()).maybeSingle();
+    if (error) return;
+    tplItems = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
+    renderTemplates(); buildTplList();
+  }
+  async function saveTemplates(){
+    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: tplKey(), value: { items: tplItems }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    return !error;
+  }
+  function tplPoints(it){
+    const [ox, oy] = toUnits({ x: it.x, y: it.y });
+    const C = cellNow(), th = (it.rot || 0) * Math.PI / 180, dir = [Math.cos(th), Math.sin(th)], perp = [-dir[1], dir[0]];
+    if (it.kind === "circle") { const pts = []; for (let k = 0; k < 48; k++) { const a = k / 48 * Math.PI * 2; pts.push([ox + Math.cos(a) * it.size * C, oy + Math.sin(a) * it.size * C]); } return pts; }
+    if (it.kind === "cone") { const h = Math.atan(0.5), L = it.size * C, pts = [[ox, oy]]; for (let k = 0; k <= 10; k++) { const a = th - h + 2 * h * k / 10; pts.push([ox + Math.cos(a) * L, oy + Math.sin(a) * L]); } return pts; }
+    if (it.kind === "line") { const L = it.size * C, w = C / 2; return [[ox - perp[0] * w, oy - perp[1] * w], [ox + perp[0] * w, oy + perp[1] * w], [ox + dir[0] * L + perp[0] * w, oy + dir[1] * L + perp[1] * w], [ox + dir[0] * L - perp[0] * w, oy + dir[1] * L - perp[1] * w]]; }
+    const s = it.size * C / 2; return [[-s, -s], [s, -s], [s, s], [-s, s]].map(([cx, cy]) => [ox + cx * Math.cos(th) - cy * Math.sin(th), oy + cx * Math.sin(th) + cy * Math.cos(th)]);
+  }
+  function tplLabel(it){ return `${it.kind[0].toUpperCase() + it.kind.slice(1)} ${it.size} (${Math.round(it.size * feetPerSquare)} ${scaleUnit})`; }
+  function renderTemplates(){
+    tplLayer.clearLayers(); tplShapes = {};
+    for (const it of tplItems) {
+      const poly = L.polygon(tplPoints(it).map(([ux, uy]) => uToLatLng(ux, uy)), { pane: "layerTokens", color: "#e8a33d", weight: 2, fillColor: "#e8a33d", fillOpacity: 0.18, interactive: false });
+      tplLayer.addLayer(poly); tplShapes[it.id] = poly;
+      const om = L.marker(toLatLng(it.x, it.y), { pane: "layerTokens", draggable: true, icon: L.divIcon({ className: "tpl-origin", html: '<span class="tpl-dot"></span>', iconSize: [13, 13], iconAnchor: [7, 7] }) }).addTo(tplLayer);
+      om.on("dragend", async () => {
+        let p = toXY(om.getLatLng());
+        const sn = rulerSnap(om.getLatLng()); if (sn) p = toXY(sn);
+        it.x = Math.round(p.x * 100) / 100; it.y = Math.round(p.y * 100) / 100;
+        const ok = await saveTemplates(); renderTemplates();
+        $("tplStatus").textContent = ok ? tplLabel(it) + " moved — saved for everybody." : "That move didn't save — try again.";
+        if (!ok) loadTemplates(true);
+      });
+      const [ox, oy] = toUnits({ x: it.x, y: it.y });
+      const hr = (it.size + 0.7) * cellNow(), ha = (it.rot || 0) * Math.PI / 180;
+      const hm = L.marker(uToLatLng(ox + Math.cos(ha) * hr, oy + Math.sin(ha) * hr), { pane: "layerTokens", draggable: true, icon: L.divIcon({ className: "tpl-handle", html: '<span class="tpl-rot">&#8635;</span>', iconSize: [19, 19], iconAnchor: [9, 9] }) }).addTo(tplLayer);
+      hm.on("drag", () => {
+        const hp = toXY(hm.getLatLng()); const [ux, uy] = toUnits(hp);
+        let a = Math.atan2(uy - oy, ux - ox) * 180 / Math.PI; a = Math.round(a / 5) * 5;
+        it.rot = ((a % 360) + 360) % 360;
+        if (tplShapes[it.id]) tplShapes[it.id].setLatLngs(tplPoints(it).map(([px, py]) => uToLatLng(px, py)));
+      });
+      hm.on("dragend", async () => {
+        const ok = await saveTemplates(); renderTemplates();
+        $("tplStatus").textContent = ok ? tplLabel(it) + " — facing " + it.rot + "\u00b0, saved for everybody." : "That rotation didn't save — try again.";
+        if (!ok) loadTemplates(true);
+      });
+    }
+  }
+  function buildTplList(){
+    const host = $("tplList"); if (!host) return;
+    host.innerHTML = tplItems.map(it => `<span class="tpl-chip">${esc(tplLabel(it))} <button type="button" class="btn" data-tpl-dec="${it.id}" title="Smaller">\u2212</button><button type="button" class="btn" data-tpl-inc="${it.id}" title="Bigger">+</button><button type="button" class="btn danger" data-tpl-del="${it.id}" title="Remove">\u2715</button></span>`).join("");
+    host.querySelectorAll("[data-tpl-inc]").forEach(b => b.addEventListener("click", async () => { const it = tplItems.find(t => t.id === b.dataset.tplInc); if (!it) return; it.size = Math.min(30, it.size + 1); await saveTemplates(); renderTemplates(); buildTplList(); }));
+    host.querySelectorAll("[data-tpl-dec]").forEach(b => b.addEventListener("click", async () => { const it = tplItems.find(t => t.id === b.dataset.tplDec); if (!it) return; it.size = Math.max(1, it.size - 1); await saveTemplates(); renderTemplates(); buildTplList(); }));
+    host.querySelectorAll("[data-tpl-del]").forEach(b => b.addEventListener("click", async () => { tplItems = tplItems.filter(t => t.id !== b.dataset.tplDel); await saveTemplates(); renderTemplates(); buildTplList(); }));
+  }
+  function placeTemplate(kind){
+    const size = Math.max(1, Math.min(30, parseInt($("tplSize").value, 10) || 3));
+    const c = toXY(map.getCenter());
+    const it = { id: "tpl" + Date.now().toString(36), kind, x: Math.round(c.x * 100) / 100, y: Math.round(c.y * 100) / 100, size, rot: 0 };
+    tplItems.push(it);
+    saveTemplates().then(ok => { $("tplStatus").textContent = ok ? tplLabel(it) + " placed at the view centre — drag its dot to move it, the round handle to aim it." : "That template didn't save — try again."; if (!ok) loadTemplates(true); });
+    renderTemplates(); buildTplList();
+    return it;
+  }
+  for (const [bid, kind] of [["tplConeBtn", "cone"], ["tplCircleBtn", "circle"], ["tplLineBtn", "line"], ["tplSquareBtn", "square"]]) { const b = $(bid); if (b) b.addEventListener("click", () => placeTemplate(kind)); }
+
+  /* grid calibration: 3 clicks on the printed grid — a corner, the next
+     corner along the top edge, the next corner down the side. */
+  let gridCellOverride = 0, gridOX = 0, gridOY = 0;
+  let calibPts = null;
+  function cellNow(){ return gridCellOverride > 0 ? gridCellOverride : CELL; }
+  function calibStatus(msg){ const el = $("calibStatus"); if (el) el.textContent = msg; }
+  async function applyCalib(cell, ox, oy){
+    gridCellOverride = cell || 0; gridOX = ox || 0; gridOY = oy || 0;
+    drawGrid();
+    const ok = await saveVttSettings();
+    calibStatus(ok ? (gridCellOverride > 0 ? `Grid calibrated: ${gridCellOverride} units per ${gridType === "hex" ? "hex" : "square"}; the grid, the ruler and token snapping all follow it.` : "Calibration cleared — the map's own grid rules again.") : "Calibration didn't save — try again.");
+  }
+  const calibBtnEl = $("calibBtn");
+  if (calibBtnEl) calibBtnEl.addEventListener("click", () => {
+    if (calibPts) { calibPts = null; calibBtnEl.setAttribute("aria-pressed", "false"); calibStatus("Calibration cancelled."); return; }
+    calibPts = [];
+    calibBtnEl.setAttribute("aria-pressed", "true");
+    calibStatus("Calibrate: click a printed grid corner, then the next corner along the top edge, then the next corner down the side.");
+  });
+  const calibResetEl = $("calibResetBtn");
+  if (calibResetEl) calibResetEl.addEventListener("click", () => { calibPts = null; if (calibBtnEl) calibBtnEl.setAttribute("aria-pressed", "false"); applyCalib(0, 0, 0); });
+  map.on("click", e => {
+    if (!calibPts) return;
+    const n = llUnrot(e.latlng.lat, e.latlng.lng);
+    calibPts.push({ x: n.lng, y: n.lat });
+    if (calibPts.length < 3) { calibStatus(`Corner ${calibPts.length} of 3 set — ${calibPts.length === 1 ? "now the next corner along the top edge." : "now the next corner down the side."}`); return; }
+    const [p1, p2, p3] = calibPts; calibPts = null; if (calibBtnEl) calibBtnEl.setAttribute("aria-pressed", "false");
+    const dx = Math.abs(p2.x - p1.x), dy = Math.abs(p3.y - p1.y);
+    if (gridType === "hex") {
+      const R = dx / 1.5, cell = Math.max(4, Math.round(R / 0.575));
+      applyCalib(cell, ((p1.x % (1.5 * R)) + 1.5 * R) % (1.5 * R), ((p1.y % (Math.sqrt(3) * R)) + Math.sqrt(3) * R) % (Math.sqrt(3) * R));
+    } else {
+      const cell = Math.max(4, Math.round((dx + dy) / 2));
+      applyCalib(cell, ((p1.x % cell) + cell) % cell, ((p1.y % cell) + cell) % cell);
+    }
+  });
+  window.__apocTplTest = { items: () => tplItems, place: placeTemplate, points: it => tplPoints(it), render: renderTemplates };
+  window.__apocCalibTest = { state: () => ({ cell: gridCellOverride, ox: gridOX, oy: gridOY }), centres: () => hexCenters().slice(0, 4), cellNow, snap: ll => { const sn = rulerSnap(ll); return sn ? { lat: sn.lat, lng: sn.lng } : null; } };
+  loadTemplates();
+
   loadVttSettings();
   loadTokens();
   setInterval(() => { loadTokens(true); loadVttSettings(true); }, 60000);
   try {
-    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); loadMarkers(true); loadPlaces(true); }).subscribe();
+    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); loadMarkers(true); loadPlaces(true); loadTemplates(true); }).subscribe();
   } catch(e) {  }
 
     function effectiveGm(){ try { if (isProjecting()) { try { return sessionStorage.getItem("apocDispGm") === "1"; } catch(e) { return false; } } return gmView && !isProjecting(); } catch(e) { return false; } }     window.effectiveGm = effectiveGm;
@@ -2911,7 +3052,7 @@ setInterval(loadSharedEntries, 60000);
   loadDraw();
   applyGmUi();
   setInterval(() => {
-    if (currentMapId !== lastMapId) { lastMapId = currentMapId; loadFog(true); loadDraw(true); }
+    if (currentMapId !== lastMapId) { lastMapId = currentMapId; loadFog(true); loadDraw(true); loadTemplates(true); }
   }, 3000);
   setInterval(() => { loadFog(true); loadDraw(true); }, 60000);
 
@@ -7954,7 +8095,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-1914";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-1926";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
