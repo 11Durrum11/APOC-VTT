@@ -8368,7 +8368,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0122";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0131";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -9297,11 +9297,13 @@ function floorConnected(L, cols, rows){
       cap.appendChild(lv);
     }
     d.appendChild(cap);
+    /* APOC-V276 (no-old-versions + no-attribution job, 2026-11-13): badge and detail
+       art lines state what the art is, with no attribution. */
     if (n.status === "generated") {
       var badge = document.createElement("span");
       badge.className = "mon-badge"; badge.textContent = "generated";
       badge.title = n.basis === "description"
-        ? "Portrait generated from Shaun's written description \u2014 flagged as generated"
+        ? "Portrait generated from the written description \u2014 flagged as generated"
         : "Portrait generated outright \u2014 no description on file; appearance is generated filler, not canon";
       d.appendChild(badge);
     }
@@ -9374,8 +9376,8 @@ function floorConnected(L, cols, rows){
     if (!detailEl) return;
     var art = n.status === "generated"
       ? (n.basis === "description"
-          ? "Art: portrait generated from Shaun's written description \u2014 flagged as generated."
-          : "Art: portrait generated outright \u2014 no description on file; the appearance is generated filler, NOT Shaun's canon.")
+          ? "Art: portrait generated from the written description \u2014 flagged as generated."
+          : "Art: portrait generated outright \u2014 no description on file; the appearance is generated filler, NOT canon.")
       : "Art: existing art.";
     detailEl.innerHTML = "<h4>" + esc(n.name) + "</h4>"
       + (n.path ? "<p><img src=\"" + pub(n.path) + "\" alt=\"" + esc(n.name) + "\" loading=\"lazy\" style=\"width:128px;height:128px;object-fit:cover;border-radius:10px\"></p>" : "")
