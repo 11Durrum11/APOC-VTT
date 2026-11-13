@@ -8368,7 +8368,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-2355";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0122";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -14499,11 +14499,7 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
    it"). Scoped to the Library only; every other piece keeps the
    treatment gate exactly as shipped. */
 body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-items:center;justify-content:center;min-width:24px;min-height:24px;padding:0 5px;cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;line-height:1;border-radius:6px}
-/* The always-reachable Library recovery pill (desktop control copy
-   only; the script never creates it on display copies). */
-#apocVttLibHome211{position:fixed;top:40px;right:8px;z-index:4500;font:inherit;font-size:.72rem;line-height:1;padding:5px 9px;border-radius:999px;border:1px solid hsl(222 18% 32%);background:rgba(10,12,16,.82);color:#cfd8ea;cursor:pointer;opacity:.78;box-shadow:0 4px 14px rgba(0,0,0,.45)}
-#apocVttLibHome211:hover{opacity:1;background:rgba(20,26,38,.95)}
-@media (max-width:820px){#apocVttLibHome211{display:none}}
+/* APOC-V275 (Shaun, standing order — first given 2026-11-12, repeated 2026-11-13 ~01:20): the floating Library home pill that was styled here is REMOVED from the VTT entirely — element, styles and wiring. The Library opens from its own tab. Do not resurrect the pill. */
 </style>
 <script>
 (function(){
@@ -14562,24 +14558,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
   function gripEl(){ var r = repoEl(); return r ? r.querySelector(".per-grip") : null; }
   function repoLocked(){ var fp = loadJ(FKEY); return !!(fp["per-repo"] && fp["per-repo"].lock); }
 
-    var pill = document.createElement("button");
-  pill.type = "button";
-  pill.id = "apocVttLibHome211";
-  pill.textContent = "\u2302 Library";
-  pill.title = "Bring the Art Library back on screen (reset its position)";
-  pill.addEventListener("click", function(){
-    var el = repoEl(), pn = panelEl(); if (!el || !pn) return;
-    var pr = pn.getBoundingClientRect();
-    var w = Math.round(el.getBoundingClientRect().width) || 224;
-    if (w < 72 || w > 224) w = 224;     var x = Math.max(0, Math.round(pr.width - w - 12)), y = 10;
-    var st = loadJ(PKEY);
-    st.repo = { float: { x: x, y: y, w: w } };
-    saveJ(PKEY, st);
-    el.classList.remove("per-dragging");
-    el.classList.add("per-float");
-    el.style.left = x + "px"; el.style.top = y + "px"; el.style.width = w + "px";
-      });
-  document.body.appendChild(pill);
+  /* APOC-V275: the pill creation + click wiring that stood here is removed with the pill (Shaun's standing order; see the V275 note in the APOC-V211 style block above). The grip guard below is a separate system and stays. */
 
     var myDrag = null;
   function gripRect(){
@@ -20208,5 +20187,142 @@ body.apoc-tabs254 .apoc-track{display:none!important}
 #set-tools #zoomBar{position:static !important;left:auto !important;top:auto !important;flex:0 1 auto}
 #set-tools #mapDdBtn{width:auto !important}
 </style>
+
+<style>
+/* APOC-V275-CSS (Shaun, 2026-11-13 ~01:02 MST \u2014 \"make all of the
+   buttons 100% transparent\", scope corrected ~01:04: JUST the top
+   layer \u2014 the 14 edge tab chips; inner buttons inside the sets
+   keep their fills untouched): every chip's fill is fully
+   transparent in every state \u2014 resting, hover, open/pressed.
+   \"Just the fill is gone. Same look as the tracker\": the label
+   text and the 1px dark-blue border stay exactly as they were.
+   The base chip fill is rgba(10,13,18,.94); hover was
+   rgba(30,64,175,.35) and the open/pressed state rgba(30,64,175,.5),
+   and gmBtn's ON state came from the global [aria-pressed="true"]
+   rule's solid #1e40af !important \u2014 the pressed/expanded rules
+   below carry (0,2,0) specificity so they beat that global rule on
+   specificity alone; the base/hover rules win by !important plus
+   last-in-document order. State feedback now rides the BORDER only
+   (brightens to #7aa2ff on hover and when open/pressed) \u2014 never a
+   fill, not even a translucent one. Legibility with no fill: the
+   chips keep their near-white label colour and gain a dark
+   text-shadow so labels stay readable over light map art; a shadow
+   is not a fill. Geometry untouched: chips stay 132x28, borders
+   stay 1px, box-sizing already border-box. No fill exemption
+   remains anywhere: the Art Library home pill is not a chip, and
+   under Shaun's Order 3 (2026-11-13 ~01:20, repeating his
+   2026-11-12 order) it is REMOVED from the VTT entirely by this
+   same build \u2014 see step 0 of the build script. */
+.apoc-tab{background-color:transparent!important;background-image:none!important;text-shadow:0 1px 3px rgba(0,0,0,.88),0 0 8px rgba(0,0,0,.6)}
+.apoc-tab:hover{background-color:transparent!important;background-image:none!important;border-color:#7aa2ff!important}
+.apoc-tab[aria-expanded="true"],.apoc-tab[aria-pressed="true"]{background-color:transparent!important;background-image:none!important;border-color:#7aa2ff!important}
+</style>
+<script>
+(function(){
+  "use strict";
+  /* APOC-V275 (Shaun, 2026-11-13 ~01:02 MST \u2014 \"open the map bubble
+     all the way to the right side\"): the panel shell already spans
+     the viewport; what stops short in Shaun's saved state is the MAP
+     inside it. His apocVttMapSizeV1 seat ({w:1015, l:0, t:0} in both
+     verbatim grabs) caps #apocMap at 1015px wide, anchored left, and
+     the map-fit script honours that cap on every fit \u2014 on his
+     wider screen the map's right edge strands hundreds of px short
+     of the bubble's right edge (his flight recorder's geometry
+     entries sit at a constant 1015 wide). This block is a ONE-SHOT
+     seat correction, not a new geometry writer: the first time the
+     map is seen fitted (base image loaded, fit() has applied the
+     seat) on a desktop-width, unblocked view, it extends the saved
+     width \u2014 and only the width \u2014 so the map's right edge lands
+     on the stage's right edge, honouring the app's own docked-
+     Library ceiling (dockCeilW arithmetic mirrored). The available
+     width is read from the stage: the map's own parent (.map-side)
+     shrink-wraps it, so its clientWidth tracks the capped width
+     and would ratify the strand. Height, left
+     and top seats are preserved byte-for-byte, and the corrected
+     record is what fit() re-applies thereafter, so the result is
+     stable across reload with no further writes from here. A flag
+     (apocVttR275BubbleRight) marks the migration done: any seat
+     Shaun sets afterwards \u2014 including narrowing the map again by
+     hand \u2014 is authoritative and never re-corrected (v2.65 marked-
+     seat doctrine). The flag rides the layout reset key list, so a
+     Reset Layout re-arms the correction for a restored legacy seat.
+     Bounded poll only: it stops the moment it has seen the fitted
+     map once, gives up after ~60s, and never runs on phone widths
+     (the manual-size system is desktop-only by the app's own gate)
+     or while fullscreen / displaying / expanded. */
+  var FLAG = "apocVttR275BubbleRight";
+  try { if (localStorage.getItem(FLAG)) return; } catch(e){ return; }
+  try {
+    var g = window.__apocGeo246;
+    if (g && g.resetKeys && g.resetKeys.indexOf(FLAG) < 0) g.resetKeys.push(FLAG);
+  } catch(e){}
+  var mq = window.matchMedia("(min-width: 821px)");
+  var el = document.getElementById("apocMap");
+  if (!el || !mq.matches) return;
+  function blocked(){
+    return !!document.fullscreenElement ||
+      document.body.classList.contains("displaying") ||
+      document.body.classList.contains("map-expanded") ||
+      document.body.classList.contains("map-fs");
+  }
+  function baseImg(){
+    var panes = el.querySelectorAll(".leaflet-pane");
+    for (var i = 0; i < panes.length; i++){
+      if (panes[i].style.zIndex === "205"){
+        var img = panes[i].querySelector("img.leaflet-image-layer");
+        if (img) return img;
+      }
+    }
+    return el.querySelector("img.leaflet-image-layer");
+  }
+  function num(v){ return typeof v === "number" && isFinite(v); }
+  function loadMan(){
+    try {
+      var man = JSON.parse(localStorage.getItem("apocVttMapSizeV1") || "null");
+      if (man && window.__apocGeo246 && window.__apocGeo246.sanMapSize) man = window.__apocGeo246.sanMapSize(man);
+      return (man && typeof man === "object") ? man : null;
+    } catch(e){ return null; }
+  }
+  function dockCeilW(){
+    var repo = document.querySelector("#mapPanel .map-repo");
+    var rowEl = el.closest(".stage-row");
+    if (!repo || !rowEl || repo.classList.contains("per-float") || !rowEl.contains(repo)) return 2600;
+    var pg = el.closest(".page");
+    var had = !!(pg && pg.classList.contains("man-w"));
+    if (had) pg.classList.remove("man-w");
+    var w = rowEl.clientWidth - 314;
+    if (had) pg.classList.add("man-w");
+    return Math.max(320, w);
+  }
+  var t0 = Date.now();
+  var iv = setInterval(function(){
+    if (Date.now() - t0 > 60000){ clearInterval(iv); return; }
+    if (blocked() || !mq.matches) return;
+    var img = baseImg();
+    if (!img || !img.naturalWidth || !el.style.width) return;
+    clearInterval(iv);
+    var man = loadMan();
+    try { localStorage.setItem(FLAG, "1"); } catch(e){}
+    if (!man || !num(man.w)) return;
+    /* the width reference is the STAGE, never el.parentElement: the
+       parent (.map-side) shrink-wraps the map, so once the capped
+       seat is applied its clientWidth IS the capped width (measured
+       1015 against the stage's 1344) and any fill computed from it
+       ratifies the strand. The stage's clientWidth is stable. */
+    var side = el.closest(".map-stage") || el.parentElement;
+    if (!side || !side.clientWidth) return;
+    var fillW = side.clientWidth - (num(man.l) ? man.l : 0);
+    if (fillW < 320) fillW = side.clientWidth;
+    var target = Math.min(fillW, dockCeilW());
+    if (man.w < target - 1){
+      man.w = Math.round(target);
+      try { localStorage.setItem("apocVttMapSizeV1", JSON.stringify(man)); } catch(e){}
+      el.style.width = Math.round(target) + "px";
+      var m = window.map;
+      if (m && m.invalidateSize) m.invalidateSize({ pan: false });
+    }
+  }, 250);
+})();
+</script>
 </body>
 </html>
