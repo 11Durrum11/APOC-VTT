@@ -1678,6 +1678,28 @@ setInterval(loadSharedEntries, 60000);
           if (ev.button !== undefined && ev.button !== 0) return;
           v278Press = { id: mk.id, x: ev.clientX, y: ev.clientY, resolved: false, open: openMk };
         }, { passive: true });
+        if (iconEl) iconEl.addEventListener("contextmenu", ev => {
+          /* APOC-V279 (2026-11-13): a right-click ON a read pin opens
+             its place card — the same card the left-click opens. The
+             map's own context menu (the #apocMap listener) ignores the
+             event target and re-derives its hit geometrically (nearest
+             marker anchor within 26px, then classifyMarker), so a
+             right-press landing on the pin's label — the pill runs
+             well past 26px from the anchor, and 89 of the 120
+             landscape pills are dropped a band or two below the dot —
+             fell outside every anchor's radius and Shaun got the bare
+             Map menu ("Add marker here" / "Add token") for a press on
+             the pin's own body. Intercepting the event on the pin's
+             icon element (dot and label are both inside it) makes the
+             pin's whole rendered body open the card; stopPropagation
+             keeps the map menu from appearing for this press, and
+             presses anywhere else keep the existing menu untouched.
+             Bare markers get no binding: their right-click menu path
+             is unchanged. */
+          ev.preventDefault();
+          ev.stopPropagation();
+          openMk();
+        });
         m.on("dragstart", () => { dragStartLL = m.getLatLng(); });
       }
       m.on("dragend", async () => {
@@ -8433,7 +8455,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0200";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0242";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
