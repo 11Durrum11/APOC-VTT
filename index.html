@@ -938,7 +938,7 @@ body.map-expanded .stage-row{display:contents}
         <button type="button" class="btn" id="tplCircleBtn">Tpl: Circle</button>
         <button type="button" class="btn" id="tplLineBtn">Tpl: Line</button>
         <button type="button" class="btn" id="tplSquareBtn">Tpl: Square</button>
-        <span class="field" style="flex:0 1 auto"><label for="tplSize">Template size (cells)</label><input id="tplSize" type="number" min="1" max="30" step="1" value="3" style="width:64px"></span>
+        <span class="field" style="flex:0 1 auto"><label for="tplSizeCells">Template size (cells)</label><input id="tplSizeCells" type="number" min="1" max="30" step="1" value="3" style="width:64px"></span>
         <span id="tplList" style="display:contents"></span>
         <span class="muted small" id="tplStatus"></span>
       </span>
@@ -2615,7 +2615,7 @@ setInterval(loadSharedEntries, 60000);
     host.querySelectorAll("[data-tpl-del]").forEach(b => b.addEventListener("click", async () => { tplItems = tplItems.filter(t => t.id !== b.dataset.tplDel); await saveTemplates(); renderTemplates(); buildTplList(); }));
   }
   function placeTemplate(kind){
-    const size = Math.max(1, Math.min(30, parseInt($("tplSize").value, 10) || 3));
+    const size = Math.max(1, Math.min(30, parseInt($("tplSizeCells").value, 10) || 3));
     const c = toXY(map.getCenter());
     const it = { id: "tpl" + Date.now().toString(36), kind, x: Math.round(c.x * 100) / 100, y: Math.round(c.y * 100) / 100, size, rot: 0 };
     tplItems.push(it);
@@ -8368,7 +8368,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-2248";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-2355";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -20048,6 +20048,165 @@ body.apoc-tabs254 .apoc-track{display:none!important}
    being hidden or rows were touching. */
 .map-repo #artLibrary .nest-body .nest.open > .nest-body{max-height:none !important;height:auto !important}
 #mapDdPanel .mapdd-grid{gap:5px 18px}
+</style>
+
+<script>
+/* APOC-V274R (Shaun, 2026-11-12 ~22:47 MST \u2014 \"For all those buttons
+   that are sitting out and open in tools\" / \"Put all of those buttons
+   that are sitting out in the open \u2014 nest them in tools\"): the
+   general nesting, corrected build. This block supersedes the first
+   v2.74 attempt (land285, never shipped) in full; the candidate is
+   built fresh from the v2.73 bytes, so nothing of that attempt rides
+   along. Its three adjudicated defects, all proven in the harness
+   (diag285 / probe405 A/B):
+   (1) THE OLD BLOCK MOVED THE WRONG SIZE FIELD. It resolved the
+       template size field through the global id \"tplSize\" \u2014 but the
+       build carried TWO inputs with that id: the spell-template
+       field (\"Template size (cells)\", inside #tplControls) and the
+       Draw template field #tplSizeField (\"Size (ft)\", homed in
+       #set-draw). Once the set builder had seated the Draw field in
+       the tray, the global lookup returned the DRAW field, so the
+       old block stole it into Tools, stranded the spell-template
+       field inside #tplControls (the shell the battery then found),
+       and left placeTemplate reading the Draw field's 20 \u2014 cones
+       placed at 20 cells instead of the field's 3. THE FIX IS IN
+       THE BASE BYTES, not just here: the spell-template input is
+       renamed #tplSizeCells (label + the placeTemplate reader move
+       with it), the Draw input keeps #tplSize as the only bearer of
+       that id, and this block resolves the spell-template field
+       scoped inside #tplControls, never by global id. A repair leg
+       also walks #tplSizeField back to #set-draw if it is ever found
+       inside Tools.
+   (2) THE \u2302 Library pill (#apocVttLibHome211) IS NOT A TOOLS
+       RESIDENT. It is the Art Library's always-reachable recovery
+       pill (V211): fixed at the top-right on purpose, so the Library
+       can be re-homed even when every set is shut. Nesting it in a
+       closable set defeats its one job. It stays at its own post;
+       this block never touches it.
+   (3) INNER-ORDER DEFERENCE IS NOW EXPLICIT. The old block appended
+       in its own order and never consulted Shaun's record, relying
+       on other blocks to restore a recorded order after it. This
+       block applies APOC-V273's semantics itself after the moves:
+       where apocVttInnerOrder255 names the Tools group, the recorded
+       order governs the buttons it names (the calibration pair keeps
+       V273's adjacency rule when the record does not name it), so
+       the last block to run converges to the same arrangement.
+   WHAT MOVES (the REAL elements, same ids, same handlers, nothing
+   copied, nothing left behind): the walls / doors draw trio
+   (#toolWallBtn / #toolDoorBtn / #toolWindowBtn, L3), #condBtn (L4),
+   the spell-template controls (#tplConeBtn / #tplCircleBtn /
+   #tplLineBtn / #tplSquareBtn + the #tplSizeCells field + #tplList +
+   #tplStatus, L2, authored inside the display:contents #tplControls
+   span \u2014 the emptied span is removed once it holds no control),
+   the map-view four (#mapExpandBtn, #fsBtn, #view3dBtn, #mapDdBtn,
+   out of the Map set), and the zoom cluster (#zoomBar, off the tab
+   layer; its autonomous seaters only ever write style.left/top and
+   its records, which the CSS below makes inert \u2014 the bar flows in
+   the set, slider / pinch toggle / lock pin untouched). The
+   calibration pair is NOT this block's to move: APOC-V273 owns it;
+   this block only re-appends the pair + status last on each pass so
+   the settled order ends with them. Settled order: the existing
+   Tools chain (with its standing tokenStatus / tokenForm members),
+   the walls trio, Conditions, the template controls, the map-view
+   four, the zoom cluster, the calibration pair. The two raw
+   .map-tools rows the loose buttons leave behind are removed once
+   they hold no controls (the base set builder's own behaviour for
+   emptied rows); the FreeLayout section rows that remain (Search &
+   map / Grid, tokens & GM) are panel groups whose only button is
+   their own lock toggle \u2014 panel chrome, not loose buttons, and
+   out of this order's scope. The map dropdown panel is
+   position:fixed and opens from the button's own rect, so it opens
+   correctly from its new home. Bounded boot retries only (the house
+   pattern \u2014 no watcher, no interval). */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  function $(id){ return document.getElementById(id); }
+  var MOVES = ["toolWallBtn", "toolDoorBtn", "toolWindowBtn", "condBtn",
+    "tplConeBtn", "tplCircleBtn", "tplLineBtn", "tplSquareBtn", "tplSizeF", "tplList", "tplStatus",
+    "mapExpandBtn", "fsBtn", "view3dBtn", "mapDdBtn",
+    "zoomBar"];
+  var TAIL = ["calibBtn", "calibResetBtn", "calibStatus"];
+  function elOf(id){
+    if (id === "tplSizeF") {
+      var host = $("tplControls"), inp = $("tplSizeCells");
+      if (host) { var f = host.querySelector(".field"); if (f) return f; }
+      return inp ? (inp.closest(".field") || inp) : null;
+    }
+    return $(id);
+  }
+  function toolsRecord(){
+    try {
+      var o = JSON.parse(localStorage.getItem("apocVttInnerOrder255") || "{}");
+      for (var k in o) { if (k.indexOf("set-tools") === 0 && Array.isArray(o[k])) return o[k]; }
+    } catch(e){}
+    return null;
+  }
+  function btnKeyOf(b){
+    if (b.dataset && b.dataset.innerKey255) return b.dataset.innerKey255;
+    if (b.id) return "#" + b.id;
+    return (b.textContent || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "btn";
+  }
+  var rowsSeen = [];
+  function nest(){
+    var tools = $("set-tools");
+    if (!tools) return;
+    ["toolWallBtn", "calibBtn"].forEach(function(id){
+      var el = $(id);
+      if (el && el.parentElement && el.parentElement.classList && el.parentElement.classList.contains("map-tools") && rowsSeen.indexOf(el.parentElement) < 0) rowsSeen.push(el.parentElement);
+    });
+    MOVES.forEach(function(id){
+      var el = elOf(id);
+      if (el && el.parentElement !== tools) tools.appendChild(el);
+    });
+    var df = $("tplSizeField"), draw = $("set-draw");
+    if (df && draw && df.parentElement === tools) draw.appendChild(df);
+    var tpl = $("tplControls");
+    if (tpl && !tpl.querySelector("button, input, select, textarea") && tpl.parentElement) tpl.parentElement.removeChild(tpl);
+    TAIL.forEach(function(id){
+      var el = $(id);
+      if (el && el.parentElement === tools) tools.appendChild(el);
+    });
+    var rec = toolsRecord();
+    if (rec) {
+      var btns = Array.prototype.slice.call(tools.children).filter(function(c){ return c.tagName === "BUTTON"; });
+      var byKey = {};
+      btns.forEach(function(b){ byKey[btnKeyOf(b)] = b; });
+      var ordered = [];
+      rec.forEach(function(k){ if (byKey[k]) { ordered.push(byKey[k]); delete byKey[k]; } });
+      btns.forEach(function(b){ if (ordered.indexOf(b) < 0) ordered.push(b); });
+      var after = btns.length ? btns[btns.length - 1].nextSibling : null;
+      ordered.forEach(function(b){ tools.insertBefore(b, after); });
+      var recNamesPair = rec.indexOf("#calibBtn") >= 0 || rec.indexOf("#calibResetBtn") >= 0;
+      var cb = $("calibBtn"), cr = $("calibResetBtn"), cs = $("calibStatus");
+      if (!recNamesPair) {
+        if (cb && cr && cr.previousElementSibling !== cb) cb.insertAdjacentElement("afterend", cr);
+        if (cr && cs && cs.previousElementSibling !== cr) cr.insertAdjacentElement("afterend", cs);
+      }
+    }
+    rowsSeen.forEach(function(row){
+      if (!row.parentElement) return;
+      if (row.querySelector("button, select, input, textarea")) return;
+      var meaningful = Array.prototype.slice.call(row.children).filter(function(c){
+        return !c.classList.contains("per-grip") && (c.textContent || "").trim();
+      });
+      if (!meaningful.length) row.parentElement.removeChild(row);
+    });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", nest);
+  else nest();
+  [500, 1200, 2500, 4500, 8000, 14000, 22000, 36000].forEach(function(ms){ setTimeout(nest, ms); });
+})();
+</script>
+<style id="APOC-V274R-CSS">
+/* APOC-V274R: nested residents of the Tools set flow in place \u2014 the
+   zoom cluster's autonomous seating (style.left/top from its own
+   records) is inert, and the map dropdown button shrink-wraps to its
+   label like every other set button. Nothing else about them
+   changes. The \u2302 Library pill keeps its own fixed post (see the
+   block above) and is deliberately not styled here. */
+#set-tools #zoomBar{position:static !important;left:auto !important;top:auto !important;flex:0 1 auto}
+#set-tools #mapDdBtn{width:auto !important}
 </style>
 </body>
 </html>
