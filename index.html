@@ -146,6 +146,10 @@ body.map-expanded #mapPanel{overflow:hidden!important}
 .tpl-dot{display:block;width:13px;height:13px;border-radius:50%;background:#e8a33d;border:2px solid #0b0e14;box-shadow:0 0 6px #e8a33d;cursor:move}
 .tpl-rot{display:flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:50%;background:#10131a;color:#e8a33d;border:1px solid #e8a33d;font-size:13px;cursor:move}
 .tpl-chip{display:inline-flex;gap:4px;align-items:center;border:1px solid #2a2f3a;border-radius:999px;padding:2px 6px;font-size:.78rem;color:#f2e7c8}
+/* APOC-V272 (L4): invisible tokens in GM view + the condition stamper */
+.leaflet-marker-icon.tk-invis{opacity:.45!important;outline:2px dashed #e8e8e8;outline-offset:-2px}
+body.cond-arm .leaflet-marker-icon{cursor:pointer}
+.cond-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;max-width:260px}
 .map-stage:fullscreen{position:relative;width:100%;height:100%;background:#05070a;align-items:stretch}
 .map-stage:fullscreen .map-side{display:flex;flex-direction:column}
 .map-stage:fullscreen .apoc-map{flex:1 1 auto;height:100%;min-height:0}
@@ -928,6 +932,7 @@ body.map-expanded .stage-row{display:contents}
       <button type="button" class="btn" id="toolWallBtn" aria-pressed="false">Wall</button>
       <button type="button" class="btn" id="toolDoorBtn" aria-pressed="false">Door</button>
       <button type="button" class="btn" id="toolWindowBtn" aria-pressed="false">Window</button>
+      <button type="button" class="btn" id="condBtn" aria-pressed="false">Conditions</button>
       <span style="display:contents" id="tplControls">
         <button type="button" class="btn" id="tplConeBtn">Tpl: Cone</button>
         <button type="button" class="btn" id="tplCircleBtn">Tpl: Circle</button>
@@ -2064,7 +2069,10 @@ setInterval(loadSharedEntries, 60000);
     { k:"stunned", label:"Stunned", c:"#e8c33d" },
     { k:"blessed", label:"Blessed", c:"#7aa2c4" },
     { k:"cursed", label:"Cursed", c:"#9a86c8" },
-    { k:"dead", label:"Dead", c:"#22242c" }
+    { k:"dead", label:"Dead", c:"#22242c" },
+    { k:"held", label:"Held", c:"#c9a227" },
+    { k:"prone", label:"Prone", c:"#b07cc8" },
+    { k:"invisible", label:"Invisible", c:"#e8e8e8" }
   ];
   let tokens = [], feetPerSquare = 5, gridOn = false, gmView = false, gridType = "square", scaleUnit = "ft";
   const tokenLayer = L.layerGroup().addTo(map);
@@ -2209,10 +2217,13 @@ setInterval(loadSharedEntries, 60000);
     for (const k in tokenMarkers) delete tokenMarkers[k];
     for (const tk of tokens) {
       if (tk.gm && !effectiveGm()) continue;
+      if ((tk.status || []).includes("invisible") && !effectiveGm()) continue;
       if (tk.light > 0 && !window.__apocLightOn) tokenLayer.addLayer(L.circle(toLatLng(tk.x, tk.y), { pane: "layerTokens", radius: tk.light / feetPerSquare * CELL, color: "#e8a33d", weight: 1, dashArray: "4 4", fillColor: "#e8a33d", fillOpacity: 0.08, interactive: false }));
       const m = L.marker(toLatLng(tk.x, tk.y), { pane: "layerTokens", draggable: !tk.lock && !isProjecting(), icon: tokenIcon(tk) }).addTo(tokenLayer);
       tokenMarkers[tk.id] = m;
+      if ((tk.status || []).includes("invisible") && effectiveGm()) { const el = m.getElement(); if (el) el.classList.add("tk-invis"); }
       m.on("click", () => {
+        if (apocCondArmed()) { openCondPopup(tk, m); return; }
         if (isProjecting() || document.body.classList.contains("map-expanded")) {
           L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(tk.name)}</b>${tk.maxHp > 0 ? `<br>HP ${tk.hp || 0}/${tk.maxHp}` : ""}`).openOn(map);
           return;
@@ -2424,15 +2435,16 @@ setInterval(loadSharedEntries, 60000);
       map.dragging.enable();
       if (rulerLine) { map.removeLayer(rulerLine); rulerLine = null; }
       if (rulerTip) { map.removeLayer(rulerTip); rulerTip = null; }
+      clearRulerPath();
       rulerStart = null;
     }
   });
   map.on("mousedown", e => {
     if (!rulerOn) return;
-    rulerStart = rulerSnap(e.latlng);
+    rulerStart = rulerPath.length ? rulerPath[rulerPath.length - 1] : rulerSnap(e.latlng);
     if (rulerLine) map.removeLayer(rulerLine);
     if (rulerTip) map.removeLayer(rulerTip);
-    rulerLine = L.polyline([rulerStart, rulerStart], { color: "#e8a33d", weight: 3 }).addTo(map);
+    rulerLine = L.polyline([rulerStart, rulerStart], { color: "#e8a33d", weight: 3, interactive: false }).addTo(map);
     rulerTip = L.marker(rulerStart, { icon: L.divIcon({ className: "atlas-icon", html: '<span class="ruler-label">0.0 sq · 0 ft</span>', iconAnchor: [0, 0] }), interactive: false }).addTo(map);
   });
   map.on("mousemove", e => {
@@ -2440,8 +2452,98 @@ setInterval(loadSharedEntries, 60000);
     const end = rulerSnap(e.latlng);
     rulerLine.setLatLngs([rulerStart, end]);
     rulerTip.setLatLng([(rulerStart.lat + end.lat) / 2, (rulerStart.lng + end.lng) / 2]);
-    rulerTip.setIcon(L.divIcon({ className: "atlas-icon", html: `<span class="ruler-label">${rulerText(rulerStart, end)}</span>`, iconAnchor: [0, 0] }));
+    rulerTip.setIcon(L.divIcon({ className: "atlas-icon", html: `<span class="ruler-label">${rulerTipText(end)}</span>`, iconAnchor: [0, 0] }));
   });
+
+  /* APOC-V272 (L4) — WAYPOINT RULER + QUICK CONDITIONS.
+     Waypoints: with the ruler on, a true click (press and release in
+     place) commits the current end as a waypoint — the first click sets
+     the anchor, later clicks bend the path; the readout sums every
+     committed segment plus the live one, in the map's own unit and grid
+     type (hexes counted on the axial lattice, like the straight ruler).
+     Esc clears the path (the ruler stays on); turning the ruler off
+     clears it too. A drag still just measures — only clicks commit. */
+  let rulerPath = [];
+  let rulerDownPt = null;
+  const rulerPathFx = L.layerGroup().addTo(map);
+  function cellsBetween(a, b){
+    if (gridType === "hex") {
+      const R = cellNow() * 0.575;
+      const ax = ll => { const n = llUnrot(ll.lat, ll.lng); const u = (n.lng - R) / R, v = (n.lat - R) / R; const q = (2 / 3) * u, r = -(1 / 3) * u + (Math.sqrt(3) / 3) * v; return [q, r, -q - r]; };
+      const A = ax(a), B = ax(b);
+      return (Math.abs(B[0] - A[0]) + Math.abs(B[1] - A[1]) + Math.abs(B[2] - A[2])) / 2;
+    }
+    return Math.hypot(b.lng - a.lng, b.lat - a.lat) / cellNow();
+  }
+  function fmtCells(cells){
+    const feet = cells * feetPerSquare;
+    const dist = scaleUnit === "mi" ? `${(feet / 5280).toFixed(2)} mi` : (feet >= 5280 ? `${(feet / 5280).toFixed(2)} mi` : `${Math.round(feet)} ft`);
+    return `${cells.toFixed(1)} ${gridType === "hex" ? "hex" : "sq"} · ${dist}`;
+  }
+  function rulerTipText(end){
+    if (!rulerPath.length || !rulerStart) return rulerText(rulerStart, end);
+    let cells = 0;
+    for (let i = 1; i < rulerPath.length; i++) cells += cellsBetween(rulerPath[i - 1], rulerPath[i]);
+    cells += cellsBetween(rulerStart, end);
+    return fmtCells(cells) + " (path)";
+  }
+  function drawRulerPath(){
+    rulerPathFx.clearLayers();
+    if (rulerPath.length > 1) rulerPathFx.addLayer(L.polyline(rulerPath, { color: "#e8a33d", weight: 3, dashArray: "1 6", interactive: false }));
+    for (const p of rulerPath) rulerPathFx.addLayer(L.circleMarker(p, { radius: 4, color: "#e8a33d", weight: 2, fillColor: "#0b0e14", fillOpacity: 1, interactive: false }));
+  }
+  function clearRulerPath(){ rulerPath = []; rulerPathFx.clearLayers(); }
+  map.on("mousedown", e => { rulerDownPt = e.containerPoint || null; });
+  map.on("click", e => {
+    if (!rulerOn || isProjecting()) return;
+    if (rulerDownPt && e.containerPoint && e.containerPoint.distanceTo(rulerDownPt) > 4) return;
+    const p = rulerSnap(e.latlng);
+    if (!rulerPath.length) rulerPath = [p];
+    else rulerPath.push(p);
+    rulerStart = p;
+    drawRulerPath();
+    if (rulerTip) {
+      rulerTip.setLatLng(p);
+      rulerTip.setIcon(L.divIcon({ className: "atlas-icon", html: `<span class="ruler-label">${rulerTipText(p)}</span>`, iconAnchor: [0, 0] }));
+    }
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && rulerPath.length) { e.stopPropagation(); clearRulerPath(); }
+  }, true);
+  window.__apocRulerTest = { path: () => rulerPath.map(p => ({ lat: p.lat, lng: p.lng })), tipText: rulerTipText, cellsBetween, clear: clearRulerPath };
+
+  /* Quick conditions: the Tools Conditions button arms a stamper — click
+     a token and a popup of toggle chips (the full STATUSES list) stamps
+     or clears its conditions, saving and re-drawing each time, staying
+     open on the token. The editor's chips pick the same list up. */
+  let condArmOn = false;
+  function apocCondArmed(){ return condArmOn; }
+  function openCondPopup(tk, m){
+    const chips = STATUSES.map(st => {
+      const on = (tk.status || []).includes(st.k);
+      return `<button type="button" class="btn" data-cond="${st.k}" aria-pressed="${on}" style="border-color:${st.c};${on ? `background:${st.c};color:#0b0e14;` : ""}">${st.label}</button>`;
+    }).join(" ");
+    const pop = L.popup().setLatLng(m.getLatLng()).setContent(`<div class="cond-pop"><b>${esc(tk.name)}</b><div class="cond-chips">${chips}</div></div>`).openOn(map);
+    const el = pop.getElement();
+    if (el) el.querySelectorAll("[data-cond]").forEach(b => b.addEventListener("click", async () => {
+      const k = b.dataset.cond;
+      tk.status = (tk.status || []).includes(k) ? tk.status.filter(x => x !== k) : [...(tk.status || []), k];
+      const ok = await saveTokens();
+      tokenStatusEl.textContent = ok ? `${tk.name}: ${k} ${tk.status.includes(k) ? "on" : "off"} — saved for everybody.` : "That condition didn't save — try again.";
+      if (!ok) { loadTokens(true); return; }
+      drawTokens();
+      const m2 = tokenMarkers[tk.id];
+      if (m2) openCondPopup(tk, m2);
+    }));
+  }
+  const condBtnEl = $("condBtn");
+  if (condBtnEl) condBtnEl.addEventListener("click", () => {
+    condArmOn = !condArmOn;
+    condBtnEl.setAttribute("aria-pressed", String(condArmOn));
+    document.body.classList.toggle("cond-arm", condArmOn);
+    tokenStatusEl.textContent = condArmOn ? "Conditions armed: click a token to stamp or clear its conditions." : "Conditions off.";
+  });
+  window.__apocCondTest = { armed: () => condArmOn, statuses: () => STATUSES.map(s => s.k), open: openCondPopup };
 
   /* APOC-V270 (L2) — SPELL TEMPLATES + GRID CALIBRATION.
      Templates: own per-map store (vtt_templates[_<id>], house pattern),
@@ -3015,6 +3117,7 @@ setInterval(loadSharedEntries, 60000);
       $("rulerBtn").textContent = "Ruler";
       if (rulerLine) { map.removeLayer(rulerLine); rulerLine = null; }
       if (rulerTip) { map.removeLayer(rulerTip); rulerTip = null; }
+      clearRulerPath();
       rulerStart = null;
     }
     $("fogRevealBtn").setAttribute("aria-pressed", String(mode === "fog-reveal"));
@@ -6155,6 +6258,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
 
     map.on("mousedown", e => {
     if (!rulerOn || isProjecting()) return;
+    if (rulerPath.length) return;
     const p = toXY(e.latlng);
     const tk = tokens.find(t => Math.hypot((t.x - p.x) / 100 * MW, (t.y - p.y) / 100 * MH) < (t.size || 1) * CELL / 2 + CELL * 0.3);
     if (tk) {
@@ -8264,7 +8368,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-2018";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-2043";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
