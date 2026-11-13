@@ -8486,7 +8486,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0326";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0737";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -20553,6 +20553,84 @@ body.apoc-tabs254 .apoc-track{display:none!important}
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function(){ setTimeout(tick, 1200); });
   else setTimeout(tick, 1200);
   document.addEventListener("click", function(){ setTimeout(seat, 450); }, true);
+})();
+</script>
+
+<!-- APOC-V284 (2026-11-13): GH-MAP-COLLAPSE-1PX / GH-MAPGEO-OSC-260 —
+     THE MAP'S HEIGHT GETS ONE OWNER. Under APOC-V255 the map's
+     rendered height was a flex residual: the stage's base size is ~0
+     (cyclic-% height chain), so the grow distribution handed the map
+     panel − (every in-flow sibling), 1:1, with min-height:0 and no
+     floor — set opens, the re-homed place card and sibling wobbles
+     were all subtracted from the map, and at the sum's peak the map
+     rendered ~1px and recovered only as the siblings settled. This
+     block owns the stage height: a definite px value, flex
+     neutralised, recomputed only on discrete events (never on
+     sibling content growth — late content extends the panel's
+     scroll, per APOC-V255's design), floored so the stage can never
+     go degenerate. Expanded / fullscreen / displaying modes stand
+     the owner down; their CSS is untouched. -->
+<style>
+#mapPanel .map-stage{min-height:200px!important}
+</style>
+<script>
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var panel = document.getElementById("mapPanel");
+  var stage = panel ? panel.querySelector(".map-stage") : null;
+  if (!panel || !stage) return;
+  var owned = false, raf = 0;
+  function stoodDown(){
+    return !!document.fullscreenElement ||
+      document.body.classList.contains("map-expanded") ||
+      document.body.classList.contains("map-fs") ||
+      document.body.classList.contains("displaying");
+  }
+  function chromeH(){
+    var sum = 0;
+    var els = [document.getElementById("titleBubble"), document.getElementById("ctlRow"), panel.querySelector(".map-tools")];
+    for (var i = 0; i < els.length; i++){
+      var el = els[i]; if (!el) continue;
+      var cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.position === "absolute" || cs.position === "fixed") continue;
+      var r = el.getBoundingClientRect(); if (!r.height) continue;
+      sum += r.height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    }
+    return sum;
+  }
+  function apply(){
+    raf = 0;
+    if (stoodDown()){
+      if (owned){ stage.style.removeProperty("height"); stage.style.removeProperty("flex"); owned = false; }
+      return;
+    }
+    var panelH = panel.clientHeight; if (!panelH) return;
+    var pcs = getComputedStyle(panel);
+    var scs = getComputedStyle(stage);
+    var gap = (parseFloat(pcs.paddingTop) || 0) + (parseFloat(pcs.paddingBottom) || 0)
+      + (parseFloat(scs.marginTop) || 0) + (parseFloat(scs.marginBottom) || 0);
+    var target = panelH - chromeH() - gap;
+    var fl = panelH >= 480 ? 320 : 200;
+    var h = Math.round(target < fl ? fl : target);
+    if (!owned){ stage.style.setProperty("flex", "0 0 auto", "important"); owned = true; }
+    if (stage.style.height !== h + "px"){
+      stage.style.height = h + "px";
+      try { if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false }); } catch(e) {}
+    }
+  }
+  function schedule(){ if (!raf) raf = requestAnimationFrame(apply); }
+  document.addEventListener("click", function(){ schedule(); setTimeout(schedule, 350); }, true);
+  window.addEventListener("resize", schedule);
+  document.addEventListener("fullscreenchange", function(){ setTimeout(schedule, 80); });
+  try {
+    var mo = new MutationObserver(schedule);
+    document.querySelectorAll(".ctl-set").forEach(function(st){ mo.observe(st, { attributes: true, attributeFilter: ["hidden"] }); });
+    var card = document.getElementById("placeCard"); if (card) mo.observe(card, { attributes: true, attributeFilter: ["hidden"] });
+    var repo = document.querySelector(".map-repo"); if (repo) mo.observe(repo, { attributes: true, attributeFilter: ["hidden"] });
+  } catch(e) {}
+  [350, 1100, 2400, 4800].forEach(function(ms){ setTimeout(schedule, ms); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", schedule); else schedule();
 })();
 </script>
 </body>
