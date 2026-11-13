@@ -8486,7 +8486,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0252";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0322";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -20442,6 +20442,53 @@ body.apoc-tabs254 .apoc-track{display:none!important}
       if (m && m.invalidateSize) m.invalidateSize({ pan: false });
     }
   }, 250);
+})();
+</script>
+
+<!-- APOC-V282 (2026-11-13): GH-CARD-HIDDEN-REPO — the place card must
+     be VISIBLE when it opens. #placeCard lives inside the Library
+     repo, which carries [hidden] whenever the Library set is closed
+     (its boot state in Shaun's layout), and a [hidden] repo is
+     display:none !important — so showPinCard unhid the card into a
+     display:none ancestor and pin clicks "did nothing" (card
+     display:block, rect 0x0, probe410b on his 0305 seed). While the
+     card is open and its repo is hidden, the card is re-homed into
+     #ctlRow right after the repo; when the card hides it returns to
+     the exact seat it came from. The Library set's own open/close is
+     untouched; both card writers (pins + atlas/search) are covered
+     because they share the one #placeCard element. The style below
+     mirrors the card's in-repo cap (.map-repo > .place-card) for its
+     re-homed state, so the presentation is identical in both homes. -->
+<style>
+#ctlRow > #placeCard{max-height:320px;overflow-y:auto}
+</style>
+<script>
+(function(){
+  "use strict";
+  var card = document.getElementById("placeCard");
+  if (!card) return;
+  var repo0 = card.parentElement;
+  var home = null;
+  function sync(){
+    var rp = (card.closest && card.closest(".map-repo")) || repo0;
+    if (!card.hidden) {
+      if (rp && rp.hidden && !home) {
+        var row = document.getElementById("ctlRow") || rp.parentElement;
+        if (row) {
+          home = { parent: rp, next: card.nextSibling };
+          row.insertBefore(card, rp.nextSibling);
+        }
+      }
+    } else if (home) {
+      var h = home; home = null;
+      if (h.next && h.next.parentElement === h.parent) h.parent.insertBefore(card, h.next);
+      else h.parent.appendChild(card);
+    }
+  }
+  new MutationObserver(sync).observe(card, { attributes: true, attributeFilter: ["hidden"] });
+  if (repo0) new MutationObserver(sync).observe(repo0, { attributes: true, attributeFilter: ["hidden"] });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sync);
+  sync();
 })();
 </script>
 </body>
