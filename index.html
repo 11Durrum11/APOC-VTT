@@ -908,6 +908,7 @@ body.map-expanded .stage-row{display:contents}
           <option value="hex">Hexes</option>
         </select>
       </div>
+      <span class="field" style="flex:0 1 auto"><label for="gridDark">Grid darkness</label><input id="gridDark" type="range" min="0" max="100" step="1" value="0" style="width:110px" aria-label="Grid darkness"></span>
       <button type="button" class="btn" id="calibBtn" aria-pressed="false">Calibrate grid</button>
       <button type="button" class="btn" id="calibResetBtn">Reset calibration</button>
       <span class="muted small" id="calibStatus"></span>
@@ -2161,7 +2162,7 @@ setInterval(loadSharedEntries, 60000);
     { k:"prone", label:"Prone", c:"#b07cc8" },
     { k:"invisible", label:"Invisible", c:"#e8e8e8" }
   ];
-  let tokens = [], feetPerSquare = 5, gridOn = false, gmView = false, gridType = "square", scaleUnit = "ft";
+  let tokens = [], feetPerSquare = 5, gridOn = false, gmView = false, gridType = "square", scaleUnit = "ft", gridDark = 0;
   const tokenLayer = L.layerGroup().addTo(map);
   const tokenMarkers = {};   const gridLayer = L.layerGroup();
   const tokenStatusEl = $("tokenStatus");
@@ -2187,10 +2188,25 @@ setInterval(loadSharedEntries, 60000);
     for (let k = 0; k < 6; k++) { const a = Math.PI / 3 * k; pts.push([cy + R * Math.sin(a), cx + R * Math.cos(a)]); }
     return pts;
   }
+  /* APOC-V280 (2026-11-13): grid darkness. Shaun: the grid washed
+     out over light map art — "give me the option to darken the grid,
+     hexes and boxes, can't see them". gridDark (0..100, per map,
+     stored in the settings row) walks the grid stroke from today's
+     exact look (0 -> #e9e2cf at 0.16, byte-identical) to near-black
+     at 0.92 opacity. Paint only: cell size, calibration offsets,
+     scale, snapping and the ruler never read it. One helper feeds
+     drawGrid's opts, so squares and hexes share the value. */
+  function gridStroke(){
+    const t = gridDark / 100;
+    if (!(t > 0)) return { color: "#e9e2cf", opacity: 0.16 };
+    const ch = [233, 226, 207].map(v => Math.round(v + (10 - v) * t));
+    return { color: `rgb(${ch[0]},${ch[1]},${ch[2]})`, opacity: Math.round((0.16 + 0.76 * t) * 100) / 100 };
+  }
   function drawGrid(){
     gridLayer.clearLayers();
     if (!gridOn) return;
-    const opts = { pane:"layerMap", color:"#e9e2cf", weight:1, opacity:0.16, interactive:false };
+    const gs = gridStroke();
+    const opts = { pane:"layerMap", color: gs.color, weight:1, opacity: gs.opacity, interactive:false };
     if (gridType === "hex") {
       const b = map.getBounds().pad(0.2);
       for (const c of hexCenters()) {
@@ -2217,6 +2233,18 @@ setInterval(loadSharedEntries, 60000);
     tokenStatusEl.textContent = ok ? `Grid for this map: ${gridType === "hex" ? "hexes" : "squares"}.` : "Grid didn't save — try again.";
   });
 
+  /* APOC-V280: the Grid darkness slider — "input" repaints at once,
+     "change" persists per map through the one settings writer. */
+  $("gridDark").addEventListener("input", () => {
+    gridDark = Math.max(0, Math.min(100, Number($("gridDark").value) || 0));
+    drawGrid();
+  });
+  $("gridDark").addEventListener("change", async () => {
+    gridDark = Math.max(0, Math.min(100, Number($("gridDark").value) || 0));
+    drawGrid();
+    const ok = await saveVttSettings();
+    tokenStatusEl.textContent = ok ? `Grid darkness: ${gridDark}%.` : "Grid darkness didn't save — try again.";
+  });
   function scaleInputVal(){ return scaleUnit === "mi" ? Math.round(feetPerSquare / 5280 * 100) / 100 : feetPerSquare; }
   async function loadVttSettings(quiet){
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", vttKey()).maybeSingle();
@@ -2230,6 +2258,9 @@ setInterval(loadSharedEntries, 60000);
       gridCellOverride = Number(data.value.cell) > 0 ? Number(data.value.cell) : 0;
       gridOX = Number(data.value.gridOX) || 0;
       gridOY = Number(data.value.gridOY) || 0;
+      const gdIn = Number(data.value.gridDark);
+      gridDark = (gdIn >= 0 && gdIn <= 100) ? gdIn : 0;
+      if (document.activeElement !== $("gridDark")) $("gridDark").value = gridDark;
       if (document.activeElement !== $("scaleFeet")) $("scaleFeet").value = scaleInputVal();
       $("scaleUnit").value = scaleUnit;
       $("gridType").value = gridType;
@@ -2238,7 +2269,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveVttSettings(){
     const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot, cell: gridCellOverride, gridOX, gridOY }, updated_at: new Date().toISOString() },
+      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot, cell: gridCellOverride, gridOX, gridOY, gridDark }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
     return !error;
@@ -8455,7 +8486,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0242";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-0252";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -9578,7 +9609,7 @@ function floorConnected(L, cols, rows){
   var rowSearch = rows[0], rowGrid = rows[1], rowDraw = rows[4], rowLayers = rows[5], rowGen = rows[6];
 
     [fieldOf($("placeSearch")), fieldOf($("mapSelect")), $("mapExpandBtn"), $("fsBtn"), $("view3dBtn"),
-   fieldOf($("gridToggle")), fieldOf($("gridType")), fieldOf($("scaleFeet"))].forEach(function (el) {
+   fieldOf($("gridToggle")), fieldOf($("gridType")), fieldOf($("gridDark")), fieldOf($("scaleFeet"))].forEach(function (el) {
     if (el) sets.map.appendChild(el);
   });
     [$("markerForm"), $("placeForm")].forEach(function (el) {
