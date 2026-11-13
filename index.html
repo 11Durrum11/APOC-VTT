@@ -8368,7 +8368,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-12-2043";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-12-2248";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -11125,6 +11125,74 @@ function floorConnected(L, cols, rows){
 .fp-h[data-d="se"]{right:-5px;bottom:-5px;cursor:nwse-resize}
 </style>
 
+<script>
+/* APOC-V273 (Shaun, voice call 2026-11-12 ~22:45 MST): "Put the
+   calibrate grid and the reset calibration under tools." The two
+   calibration buttons (#calibBtn / #calibResetBtn) were authored in
+   the first .map-tools row and rendered with the Map controls; this
+   block moves the REAL elements (same ids, same handlers — the
+   3-click solve and the reset are wired by id in the calibration
+   code) into #set-tools, and the #calibStatus line rides with them
+   so the flow's feedback sits beside its buttons. No copies: the
+   elements leave the Map row entirely, and the Map set never holds
+   them. Bounded boot retries only (the house pattern, matching
+   APOC-V261's horizon — no watcher, no interval). Membership in the
+   Tools set is guaranteed here; if Shaun's V255 inner-order record
+   names the Tools group, the recorded order governs the members it
+   names (applied with APOC-V261's semantics) — a record that does
+   not name the calibration pair leaves them appended as a pair,
+   status line after them. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  function $(id){ return document.getElementById(id); }
+  function toolsRecord(){
+    try {
+      var o = JSON.parse(localStorage.getItem("apocVttInnerOrder255") || "{}");
+      for (var k in o) {
+        if (k.indexOf("set-tools") !== 0 || !Array.isArray(o[k])) continue;
+        return o[k];
+      }
+    } catch(e){}
+    return null;
+  }
+  function btnKeyOf(b){
+    if (b.dataset && b.dataset.innerKey255) return b.dataset.innerKey255;
+    if (b.id) return "#" + b.id;
+    return (b.textContent || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "btn";
+  }
+  function nest(){
+    var tools = $("set-tools"), cb = $("calibBtn"), cr = $("calibResetBtn"), cs = $("calibStatus");
+    if (!tools || !cb || !cr) return;
+    if (cb.parentElement !== tools) tools.appendChild(cb);
+    if (cr.parentElement !== tools) tools.appendChild(cr);
+    var rec = toolsRecord();
+    var recNamesPair = !!(rec && (rec.indexOf("#calibBtn") >= 0 || rec.indexOf("#calibResetBtn") >= 0));
+    if (rec) {
+      var btns = Array.prototype.slice.call(tools.children).filter(function(c){ return c.tagName === "BUTTON"; });
+      var byKey = {};
+      btns.forEach(function(b){ byKey[btnKeyOf(b)] = b; });
+      var ordered = [];
+      rec.forEach(function(k){ if (byKey[k]) { ordered.push(byKey[k]); delete byKey[k]; } });
+      btns.forEach(function(b){ if (ordered.indexOf(b) < 0) ordered.push(b); });
+      var after = btns.length ? btns[btns.length - 1].nextSibling : null;
+      ordered.forEach(function(b){ tools.insertBefore(b, after); });
+    }
+    if (!recNamesPair) {
+      if (cr.previousElementSibling !== cb) cb.insertAdjacentElement("afterend", cr);
+      if (cs) {
+        if (cs.parentElement !== tools) tools.appendChild(cs);
+        if (cs.previousElementSibling !== cr) cr.insertAdjacentElement("afterend", cs);
+      }
+    } else if (cs && cs.parentElement !== tools) {
+      tools.appendChild(cs);
+    }
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", nest);
+  else nest();
+  [500, 1200, 2500, 4500, 8000, 14000, 22000, 36000].forEach(function(ms){ setTimeout(nest, ms); });
+})();
+</script>
 <script>
 (function(){
   "use strict";
