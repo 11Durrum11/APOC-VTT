@@ -8486,7 +8486,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-0737";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-1329";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -20630,6 +20630,112 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     var repo = document.querySelector(".map-repo"); if (repo) mo.observe(repo, { attributes: true, attributeFilter: ["hidden"] });
   } catch(e) {}
   [350, 1100, 2400, 4800].forEach(function(ms){ setTimeout(schedule, ms); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", schedule); else schedule();
+})();
+</script>
+
+<!-- APOC-V285 (2026-11-13): GH-CARD-BELOW-FOLD — the place card must
+     open INSIDE THE VIEWPORT. On v2.84 the card renders correctly
+     (V282 re-homes it out of the hidden Library repo), but it renders
+     in panel flow below the floored map: with a large set open (Draw,
+     ~378-410px) the open card is pushed past the fold — measured
+     y770.7 in a 620-high viewport (area 0), and a 28.7px sliver at
+     1366x768 on 8/8 pins (glitch hunt 2026-11-13 13:04, land297, his
+     verbatim 0305 seed). Window scroll never engages; only the
+     panel's internal scroll reaches it — the same "clicks do
+     nothing" shape as GH-CARD-HIDDEN-REPO, one floor down.
+     Fix: while the card is open and NOT user-floated, if its measured
+     viewport intersection is not substantial (visible height below
+     min(card height, 200px)), the card is docked — a fixed sheet
+     pinned inside the viewport over the panel's lower area, at the
+     panel's own left/width, wearing its 320px presentation cap. The
+     trigger is the measured rect, not which set is open, so the
+     in-repo (Library open) and re-homed (Library closed) cases obey
+     one rule. The dock lifts when the card hides (V282's
+     return-to-seat untouched), yields to the card's own float
+     machinery (a saved-position float is never docked; grabbing a
+     docked card's title hands it to the user's drag-float at the
+     same rect), and stands down in expanded / fullscreen /
+     displaying modes like APOC-V284's owner. It writes no scroll of
+     any kind — no window scroll, no panel scroll, no scrollIntoView —
+     and never re-enters the panel flow, so V284's stage ownership
+     and floor are undisturbed. -->
+<style>
+#placeCard.apoc-dock285{position:fixed;z-index:1250;margin:0;max-height:320px;overflow-y:auto;box-shadow:0 18px 42px rgba(0,0,0,.5)}
+</style>
+<script>
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var card = document.getElementById("placeCard");
+  var panel = document.getElementById("mapPanel");
+  if (!card || !panel) return;
+  var CLS = "apoc-dock285";
+  var docked = false, raf = 0;
+  function stoodDown(){
+    return !!document.fullscreenElement ||
+      document.body.classList.contains("map-expanded") ||
+      document.body.classList.contains("map-fs") ||
+      document.body.classList.contains("displaying");
+  }
+  function undock(){
+    if (!docked) return;
+    docked = false;
+    card.classList.remove(CLS);
+    card.style.left = ""; card.style.width = ""; card.style.bottom = "";
+  }
+  function dock(){
+    var pr = panel.getBoundingClientRect();
+    if (!pr.width) return;
+    card.classList.add(CLS);
+    card.style.left = Math.round(pr.left) + "px";
+    card.style.width = Math.round(pr.width) + "px";
+    card.style.bottom = "10px";
+    docked = true;
+  }
+  function evaluate(){
+    raf = 0;
+    if (card.hidden || card.classList.contains("floating") || stoodDown()){ undock(); return; }
+    if (docked){
+      var pr = panel.getBoundingClientRect();
+      if (pr.width){ card.style.left = Math.round(pr.left) + "px"; card.style.width = Math.round(pr.width) + "px"; }
+      return;
+    }
+    var r = card.getBoundingClientRect();
+    if (!r.width || !r.height) return; /* 0x0: V282's re-home lands first; a later pass measures the real rect */
+    var visH = Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0);
+    if (visH < Math.min(r.height, 200) - 2) dock();
+  }
+  function schedule(){
+    if (!raf) raf = requestAnimationFrame(evaluate);
+    [150, 450, 900, 1600].forEach(function(ms){ setTimeout(evaluate, ms); });
+  }
+  document.addEventListener("click", schedule, true);
+  window.addEventListener("resize", schedule);
+  document.addEventListener("fullscreenchange", function(){ setTimeout(evaluate, 80); });
+  try {
+    var mo = new MutationObserver(schedule);
+    document.querySelectorAll(".ctl-set").forEach(function(st){ mo.observe(st, { attributes: true, attributeFilter: ["hidden"] }); });
+    mo.observe(card, { attributes: true, attributeFilter: ["hidden"] });
+    var repo = document.querySelector(".map-repo"); if (repo) mo.observe(repo, { attributes: true, attributeFilter: ["hidden"] });
+  } catch(e) {}
+  try {
+    if (window.ResizeObserver) new ResizeObserver(function(){ if (!docked && !raf) raf = requestAnimationFrame(evaluate); }).observe(card);
+  } catch(e) {}
+  /* Drag handoff: grabbing a docked card's title gives it to the
+     card's own drag-float at the very rect it is docked at — the
+     card's pointerdown listener (registered earlier, fires after
+     this capture pass) then drags it as a user float. */
+  document.addEventListener("pointerdown", function(ev){
+    if (!docked || !ev.target || !card.contains(ev.target)) return;
+    if (!ev.target.closest || !ev.target.closest("h4") || ev.target.closest("button")) return;
+    var r = card.getBoundingClientRect();
+    undock();
+    card.classList.add("floating");
+    card.style.left = Math.round(r.left) + "px";
+    card.style.top = Math.round(r.top) + "px";
+    card.style.width = Math.round(r.width) + "px";
+  }, true);
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", schedule); else schedule();
 })();
 </script>
