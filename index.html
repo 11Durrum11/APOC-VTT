@@ -8486,7 +8486,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-1941";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-0751";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -20682,6 +20682,26 @@ body.apoc-tabs254 .apoc-track{display:none!important}
      deferred passes keep the original measured test on settled
      geometry. V284's ownership, floor and settled behaviour are
      untouched. -->
+<!-- APOC-V287 (2026-11-14): GH-DOCK-CLEAN-NONDET — on v2.86 the clean
+     state's card mode was a coin flip across identical runs (hunt
+     2026-11-14: 01:04 in-flow, 07:04 docked, same bytes, same seed).
+     The decision had two authorities and no latch: the V286 sync
+     prediction (exact, but dock-only in effect) and the deferred
+     direct passes, which could execute before APOC-V284's apply
+     landed and read the pre-settle rect (~9px visible in the clean
+     state) — and a dock, once taken, was never revisited, while a
+     "visible" reading latched nothing. Fix, inside evaluate() only:
+     (a) verdicts LATCH per context (ctxSig: sets + repo hidden bits,
+     viewport, card height); DOCK stays episode-sticky, IN-FLOW is
+     context-scoped so a set opening over an open card re-decides
+     exactly once; verdicts clear when the card hides. (b) Deferred
+     passes render a verdict only on SETTLED geometry — the stage
+     height equal to APOC-V284's own predicted target over the
+     current chrome — so no pass can ever decide from the pre-settle
+     rect again. The sync prediction keeps its dock-only engage role
+     (the no-dip engager, measured); it never latches "visible".
+     Designed outcomes unchanged: settled-visible states stay
+     in-flow, below-fold states dock. -->
 <style>
 #placeCard.apoc-dock285{position:fixed;z-index:1250;margin:0;max-height:320px;overflow-y:auto;box-shadow:0 18px 42px rgba(0,0,0,.5)}
 </style>
@@ -20694,6 +20714,15 @@ body.apoc-tabs254 .apoc-track{display:none!important}
   if (!card || !panel) return;
   var CLS = "apoc-dock285";
   var docked = false, raf = 0;
+  var verdict = null, verdictSig = null;
+  function ctxSig(){
+    var s = "";
+    document.querySelectorAll(".ctl-set").forEach(function(st){ s += st.hidden ? "0" : "1"; });
+    var repo = document.querySelector(".map-repo");
+    s += (repo && repo.hidden) ? "0" : "1";
+    s += "|" + window.innerWidth + "x" + window.innerHeight + "|" + Math.round(card.getBoundingClientRect().height);
+    return s;
+  }
   function stoodDown(){
     return !!document.fullscreenElement ||
       document.body.classList.contains("map-expanded") ||
@@ -20701,6 +20730,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
       document.body.classList.contains("displaying");
   }
   function undock(){
+    verdict = null; verdictSig = null;
     if (!docked) return;
     docked = false;
     card.classList.remove(CLS);
@@ -20723,6 +20753,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     card.style.width = Math.round(pb.width) + "px";
     card.style.bottom = "10px";
     docked = true;
+    verdict = "dock"; verdictSig = null;
   }
   function ownerTarget(){
     /* Read-only prediction of APOC-V284's next stage write, from
@@ -20751,32 +20782,51 @@ body.apoc-tabs254 .apoc-track{display:none!important}
   function evaluate(fromSync){
     raf = 0;
     if (card.hidden || card.classList.contains("floating") || stoodDown()){ undock(); return; }
+    var sig = ctxSig();
+    if (verdict === "flow" && sig !== verdictSig) verdict = null;
     if (docked){
       var pb = panelBox();
       if (pb){ card.style.left = Math.round(pb.left) + "px"; card.style.width = Math.round(pb.width) + "px"; }
       return;
     }
+    if (verdict === "flow") return;
     var r = card.getBoundingClientRect();
     if (!r.width || !r.height) return; /* 0x0: V282's re-home lands first; a later pass measures the real rect */
-    if (fromSync === true && card.parentElement && card.parentElement.id === "ctlRow"){
+    if (fromSync === true){
       /* Synchronous (mutation-time) pass: the stage still wears its
          pre-card height, so the live rect is not the settled rect.
          The card rides 1:1 with the stage's pending shrink, so its
          settled visible height is the live one shifted by that
          shrink — decide on the prediction, which is the dock
-         trigger's real question; the deferred passes confirm it
-         with the original direct test on settled geometry. */
-      var ot = ownerTarget();
-      if (ot){
-        var shNow = ot.stage.getBoundingClientRect().height;
-        var predTop = r.top - (shNow - ot.h);
-        var predVisH = Math.min(predTop + r.height, window.innerHeight) - Math.max(predTop, 0);
-        if (predVisH < Math.min(r.height, 200) - 2) dock();
-        return;
+         trigger's real question (V286). V287: this pass is DOCK-ONLY.
+         A sync "visible" prediction is not a verdict and never
+         latches — the settled passes below are the single authority
+         on the in-flow side, so the two can no longer disagree. */
+      if (card.parentElement && card.parentElement.id === "ctlRow"){
+        var ot = ownerTarget();
+        if (ot){
+          var shNow = ot.stage.getBoundingClientRect().height;
+          var predTop = r.top - (shNow - ot.h);
+          var predVisH = Math.min(predTop + r.height, window.innerHeight) - Math.max(predTop, 0);
+          if (predVisH < Math.min(r.height, 200) - 2) dock();
+        }
       }
+      return;
     }
+    /* Deferred pass (V287 settle gate): render this context's
+       verdict only on SETTLED geometry — APOC-V284's stage height
+       equal to its own predicted target over the current chrome.
+       Before the owner settles, the live rect is the pre-settle
+       state (in the clean state the card reads ~9px visible) and a
+       verdict taken from it races the owner's rAF: that was
+       GH-DOCK-CLEAN-NONDET. Once settled, the original V285 measured
+       test decides, and the verdict latches for the context. */
+    var ot2 = ownerTarget();
+    if (!ot2) return;
+    if (Math.abs(ot2.stage.getBoundingClientRect().height - ot2.h) > 0.6) return;
     var visH = Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0);
-    if (visH < Math.min(r.height, 200) - 2) dock();
+    if (visH < Math.min(r.height, 200) - 2){ dock(); return; }
+    verdict = "flow"; verdictSig = sig;
   }
   function schedule(){
     if (!raf) raf = requestAnimationFrame(evaluate);
