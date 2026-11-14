@@ -1554,7 +1554,12 @@ setInterval(loadSharedEntries, 60000);
     map.getPane(paneName).style.pointerEvents = "none";
   }
   let bounds = [[0, 0], [MH, MW]];
-  let baseOverlay = L.imageOverlay("assets/maps/faerun-3e.webp", bounds, { pane: "layerMap" }).addTo(map);
+  /* APOC-V290 (2026-11-14): Faerun base is the traced 2511 DR map
+     (assets/maps/faerun-traced.webp) — registered pixel-exact to the 3E
+     frame (phase-corr offset 0.02px, SIFT scale 1.00000), so every pin,
+     label band and grid value carries over unchanged. faerun-3e.webp
+     stays in the repo as the rollback. */
+  let baseOverlay = L.imageOverlay("assets/maps/faerun-traced.webp", bounds, { pane: "layerMap" }).addTo(map);
   try { applyMapLayerVis(); } catch(e) {}   map.fitBounds([[MH * (1 - 0.34), MW * 0.02], [MH * (1 - 0.005), MW * 0.38]]);
   map.setMaxBounds([[-MH, -MW], [MH * 2, MW * 2]]);   const layer = L.layerGroup().addTo(map);
   const veilLayer = L.layerGroup().addTo(map);
@@ -3854,7 +3859,7 @@ setInterval(loadSharedEntries, 60000);
   setInterval(() => { loadDice(true); loadInit(true); }, 30000);
 
     const MAPS = {
-    faerun: { name: "Faerûn — World Map", img: "assets/maps/faerun-3e.webp", w: 4763, h: 3185, cell: 60 },
+    faerun: { name: "Faerûn — World Map", img: "assets/maps/faerun-traced.webp", w: 4763, h: 3185, cell: 60 },
     "saint-james": { name: "Arcanic Rendez-Vous — Saint James's floors", img: "assets/maps/saint-james-floors.webp", w: 1662, h: 1077, cell: 50 }
   };
   const ACTIVE_KEY = "vtt_active";
@@ -8742,7 +8747,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-1247";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-1417";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -8902,7 +8907,7 @@ function floorConnected(L, cols, rows){
     { name: "pre start", subs: [] }
   ];
   var BUILTINS = [
-    { id: "faerun", name: "Faerûn — World Map", thumb: "assets/maps/faerun-3e.webp", w: 4763, h: 3185 },
+    { id: "faerun", name: "Faerûn — World Map", thumb: "assets/maps/faerun-traced.webp", w: 4763, h: 3185 },
     { id: "saint-james", name: "Arcanic Rendez-Vous — Saint James's floors", thumb: "assets/maps/saint-james-floors.webp", w: 1662, h: 1077 }
   ];
   var lastSig = "", filter = "";
@@ -14917,7 +14922,7 @@ body:not(.vtt-dm-edit) .map-repo .per-grip{display:inline-flex!important;align-i
     } catch(e) { readDone = true; readAt = Date.now(); }
     iv = setInterval(function(){
       var im = overlayImg();
-      if (im && im.src && im.src.indexOf("faerun-3e.webp") < 0) { release(); return; }
+      if (im && im.src && im.src.indexOf("faerun-traced.webp") < 0) { release(); return; }
       if (readDone && readId && readId !== "faerun" && Date.now() - readAt > 2500) { release(); return; }
       if (readDone && (!readId || readId === "faerun") && Date.now() - readAt > 350) { release(); return; }
       if (Date.now() - t0 > 6000) { release(); return; }
