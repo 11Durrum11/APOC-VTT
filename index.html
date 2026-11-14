@@ -8486,7 +8486,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-13-1329";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-13-1941";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -20660,6 +20660,28 @@ body.apoc-tabs254 .apoc-track{display:none!important}
      any kind — no window scroll, no panel scroll, no scrollIntoView —
      and never re-enters the panel flow, so V284's stage ownership
      and floor are undisturbed. -->
+<!-- APOC-V286 (2026-11-13): GH-DOCK-WIDTH / GH-DOCK-ENGAGE-DIP — two
+     polish fixes inside the APOC-V285 dock above; nothing else about
+     the dock changes. (1) WIDTH: V285 measured #mapPanel's border
+     box, which spans the viewport — the sheet wrote left:0 at full
+     viewport width. The dock geometry is now the panel's CONTENT
+     box (rect inset by border + padding — the box the stage
+     occupies), at dock time and on every refresh, resize included.
+     (2) ENGAGE DIP: when a set or the card flips hidden, V285's
+     observer now also evaluates SYNCHRONOUSLY (microtask timing,
+     after APOC-V282's re-home), so the dock engages before
+     APOC-V284's next rAF apply can price the in-flow card into the
+     stage — no floored beat (340->320->340, 371->320->371) during
+     engage. The sync pass cannot use the live rect: at mutation
+     time the stage still wears its pre-card height and the card
+     reads ~9px visible in every state, including ones that settle
+     fully visible in flow. It decides on the PREDICTED settled
+     visible height — the card rides 1:1 with the stage's pending
+     shrink, and APOC-V284's settled height is a read-only replica
+     of its own formula over the current chrome (ownerTarget). The
+     deferred passes keep the original measured test on settled
+     geometry. V284's ownership, floor and settled behaviour are
+     untouched. -->
 <style>
 #placeCard.apoc-dock285{position:fixed;z-index:1250;margin:0;max-height:320px;overflow-y:auto;box-shadow:0 18px 42px rgba(0,0,0,.5)}
 </style>
@@ -20684,25 +20706,75 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     card.classList.remove(CLS);
     card.style.left = ""; card.style.width = ""; card.style.bottom = "";
   }
-  function dock(){
+  function panelBox(){
     var pr = panel.getBoundingClientRect();
-    if (!pr.width) return;
+    if (!pr.width) return null;
+    var cs = getComputedStyle(panel);
+    var il = (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0);
+    var ir = (parseFloat(cs.borderRightWidth) || 0) + (parseFloat(cs.paddingRight) || 0);
+    var w = pr.width - il - ir;
+    return w > 0 ? { left: pr.left + il, width: w } : null;
+  }
+  function dock(){
+    var pb = panelBox();
+    if (!pb) return;
     card.classList.add(CLS);
-    card.style.left = Math.round(pr.left) + "px";
-    card.style.width = Math.round(pr.width) + "px";
+    card.style.left = Math.round(pb.left) + "px";
+    card.style.width = Math.round(pb.width) + "px";
     card.style.bottom = "10px";
     docked = true;
   }
-  function evaluate(){
+  function ownerTarget(){
+    /* Read-only prediction of APOC-V284's next stage write, from
+       V284's own formula over the CURRENT chrome (at mutation time
+       the in-flow card already inflates #ctlRow). Writes nothing. */
+    var stage = panel.querySelector(".map-stage");
+    var panelH = panel.clientHeight;
+    if (!stage || !panelH) return null;
+    var sum = 0;
+    var els = [document.getElementById("titleBubble"), document.getElementById("ctlRow"), panel.querySelector(".map-tools")];
+    for (var i = 0; i < els.length; i++){
+      var el = els[i]; if (!el) continue;
+      var cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.position === "absolute" || cs.position === "fixed") continue;
+      var r = el.getBoundingClientRect(); if (!r.height) continue;
+      sum += r.height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    }
+    var pcs = getComputedStyle(panel);
+    var scs = getComputedStyle(stage);
+    var gap = (parseFloat(pcs.paddingTop) || 0) + (parseFloat(pcs.paddingBottom) || 0)
+      + (parseFloat(scs.marginTop) || 0) + (parseFloat(scs.marginBottom) || 0);
+    var target = panelH - sum - gap;
+    var fl = panelH >= 480 ? 320 : 200;
+    return { h: Math.round(target < fl ? fl : target), stage: stage };
+  }
+  function evaluate(fromSync){
     raf = 0;
     if (card.hidden || card.classList.contains("floating") || stoodDown()){ undock(); return; }
     if (docked){
-      var pr = panel.getBoundingClientRect();
-      if (pr.width){ card.style.left = Math.round(pr.left) + "px"; card.style.width = Math.round(pr.width) + "px"; }
+      var pb = panelBox();
+      if (pb){ card.style.left = Math.round(pb.left) + "px"; card.style.width = Math.round(pb.width) + "px"; }
       return;
     }
     var r = card.getBoundingClientRect();
     if (!r.width || !r.height) return; /* 0x0: V282's re-home lands first; a later pass measures the real rect */
+    if (fromSync === true && card.parentElement && card.parentElement.id === "ctlRow"){
+      /* Synchronous (mutation-time) pass: the stage still wears its
+         pre-card height, so the live rect is not the settled rect.
+         The card rides 1:1 with the stage's pending shrink, so its
+         settled visible height is the live one shifted by that
+         shrink — decide on the prediction, which is the dock
+         trigger's real question; the deferred passes confirm it
+         with the original direct test on settled geometry. */
+      var ot = ownerTarget();
+      if (ot){
+        var shNow = ot.stage.getBoundingClientRect().height;
+        var predTop = r.top - (shNow - ot.h);
+        var predVisH = Math.min(predTop + r.height, window.innerHeight) - Math.max(predTop, 0);
+        if (predVisH < Math.min(r.height, 200) - 2) dock();
+        return;
+      }
+    }
     var visH = Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0);
     if (visH < Math.min(r.height, 200) - 2) dock();
   }
@@ -20714,7 +20786,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
   window.addEventListener("resize", schedule);
   document.addEventListener("fullscreenchange", function(){ setTimeout(evaluate, 80); });
   try {
-    var mo = new MutationObserver(schedule);
+    var mo = new MutationObserver(function(){ evaluate(true); schedule(); });
     document.querySelectorAll(".ctl-set").forEach(function(st){ mo.observe(st, { attributes: true, attributeFilter: ["hidden"] }); });
     mo.observe(card, { attributes: true, attributeFilter: ["hidden"] });
     var repo = document.querySelector(".map-repo"); if (repo) mo.observe(repo, { attributes: true, attributeFilter: ["hidden"] });
