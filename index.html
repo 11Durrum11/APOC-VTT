@@ -89,6 +89,14 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .mk-locked{cursor:not-allowed}
 .place-card .pc-lock{float:left;margin:0 8px 2px 0;min-width:30px;min-height:26px;padding:1px 6px;font-size:14px;line-height:1;cursor:pointer}
 .place-card .pc-lock[aria-pressed="true"]{background:#1e40af;color:#fff;border-color:#60a5fa}
+/* APOC-V289 (2026-11-14): the pin radial — a single left-click on a pin
+   opens this ring of the pin's own options around its dot. Fixed to the
+   viewport, above every map pane; buttons in the platform's uniform
+   high-contrast scheme at minimum footprint. */
+.pin-radial{position:fixed;left:0;top:0;width:0;height:0;z-index:1300;pointer-events:none}
+.pin-radial-btn{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.4);background:rgba(10,12,16,.92);color:#f2e7c8;border-radius:999px;padding:5px 11px;min-height:30px;font-size:.78rem;font-weight:600;white-space:nowrap;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.6)}
+.pin-radial-btn:hover{background:#1e40af;color:#fff;border-color:#60a5fa}
+.pin-radial-btn.danger:hover{background:#7f1d1d;border-color:#f87171;color:#fff}
 .mk-city .mk-dot{background:#e8a33d}
 .mk-party .mk-dot{background:#58b368}
 .mk-place .mk-dot{background:#7aa2c4}
@@ -1609,18 +1617,26 @@ setInterval(loadSharedEntries, 60000);
      recovery below for a press that produced neither. Two commits on
      the same pin within 650ms and 24px pair into the double click /
      double tap that opens the verbiage. A lone commit does nothing
-     and expires; a press that resolves to nothing does nothing. */
+     and expires; a press that resolves to nothing does nothing.
+     (APOC-V289, further below: a lone MOUSE commit now arms that
+     pin's radial, which opens when the pairing window lapses
+     unpaired; a lone TOUCH commit still does nothing.) */
   const v288Taps = {};
   let v288Press = null;
-  function v288CommitTap(id, x, y, openFn){
+  function v288CommitTap(id, x, y, openFn, radialFn, ptype){
     const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
     const now = Date.now();
     /* 650ms pairing window: a human double tap's commits can land
        ~500ms apart when the first press resolved by the recovery
        route; two DELIBERATE separate taps sit seconds apart and each
        does nothing, so the wider window costs nothing. */
-    if (st.t && now - st.t <= 650 && Math.hypot(x - st.x, y - st.y) <= 24) { st.t = 0; try { openFn(); } catch(e){} return; }
+    if (st.t && now - st.t <= 650 && Math.hypot(x - st.x, y - st.y) <= 24) { st.t = 0; v289CancelPending(); try { openFn(); } catch(e){} return; }
     st.t = now; st.x = x; st.y = y;
+    /* APOC-V289: a lone MOUSE commit arms the pin radial — it opens
+       when the pairing window lapses unpaired (v289ScheduleRadial,
+       below). Touch commits never arm it: the touch contract stays
+       exactly as APOC-V288 (double tap opens, single tap nothing). */
+    if (ptype === "mouse" && radialFn) v289ScheduleRadial(id, radialFn);
   }
   document.addEventListener("pointerup", ev => {
     const p = v288Press;
@@ -1629,10 +1645,118 @@ setInterval(loadSharedEntries, 60000);
     setTimeout(() => { if (v288Press === p) v288Press = null; if (!p.done) { p.done = true; p.commit(); } }, 80);
   }, true);
   document.addEventListener("pointercancel", () => { v288Press = null; }, true);
+  /* APOC-V289 (2026-11-14): pin radial — Shaun's order of 2026-11-14
+     12:43 MST: "I want the left mouse button to open up a radial for
+     different options." A single LEFT-click on a pin opens a radial
+     of that pin's own options around its dot. Built on the APOC-V288
+     tap commits: a lone MOUSE commit arms the radial and it opens
+     only when the 650ms pairing window lapses unpaired, so a double
+     click still goes straight to the verbiage and the radial never
+     flashes on its first click; a press that becomes a drag never
+     arms it; the touch contract is untouched (double tap opens, a
+     single tap does nothing). The options are the pin's real
+     existing actions only:
+       - a READ pin (carries pictures): Open (its place card) and
+         Lock position / Unlock position (the place card lock's own
+         toggle, factored into togglePinLock below);
+       - a BARE marker (no pictures): Edit (its editor — a bare
+         marker's verbiage), Lock position / Unlock position, and
+         Delete (the editor's flow, same confirmation).
+     The radial closes when an option is chosen, on any press outside
+     it, on Esc, on map pan/zoom, on any drag start, and whenever the
+     verbiage or the editor opens. In the projecting / expanded
+     presentations (where a pin's verbiage is the Leaflet popup) the
+     radial does not engage — those surfaces keep APOC-V288 exactly. */
+  let pinRadialEl = null;
+  let v289Pending = null;
+  function v289CancelPending(){ if (v289Pending) { clearTimeout(v289Pending.timer); v289Pending = null; } }
+  function closePinRadial(){ if (pinRadialEl) { pinRadialEl.remove(); pinRadialEl = null; } }
+  function v289ScheduleRadial(id, radialFn){
+    v289CancelPending();
+    const rec = { id, timer: 0 };
+    rec.timer = setTimeout(() => { if (v289Pending === rec) { v289Pending = null; try { radialFn(); } catch(e){} } }, 650);
+    v289Pending = rec;
+  }
+  document.addEventListener("pointerdown", ev => {
+    /* Any new press anywhere retires a pending radial (that press's
+       own commit re-decides) and closes an open one immediately —
+       except a press on the radial's own buttons, which is a choice
+       in progress, not a close. Capture phase: this runs before the
+       pressed pin's own handlers, so pressing a second pin closes
+       the first pin's radial before anything else happens. */
+    v289CancelPending();
+    if (pinRadialEl && !(ev.target && pinRadialEl.contains(ev.target))) closePinRadial();
+  }, true);
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape") closePinRadial(); }, true);
+  map.on("zoomstart", () => { v289CancelPending(); closePinRadial(); });
+  map.on("movestart", () => { v289CancelPending(); closePinRadial(); });
+  /* The pin lock toggle, shared by the place card's lock button and
+     the radial's Lock/Unlock option: flip the pin's own locked
+     field, save (that field is the ONLY change the write carries),
+     redraw so the marker's draggable state follows at once, and
+     report — the APOC-V288 card handler's exact semantics. */
+  async function togglePinLock(mk){
+    mk.locked = !mk.locked;
+    const ok = await saveMarkers();
+    draw();
+    setStatus(ok ? (mk.locked ? `"${mk.name}" is locked in place.` : `"${mk.name}" is unlocked — it can be dragged again.`) : "That lock change didn't save — check the connection and try again.");
+    return ok;
+  }
+  /* The bare-marker delete flow, mirroring the marker editor's own
+     Delete (same confirmation text, same outcome messages); the
+     radial's Delete option runs it directly. */
+  async function deleteMarkerFlow(mk){
+    if (!confirm(`Delete the marker "${mk.name}" from the shared map? Everybody will stop seeing it.`)) return;
+    if (editing && editing.mk === mk) closeEditor();
+    markers = markers.filter(x => x.id !== mk.id);
+    const ok = await saveMarkers();
+    if (!ok) { setStatus("That delete didn't go through — try again."); loadMarkers(true); return; }
+    draw(); setStatus(`"${mk.name}" deleted for everybody.`);
+  }
+  function openPinRadial(mk, openMk){
+    if (isProjecting() || document.body.classList.contains("map-expanded")) return;
+    closePinRadial();
+    const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length);
+    const opts = [{ id: "open", label: isRead ? "Open" : "Edit" }];
+    opts.push({ id: "lock", label: mk.locked ? "\u{1F513} Unlock position" : "\u{1F512} Lock position" });
+    if (!isRead) opts.push({ id: "delete", label: "Delete", danger: true });
+    const pt = map.latLngToContainerPoint(toLatLng(mk.x, mk.y));
+    const cr = map.getContainer().getBoundingClientRect();
+    /* Ring centre = the pin's dot, shifted only as far as the
+       viewport edges force: every option lands fully on screen. */
+    let cx = cr.left + pt.x, cy = cr.top + pt.y;
+    const RX = 122, RY = 82, vw = window.innerWidth, vh = window.innerHeight;
+    cx = vw > 2 * RX + 8 ? Math.max(RX, Math.min(vw - RX, cx)) : vw / 2;
+    cy = vh > 2 * RY + 8 ? Math.max(RY, Math.min(vh - RY, cy)) : vh / 2;
+    const el = document.createElement("div");
+    el.className = "pin-radial"; el.id = "pinRadial";
+    const RING = 58;
+    opts.forEach((o, i) => {
+      const a = (-90 + i * (360 / opts.length)) * Math.PI / 180;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "pin-radial-btn" + (o.danger ? " danger" : "");
+      b.dataset.opt = o.id;
+      b.textContent = o.label;
+      b.style.left = Math.round(cx + RING * Math.cos(a)) + "px";
+      b.style.top = Math.round(cy + RING * Math.sin(a)) + "px";
+      b.addEventListener("click", ev => {
+        ev.stopPropagation();
+        closePinRadial();
+        if (o.id === "open") { try { openMk(); } catch(e){} }
+        else if (o.id === "lock") { togglePinLock(mk); }
+        else if (o.id === "delete") { deleteMarkerFlow(mk); }
+      });
+      el.appendChild(b);
+    });
+    document.body.appendChild(el);
+    pinRadialEl = el;
+  }
   const newId = () => "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   window.map = map; window.toXY = toXY; window.newId = newId;
   function setStatus(msg){ statusEl.textContent = msg; }
   function draw(){
+    closePinRadial();
     layer.clearLayers();
     /* APOC-V288 (2026-11-14): label placement is computed in a FIXED
        reference space — the pins' stored % positions scaled by the
@@ -1695,13 +1819,18 @@ setInterval(loadSharedEntries, 60000);
       const isLocked = !!mk.locked;
       const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting() && !isLocked, icon: iconFor(kind, mk.name, false, mk._under, isLocked) }).addTo(layer);
       const openMk = () => {
+        closePinRadial();
         const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
         if (imgs.length) { showPinCard(mk); return; }
         openEditor({ mode: "edit", mk });
       };
+      /* APOC-V289: this pin's radial opener, handed to the tap
+         commits; it fires only if a lone mouse commit's pairing
+         window lapses unpaired (v289ScheduleRadial). */
+      const radialFn = () => openPinRadial(mk, openMk);
       let dragStartLL = null;
-      m.on("dragstart", () => { dragStartLL = m.getLatLng(); });
+      m.on("dragstart", () => { closePinRadial(); dragStartLL = m.getLatLng(); });
       m.on("click", (e) => {
         /* APOC-V288: a click on a pin commits a tap (v288CommitTap) —
            alone it does nothing at all (no open, no move, no save);
@@ -1729,7 +1858,7 @@ setInterval(loadSharedEntries, 60000);
         const oe = e && e.originalEvent;
         const cx = oe && typeof oe.clientX === "number" ? oe.clientX : 0;
         const cy = oe && typeof oe.clientY === "number" ? oe.clientY : 0;
-        v288CommitTap(mk.id, cx, cy, openMk);
+        v288CommitTap(mk.id, cx, cy, openMk, radialFn, (st.press && st.press.ptype) || (oe && oe.pointerType) || "");
       });
       const iconEl = m.getElement();
       if (iconEl) iconEl.addEventListener("pointerdown", ev => {
@@ -1742,7 +1871,7 @@ setInterval(loadSharedEntries, 60000);
         if (ev.isPrimary === false) return;
         if (ev.button !== undefined && ev.button !== 0) return;
         const st = v288Taps[mk.id] || (v288Taps[mk.id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-        const P = { id: mk.id, x: ev.clientX, y: ev.clientY, done: false, commit: () => v288CommitTap(mk.id, P.x, P.y, openMk) };
+        const P = { id: mk.id, x: ev.clientX, y: ev.clientY, ptype: ev.pointerType || "", done: false, commit: () => v288CommitTap(mk.id, P.x, P.y, openMk, radialFn, P.ptype) };
         st.press = P; v288Press = P;
       }, { passive: true });
       if (isLocked && iconEl) {
@@ -1817,7 +1946,7 @@ setInterval(loadSharedEntries, 60000);
             st.suppressPress = st.press;
             if (st.press) { if (st.press.done) return; st.press.done = true; }
             const cr = map.getContainer().getBoundingClientRect();
-            v288CommitTap(mk.id, pa.x + cr.left, pa.y + cr.top, openMk);
+            v288CommitTap(mk.id, pa.x + cr.left, pa.y + cr.top, openMk, radialFn, (st.press && st.press.ptype) || "");
             return;
           }
           if (st.press) st.press.done = true;
@@ -1851,6 +1980,7 @@ setInterval(loadSharedEntries, 60000);
   function closeEditor(){ form.hidden = true; editing = null; if (tempPin) { layer.removeLayer(tempPin); tempPin = null; } }
   function openEditor(state){
     closeEditor();
+    closePinRadial();
     editing = state;
     const isEdit = state.mode === "edit";
     $("markerDelete").hidden = !isEdit;
@@ -1872,6 +2002,7 @@ setInterval(loadSharedEntries, 60000);
     document.body.appendChild(pinLightbox);
   }
   function showPinCard(mk){
+    closePinRadial();
     const imgs = (Array.isArray(mk.imgs) ? mk.imgs : []).filter(Boolean);
     /* APOC-V288 (2026-11-14): pin position lock — Shaun's order: inside
        the pin's verbiage, TOP LEFT, a lock button for THAT pin. The
@@ -1888,13 +2019,13 @@ setInterval(loadSharedEntries, 60000);
          own record (saveMarkers upserts the markers value; no other
          field and no other pin changes). The card stays open, the pin
          does not move, and no position is saved. draw() re-deals the
-         marker so its draggable state follows the new lock at once. */
-      mk.locked = !mk.locked;
+         marker so its draggable state follows the new lock at once.
+         APOC-V289: the toggle itself is togglePinLock, shared with
+         the pin radial's Lock/Unlock option; this handler only
+         refreshes the button's face once the toggle has landed. */
+      await togglePinLock(mk);
       const lb = $("pinLockBtn");
       if (lb) { lb.setAttribute("aria-pressed", String(!!mk.locked)); lb.textContent = mk.locked ? "\u{1F512}" : "\u{1F513}"; lb.title = mk.locked ? "Position locked — tap to unlock this pin" : "Lock this pin's position"; }
-      const ok = await saveMarkers();
-      draw();
-      setStatus(ok ? (mk.locked ? `"${mk.name}" is locked in place.` : `"${mk.name}" is unlocked — it can be dragged again.`) : "That lock change didn't save — check the connection and try again.");
     });
     card.querySelectorAll("[data-pin-img]").forEach(im => im.addEventListener("click", () => showPinLightbox(im.getAttribute("data-pin-img"))));
     const eb = $("pinEditBtn");
@@ -8611,7 +8742,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-1125";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-1247";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
