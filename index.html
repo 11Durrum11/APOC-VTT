@@ -86,6 +86,12 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .mk-under2 .mk-label{margin-top:24px}
 .mk-dot{width:16px;height:16px;flex:none;border-radius:50%;border:2px solid #0d0f14;box-shadow:0 1px 5px rgba(0,0,0,.55)}
 .mk-label{background:rgba(10,12,16,.8);color:#f2e7c8;padding:2px 7px;border-radius:999px;font-size:.72rem;font-weight:600;white-space:nowrap;border:1px solid rgba(255,255,255,.22)}
+/* APOC-V302 (v3.02, 2026-11-15): GH-PHONE-TAP-TARGETS — a transparent
+   34px hit disc centred on the pin's dot (the icon box's centre is the
+   dot's centre), so a touch press near a pin lands on the pin instead
+   of the map. It paints nothing: the dot, the label and every label
+   placement rule render exactly as before; only the hit area grows. */
+.mk-icon::before{content:"";position:absolute;left:50%;top:50%;width:34px;height:34px;transform:translate(-50%,-50%);border-radius:50%}
 .mk-locked{cursor:not-allowed}
 .place-card .pc-lock{float:left;margin:0 8px 2px 0;min-width:30px;min-height:26px;padding:1px 6px;font-size:14px;line-height:1;cursor:pointer}
 .place-card .pc-lock[aria-pressed="true"]{background:#1e40af;color:#fff;border-color:#60a5fa}
@@ -1725,9 +1731,29 @@ setInterval(loadSharedEntries, 60000);
      unpaired; a lone TOUCH commit still does nothing.) */
   const v288Taps = {};
   let v288Press = null;
-  function v288CommitTap(id, x, y, openFn, radialFn, ptype){
+  function v288CommitTap(id, x, y, openFn, radialFn, ptype, downT){
     const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
     const now = Date.now();
+    /* APOC-V302 (v3.02, 2026-11-15): GH-PHONE-DTAP-WINDOW — TOUCH taps
+       pair on their POINTERDOWN times, not their commit times. A touch
+       commit lands late and by a variable route (the marker click, the
+       dragend, or the +80ms pointerup recovery), so commit-to-commit
+       pairing put a cliff at ~550ms of human cadence: the 2026-11-15
+       phone check measured ≤450ms intervals opening 11/12 and ≥550ms
+       opening 0/12 — a deliberate double tap at ~0.6s silently did
+       nothing. The press's pointerdown time is route-independent, so
+       pairing touch presses on it (900ms window) makes a careful
+       double tap — up to ~700ms between presses — open every time,
+       while deliberate separate taps (seconds apart) still do nothing,
+       a single tap still does nothing, and touch still never arms the
+       radial. The MOUSE path below is byte-for-byte APOC-V288/V289:
+       commit times, the 650ms window, radial arming. */
+    if (ptype === "touch" || ptype === "pen") {
+      const d = (typeof downT === "number" && downT) ? downT : now;
+      if (st.dt && d - st.dt <= 900 && Math.hypot(x - st.tx, y - st.ty) <= 24) { st.dt = 0; v289CancelPending(); try { openFn(); } catch(e){} return; }
+      st.dt = d; st.tx = x; st.ty = y;
+      return;
+    }
     /* 650ms pairing window: a human double tap's commits can land
        ~500ms apart when the first press resolved by the recovery
        route; two DELIBERATE separate taps sit seconds apart and each
@@ -1982,7 +2008,7 @@ setInterval(loadSharedEntries, 60000);
         const oe = e && e.originalEvent;
         const cx = oe && typeof oe.clientX === "number" ? oe.clientX : 0;
         const cy = oe && typeof oe.clientY === "number" ? oe.clientY : 0;
-        v288CommitTap(mk.id, cx, cy, openMk, radialFn, (st.press && st.press.ptype) || (oe && oe.pointerType) || "");
+        v288CommitTap(mk.id, cx, cy, openMk, radialFn, (st.press && st.press.ptype) || (oe && oe.pointerType) || "", (st.press && st.press.t0) || 0); /* APOC-V302: the press's pointerdown time rides along for touch pairing */
       });
       const iconEl = m.getElement();
       if (iconEl) iconEl.addEventListener("pointerdown", ev => {
@@ -1995,7 +2021,7 @@ setInterval(loadSharedEntries, 60000);
         if (ev.isPrimary === false) return;
         if (ev.button !== undefined && ev.button !== 0) return;
         const st = v288Taps[mk.id] || (v288Taps[mk.id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-        const P = { id: mk.id, x: ev.clientX, y: ev.clientY, ptype: ev.pointerType || "", done: false, commit: () => v288CommitTap(mk.id, P.x, P.y, openMk, radialFn, P.ptype) };
+        const P = { id: mk.id, x: ev.clientX, y: ev.clientY, ptype: ev.pointerType || "", t0: Date.now(), done: false, commit: () => v288CommitTap(mk.id, P.x, P.y, openMk, radialFn, P.ptype, P.t0) }; /* APOC-V302: t0 = this press's pointerdown time, handed to the touch pairing */
         st.press = P; v288Press = P;
       }, { passive: true });
       if (isLocked && iconEl) {
@@ -2070,11 +2096,11 @@ setInterval(loadSharedEntries, 60000);
             st.suppressPress = st.press;
             if (st.press) { if (st.press.done) return; st.press.done = true; }
             const cr = map.getContainer().getBoundingClientRect();
-            v288CommitTap(mk.id, pa.x + cr.left, pa.y + cr.top, openMk, radialFn, (st.press && st.press.ptype) || "");
+            v288CommitTap(mk.id, pa.x + cr.left, pa.y + cr.top, openMk, radialFn, (st.press && st.press.ptype) || "", (st.press && st.press.t0) || 0); /* APOC-V302: pointerdown time, as at the click route */
             return;
           }
           if (st.press) st.press.done = true;
-          st.suppressPress = st.press; st.t = 0;
+          st.suppressPress = st.press; st.t = 0; st.dt = 0; /* APOC-V302: a real drag breaks a touch pairing too, exactly as it breaks the mouse one */
         }
         if (mk.locked) return;
         if (isProjecting()) { loadMarkers(true); return; }
@@ -2726,6 +2752,26 @@ setInterval(loadSharedEntries, 60000);
     pinsTrayListEl.innerHTML = html || '<div class="pt-empty">Nothing shelved — every pin is on the board.</div>';
   }
   function pinsTrayApply(){
+    /* APOC-V302 (v3.02, 2026-11-15): GH-PHONE-TRAY-OVERFLOW — clamp the
+       tray's geometry into the current viewport whenever it is applied
+       (the same guard family as APOC-V293's Library seat clamp and
+       APOC-V301's ZoomBar reseat): the saved/default seat (l:148,
+       w:304) put the panel's right edge at x=452 on a 390px phone with
+       its close button at x=417 — off-screen and untappable. Minimum
+       shift inside; a seat that is already legal is never touched;
+       a corrected seat is written back through pinsTraySave(), the
+       tray's own per-device persistence, so the repair is one-time
+       and sticky rather than a per-open fight. */
+    const vw = window.innerWidth || 0, vh = window.innerHeight || 0;
+    if (vw && vh) {
+      const w = Math.min(pinsTrayState.w, vw), h = Math.min(pinsTrayState.h, vh);
+      const l = Math.min(Math.max(0, pinsTrayState.l), Math.max(0, vw - w));
+      const t = Math.min(Math.max(0, pinsTrayState.t), Math.max(0, vh - h));
+      if (l !== pinsTrayState.l || t !== pinsTrayState.t || w !== pinsTrayState.w || h !== pinsTrayState.h) {
+        pinsTrayState.l = l; pinsTrayState.t = t; pinsTrayState.w = w; pinsTrayState.h = h;
+        pinsTraySave();
+      }
+    }
     pinsTrayEl.style.left = pinsTrayState.l + "px";
     pinsTrayEl.style.top = pinsTrayState.t + "px";
     pinsTrayEl.style.width = pinsTrayState.w + "px";
@@ -2789,6 +2835,15 @@ setInterval(loadSharedEntries, 60000);
     if (!d || !d.active || !commit || d.cancelled) return;
     const mapEl = document.getElementById("apocMap");
     if (!mapEl || typeof map === "undefined" || !map) return;
+    /* APOC-V302 (v3.02, 2026-11-15): GH-PHONE-TRAY-DRAG-CANCEL —
+       releasing the drag back over the tray panel cancels it: no
+       placement, no save. This is the touch-reachable counterpart of
+       the Esc cancel — a phone has no Esc, and at phone size the map
+       fills the screen so there is no off-map drop zone. The tray
+       floats over the map, so this check runs BEFORE the map-bounds
+       check below. Applies to mouse drags identically. */
+    const tr = pinsTrayEl.getBoundingClientRect();
+    if (e.clientX >= tr.left && e.clientX <= tr.right && e.clientY >= tr.top && e.clientY <= tr.bottom) return;
     const r = mapEl.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
     const p = toXY(map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top)));
@@ -9586,7 +9641,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-1256";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-1346";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
