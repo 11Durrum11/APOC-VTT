@@ -9269,7 +9269,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-1805";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-1922";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -10705,6 +10705,7 @@ function floorConnected(L, cols, rows){
     if (el.classList.contains("per-dragging")) return;         var pr = panel.getBoundingClientRect();
     el.classList.remove("per-parked", "per-h", "per-v", "per-float");
     el.style.left = el.style.right = el.style.top = el.style.bottom = el.style.width = "";
+    if (el.classList.contains("lib-set253")) return; /* APOC-V293 (Shaun, 2026-11-14): the Library is a ctl set (APOC-V253) and opens in the ctl row like every other set — the perimeter never seats it as a float, saved record or no record */
     if (!mq.matches) return;
     if (!park || !park.float) {
       /* APOC-V205 (Shaun, 2026-11-08 ~02:04 — "Can you not dock the art
@@ -19571,6 +19572,17 @@ body.apoc-side251 #phBarStrip{display:none!important}
        classes/inline geometry off, repo takes its set place. */
     if (load().libTucked) save({ libTucked: false });
     rp.classList.remove("lib-tucked");
+    /* APOC-V293 (Shaun, 2026-11-14 — "open up the same way everything
+       else opens up"): strip any float presentation the perimeter
+       engines applied and retire the saved float record, so the
+       Library's open seat is the ctl-row set panel — at open, at
+       boot-restore, and after any resize. */
+    rp.classList.remove("per-float", "per-parked", "per-h", "per-v");
+    rp.style.left = rp.style.right = rp.style.top = rp.style.bottom = rp.style.width = "";
+    try {
+      var per293 = JSON.parse(localStorage.getItem("apocVttPerimeterV2") || "{}");
+      if (per293 && per293.repo) { delete per293.repo; localStorage.setItem("apocVttPerimeterV2", JSON.stringify(per293)); }
+    } catch(e){}
     rp.classList.add("lib-set253");
     if (row && rp.parentElement !== row) row.appendChild(rp);
   }
@@ -19596,7 +19608,7 @@ body.apoc-side251 #phBarStrip{display:none!important}
     placeRepo();
     var was = !!load().libSetOpen253;
     rp.hidden = !was;
-    if (was) ensureLibOpen();
+    if (was) { ensureLibOpen(); if (window.ctlCloseAll) { try { window.ctlCloseAll(); } catch(e){} } } /* APOC-V293: boot-restore opens the Library the same way the tab does (openLib) — one set at a time, so the restored panel lands in view instead of under a stale peer set */
     setBtnState();
   }
   /* one set at a time: opening any census set closes the Library
@@ -21329,6 +21341,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     if (!window.matchMedia("(min-width: 821px)").matches) return;
     var repo = document.querySelector(".map-repo");
     if (!repo || repo.classList.contains("per-dragging")) return;
+    if (repo.classList.contains("lib-set253")) return; /* APOC-V293: a set-seated Library is never re-floated from the saved record */
     var libEl = document.getElementById("artLibrary");
     /* Closed-bar reseat (APOC-V283): V187's close-restore writes back the
        style.top captured at open time — a raw record value written while
