@@ -4127,9 +4127,22 @@ setInterval(loadSharedEntries, 60000);
     async function loadDraw(quiet){
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", drawKey()).maybeSingle();
     if (error) return;
-    drawItems = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
-        drawItems.forEach(it => { if (it && !it.id && typeof it.x === "number") it.id = "s" + Math.round(it.x * 100) + "-" + Math.round(it.y * 100) + "-" + String(it.prop || it.sym || it.img || it.type || "").replace(/[^a-z0-9]/gi, "").slice(-12); });
-    if (data && data.value && Array.isArray(data.value.layers) && data.value.layers.length) drawLayers = data.value.layers;
+    const inItems = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
+        inItems.forEach(it => { if (it && !it.id && typeof it.x === "number") it.id = "s" + Math.round(it.x * 100) + "-" + Math.round(it.y * 100) + "-" + String(it.prop || it.sym || it.img || it.type || "").replace(/[^a-z0-9]/gi, "").slice(-12); });
+    const inLayers = (data && data.value && Array.isArray(data.value.layers) && data.value.layers.length) ? data.value.layers : drawLayers;
+    /* APOC-V298 (v2.98, 2026-11-15): GH-PIN-BLINK changed character — the
+       same discipline APOC-V292 gave loadMarkers. This poll used to
+       replace drawItems and re-render EVERY draw item even when the
+       payload was unchanged; each re-render recreated the draw layer's
+       image overlays, which the map-size watch mistook for a new base
+       image and refit the map over, rebuilding every marker once a
+       minute. If the incoming payload is canonically equal to the one
+       in memory (ids normalized above; key order normalized away by
+       markersCanonEq), the DOM is not touched at all. A genuine change
+       — another screen drew something — still renders exactly once. */
+    if (markersCanonEq(inItems, drawItems) && markersCanonEq(inLayers, drawLayers)) return;
+    drawItems = inItems;
+    drawLayers = inLayers;
     drawHist.last = drawSnapshot();
     buildLayerUi();
     renderDraw();
@@ -9561,7 +9574,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-2341";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-0213";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -11145,15 +11158,34 @@ function floorConnected(L, cols, rows){
       document.body.classList.contains("map-expanded") ||
       document.body.classList.contains("map-fs");
   }
+  /* APOC-V298 (v2.98, 2026-11-15): GH-PIN-BLINK changed character —
+     baseImg must identify the REAL base image, never a draw image.
+     Since the v2.97 split, the Faerun base lives in the dedicated base
+     panes (200 Land / 201 Words / 202 Cartouche), which hold nothing
+     but the split base overlays, so an img found there IS the base.
+     The old code searched pane 205 (layerMap) FIRST and returned
+     whatever image it found there — on Faerun that is a draw item's
+     paint image (renderDraw puts paint overlays in layerMap), recreated
+     on every render, so watch() saw a "new base image" on every 60s
+     poll and refit the map, rebuilding every marker. Search the base
+     panes first (Land preferred); fall back to layerMap only on
+     pre-split maps, whose single base overlay is created before any
+     draw item and brought to the back of that pane, so it stays the
+     first img there. */
   function baseImg(){
     var panes = el.querySelectorAll(".leaflet-pane");
+    var splitImg = null, mapPaneImg = null;
     for (var i = 0; i < panes.length; i++){
-      if (panes[i].style.zIndex === "205"){
-        var img = panes[i].querySelector("img.leaflet-image-layer");
-        if (img) return img;
+      var z = panes[i].style.zIndex;
+      if (z === "200" || z === "201" || z === "202"){
+        var bimg = panes[i].querySelector("img.leaflet-image-layer");
+        if (bimg){ if (z === "200") return bimg; if (!splitImg) splitImg = bimg; }
+      } else if (z === "205" && !mapPaneImg){
+        mapPaneImg = panes[i].querySelector("img.leaflet-image-layer");
       }
     }
-    return el.querySelector("img.leaflet-image-layer");
+    if (splitImg) return splitImg;
+    return mapPaneImg || el.querySelector("img.leaflet-image-layer");
   }
   function fit(refit){
     var m = window.map;
