@@ -9586,7 +9586,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-1114";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-1256";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -11447,6 +11447,54 @@ function floorConnected(L, cols, rows){
     } else setTimeout(waitMap, 120);
   })();
     setTimeout(sync, 600); setTimeout(sync, 1800); setTimeout(sync, 4000);
+})();
+</script>
+
+<script>
+/* APOC-V301 (v3.01, 2026-11-15): GH-NEGCOORD-STATE — restore-time reseat
+   of the ZoomBar's saved seat. Shaun's saved seat record has repeatedly
+   been found outside the seat system's own legal range (l:-713 at the
+   2026-11-14 19:04 grab — wholly off the left edge; the boot sanitizer
+   only bounds it against the WINDOW, l up to innerWidth and t up to
+   innerHeight+400, which still leaves seats the stage can never show).
+   This block is the seat owner's own repair, run at layout restore: it
+   reads the active seat record (desktop / phone key, the same mq switch
+   loadPos/savePos use), computes the legal range from the seat system's
+   own geometry — the same stageW / side-height authorities sync() and
+   savePos() clamp against — shifts an out-of-range seat the minimum
+   distance back inside (saved top/edge character kept wherever it is
+   already legal), and writes the corrected seat back through the same
+   per-device record the drag system persists to, so the repair is
+   one-time and sticky: an in-range record is never rewritten, and no
+   per-load fight follows. Scope is the ZoomBar seat only; the zoom
+   engine, the perimeter/track system, and view restore are untouched. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var ZK_D = "apocVttZoomBarV1", ZK_P = "apocVttZoomBarPhoneV1";
+  function phoneMq(){ return window.matchMedia("(max-width: 820px)").matches; }
+  function reseat301(){
+    var bar = document.getElementById("zoomBar");
+    var el = document.getElementById("apocMap");
+    if (!bar || !el || !el.parentElement) return;
+    var key = phoneMq() ? ZK_P : ZK_D;
+    var rec = null;
+    try { rec = JSON.parse(localStorage.getItem(key) || "null"); } catch(e){}
+    if (!rec || typeof rec.l !== "number" || typeof rec.t !== "number" || !isFinite(rec.l) || !isFinite(rec.t)) return;
+    var side = el.parentElement;
+    var st = side.parentElement;
+    var stageW = st ? st.clientWidth : side.clientWidth;
+    if (!stageW) return;
+    var maxL = Math.max(0, stageW - (bar.offsetWidth || 0));
+    var maxT = Math.max(0, side.clientHeight + 44 - (bar.offsetHeight || 0));
+    var nl = Math.min(Math.max(0, Math.round(rec.l)), maxL);
+    var nt = Math.min(Math.max(0, Math.round(rec.t)), maxT);
+    if (nl === rec.l && nt === rec.t) return;
+    try { localStorage.setItem(key, JSON.stringify({ l: nl, t: nt })); } catch(e){}
+    if (bar.parentElement === side) { bar.style.left = nl + "px"; bar.style.top = nt + "px"; }
+  }
+  [450, 1600, 4200].forEach(function(ms){ setTimeout(reseat301, ms); });
+  window.addEventListener("resize", function(){ setTimeout(reseat301, 350); });
 })();
 </script>
 
