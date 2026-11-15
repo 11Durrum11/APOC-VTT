@@ -1349,6 +1349,7 @@ body.map-expanded .stage-row{display:contents}
       <div class="map-actions">
         <button type="submit" class="btn primary">Save place</button>
         <button type="button" class="btn danger" id="placeDelete" hidden>Delete place</button>
+        <button type="button" class="btn" id="placeTrayBtn" hidden>Move to tray</button>
         <button type="button" class="btn" id="placeCancel">Cancel</button>
       </div>
     </form>
@@ -1849,6 +1850,7 @@ setInterval(loadSharedEntries, 60000);
     const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || !!mk.atlas; /* APOC-V296: atlas pins take the place-pin set (Open / Lock) */
     const opts = [{ id: "open", label: isRead ? "Open" : "Edit" }];
     opts.push({ id: "lock", label: mk.locked ? "\u{1F513} Unlock position" : "\u{1F512} Lock position" });
+    if (!isRead || mk.atlas) opts.push({ id: "shelve", label: "Shelve" }); /* APOC-V303: a bare marker's individual shelve lives here, with its other actions — the marker editor has no shelve control; read pins shelve from their card instead */
     if (!isRead || mk.atlas) opts.push({ id: "delete", label: "Delete", danger: true }); /* APOC-V296: an atlas pin also carries Delete — it is a bare record in map_markers, and the migration flag keeps a deleted one deleted */
     const pt = map.latLngToContainerPoint(toLatLng(mk.x, mk.y));
     const cr = map.getContainer().getBoundingClientRect();
@@ -1875,6 +1877,7 @@ setInterval(loadSharedEntries, 60000);
         closePinRadial();
         if (o.id === "open") { try { openMk(); } catch(e){} }
         else if (o.id === "lock") { togglePinLock(mk); }
+        else if (o.id === "shelve") { if (typeof shelveMarker303 === "function") shelveMarker303(mk); }
         else if (o.id === "delete") { deleteMarkerFlow(mk); }
       });
       el.appendChild(b);
@@ -1932,7 +1935,7 @@ setInterval(loadSharedEntries, 60000);
        reaches this (its places are pins already and `places` stays
        empty there), so the Faerun label census is untouched. */
     const obstaclePts = pts.slice();
-    if (currentMapId !== "faerun") for (const p of places) obstaclePts.push({ x: frameW() * (p.x / 100) * REF_S, y: frameH() * (1 - p.y / 100) * REF_S });
+    if (currentMapId !== "faerun") for (const p of places) { if (p.tray) continue; obstaclePts.push({ x: frameW() * (p.x / 100) * REF_S, y: frameH() * (1 - p.y / 100) * REF_S }); } /* APOC-V303: shelved places take no part in banding */
     const pillW = mk => 40 + (String(mk.name || "").length * 6.3);
     markers.forEach(mk => { mk._under = false; });
     const labelBox = (idx, level) => {
@@ -2635,6 +2638,7 @@ setInterval(loadSharedEntries, 60000);
       card.hidden = true;
       draw();
       if (typeof renderPinsTray === "function") renderPinsTray();
+      if (typeof loadTrayAll303 === "function") loadTrayAll303(true);
       setStatus(ok ? `"${mk.name}" is in the Pins tray — drag it back out whenever you want it on the board.` : "That pin could not be shelved — check the connection and try again.");
       if (!ok) loadMarkers(true);
     });
@@ -2725,7 +2729,7 @@ setInterval(loadSharedEntries, 60000);
     '<div class="pt-head" id="pinsTrayHead"><span class="pt-title" id="pinsTrayTitle">Pins</span>' +
     '<button type="button" class="pt-lock" id="pinsTrayLock" aria-pressed="false" title="Lock the tray in place">🔓</button>' +
     '<button type="button" class="pt-close" id="pinsTrayClose" title="Close the tray">✕</button></div>' +
-    '<div class="pt-actions"><button type="button" class="btn pt-takeall" id="pinsTakeAll">Take all pins off the board</button></div>' +
+    '<div class="pt-actions"><button type="button" class="btn pt-takeall" id="pinsTakeAll">Take all pins off this map</button></div>' +
     '<div class="pt-list" id="pinsTrayList"></div>' +
     '<div class="pt-rsz" id="pinsTrayRsz" aria-hidden="true"></div>';
   document.body.appendChild(pinsTrayEl);
@@ -2737,27 +2741,75 @@ setInterval(loadSharedEntries, 60000);
     return "Markers";
   }
   let pinsTrayLastSig = "";
+  /* APOC-V303 (v3.04, 2026-11-15): UNIVERSAL PIN TRAY state —
+     declared here, beside the tray, because pinsTrayApply() renders
+     during the boot pass, before the APOC-V303 block further down
+     executes. trayShelved303 is the tray loader's cache of shelved
+     records on OTHER maps; the current map's section is always
+     derived live from the in-memory markers/places arrays, so the
+     tray is never staler than the board for the map being viewed.
+     trayEntries303 is the exact list the last render produced —
+     drag-out resolves entries from it by the (mapId, store, id)
+     triple, never by id alone. */
+  let trayShelved303 = [];
+  let trayEntries303 = [];
   function renderPinsTray(){
-    const shelved = markers.filter(mk => mk.tray);
-    const sig = shelved.map(mk => mk.id + "|" + (mk.locked ? 1 : 0) + "|" + pinsTrayGroupOf(mk) + "|" + (mk.name || "")).join(";");
-    pinsTabBtn.title = shelved.length ? `Pins — ${shelved.length} shelved` : "Pins";
+    const entries = (typeof trayDisplayEntries303 === "function") ? trayDisplayEntries303() : markers.filter(mk => mk.tray).map(mk => ({ mapId: currentMapId, mapName: currentMapId, store: "markers", rec: mk }));
+    trayEntries303 = entries;
+    const sig = entries.map(e => e.mapId + "|" + e.store + "|" + e.rec.id + "|" + (e.rec.locked ? 1 : 0) + "|" + (e.store === "markers" ? pinsTrayGroupOf(e.rec) : "Places") + "|" + trayEntryName303(e)).join(";");
+    pinsTabBtn.title = entries.length ? `Pins — ${entries.length} shelved` : "Pins";
     if (sig === pinsTrayLastSig && !pinsTrayEl.hidden) return;
     pinsTrayLastSig = sig;
-    pinsTrayTitleEl.textContent = `Pins — ${shelved.length} shelved`;
-    const groups = new Map();
-    for (const mk of shelved) {
-      const g = pinsTrayGroupOf(mk);
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(mk);
+    pinsTrayTitleEl.textContent = `Pins — ${entries.length} shelved`;
+    /* Grouping: home map FIRST (a section per map, in tray-index
+       order — Faerûn, then the other built-in, then registry
+       order; a map missing from the index lists last under its raw
+       id). Inside Faerûn the V292 grp subgroups stand exactly as
+       they were; inside any other map, Markers and Places get
+       their own sub-heads when the map contributes both. */
+    const idx = (typeof trayMapIndex303 === "function") ? trayMapIndex303() : [{ id: currentMapId, name: currentMapId }];
+    const rank = new Map(idx.map((m, i) => [m.id, i]));
+    const nameOf = new Map(idx.map(m => [m.id, m.name]));
+    const sections = new Map();
+    for (const e of entries) {
+      if (!sections.has(e.mapId)) sections.set(e.mapId, []);
+      sections.get(e.mapId).push(e);
     }
-    const order = ["City", "Sky", "Non-city", "Markers"];
+    const mapIds = [...sections.keys()].sort((a, b) => (rank.has(a) ? rank.get(a) : 999) - (rank.has(b) ? rank.get(b) : 999));
+    const entryHtml = e => `<div class="pt-entry" data-tray-map="${esc(e.mapId)}" data-tray-store="${esc(e.store)}" data-pin-id="${esc(e.rec.id)}" data-name="${esc(trayEntryName303(e))}"><span class="pt-name">${esc(trayEntryName303(e))}</span>${e.rec.locked ? '<span class="pt-lockbadge" title="Position locked">🔒</span>' : ""}</div>`;
     let html = "";
-    for (const g of order) {
-      const arr = groups.get(g);
-      if (!arr || !arr.length) continue;
-      arr.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-      html += `<div class="pt-group" data-grp="${esc(g)}"><div class="pt-ghead">${esc(g)} — ${arr.length}</div>`;
-      for (const mk of arr) html += `<div class="pt-entry" data-pin-id="${esc(mk.id)}" data-name="${esc(mk.name || "Marker")}"><span class="pt-name">${esc(mk.name || "Marker")}</span>${mk.locked ? '<span class="pt-lockbadge" title="Position locked">🔒</span>' : ""}</div>`;
+    for (const mid of mapIds) {
+      const arr = sections.get(mid);
+      const mname = nameOf.get(mid) || mid;
+      html += `<div class="pt-map" data-map="${esc(mid)}"><div class="pt-mhead">${esc(mname)} — ${arr.length}</div>`;
+      if (mid === "faerun") {
+        const groups = new Map();
+        for (const e of arr) {
+          const g = pinsTrayGroupOf(e.rec);
+          if (!groups.has(g)) groups.set(g, []);
+          groups.get(g).push(e);
+        }
+        for (const g of ["City", "Sky", "Non-city", "Markers"]) {
+          const garr = groups.get(g);
+          if (!garr || !garr.length) continue;
+          garr.sort((a, b) => trayEntryName303(a).localeCompare(trayEntryName303(b)));
+          html += `<div class="pt-group" data-grp="${esc(g)}"><div class="pt-ghead">${esc(g)} — ${garr.length}</div>`;
+          for (const e of garr) html += entryHtml(e);
+          html += "</div>";
+        }
+      } else {
+        const mkArr = arr.filter(e => e.store === "markers");
+        const plArr = arr.filter(e => e.store === "places");
+        const sub = (label, sarr) => {
+          if (!sarr.length) return;
+          sarr.sort((a, b) => trayEntryName303(a).localeCompare(trayEntryName303(b)));
+          html += `<div class="pt-group" data-grp="${esc(label)}"><div class="pt-ghead">${esc(label)} — ${sarr.length}</div>`;
+          for (const e of sarr) html += entryHtml(e);
+          html += "</div>";
+        };
+        if (mkArr.length && plArr.length) { sub("Markers", mkArr); sub("Places", plArr); }
+        else { const one = mkArr.length ? mkArr : plArr; one.sort((a, b) => trayEntryName303(a).localeCompare(trayEntryName303(b))); for (const e of one) html += entryHtml(e); }
+      }
       html += "</div>";
     }
     pinsTrayListEl.innerHTML = html || '<div class="pt-empty">Nothing shelved — every pin is on the board.</div>';
@@ -2796,6 +2848,9 @@ setInterval(loadSharedEntries, 60000);
     pinsTrayState.open = typeof force === "boolean" ? force : !pinsTrayState.open;
     pinsTraySave();
     pinsTrayApply();
+    /* APOC-V303: opening the tray refreshes the universal listing —
+       other maps' shelved records are only as fresh as the loader. */
+    if (pinsTrayState.open && typeof loadTrayAll303 === "function") loadTrayAll303(true);
   }
   pinsTabBtn.addEventListener("click", () => pinsTrayToggle());
   pinsTrayEl.querySelector("#pinsTrayClose").addEventListener("click", () => pinsTrayToggle(false));
@@ -2803,11 +2858,22 @@ setInterval(loadSharedEntries, 60000);
   pinsTrayEl.querySelector("#pinsTakeAll").addEventListener("click", async () => {
     let n = 0;
     for (const mk of markers) if (!mk.tray) { mk.tray = true; pinPatch(mk, ["tray"]); n++; }
-    if (!n) { setStatus("Every pin is already in the tray."); return; }
-    const ok = await saveMarkers();
+    /* APOC-V303: take-all covers this map's PLACES too — each one
+       shelved through the keyed merge helper (placePatchKey), never
+       through the full-row savePlaces(). The button stays scoped to
+       the map on screen; its label says so. */
+    let np = 0;
+    if (currentMapId !== "faerun" && typeof placePatchKey === "function") {
+      for (const p of places) if (!p.tray) { if (await placePatchKey(placesKey(), p.id, { tray: true })) { p.tray = true; np++; } }
+    }
+    if (!n && !np) { setStatus("Every pin is already in the tray."); return; }
+    const ok = n ? await saveMarkers() : true;
     draw();
+    if (currentMapId !== "faerun") drawPlaces();
     renderPinsTray();
-    setStatus(ok ? `All ${n} pin${n === 1 ? "" : "s"} are in the tray — drag them back out one at a time to place them.` : "The tray could not be saved — your pins are still on the board; try again in a few seconds.");
+    if (typeof loadTrayAll303 === "function") loadTrayAll303(true);
+    const total = n + np;
+    setStatus(ok ? `All ${total} pin${total === 1 ? "" : "s"} are in the tray — drag them back out one at a time to place them.` : "The tray could not be saved — your pins are still on the board; try again in a few seconds.");
     if (!ok) loadMarkers(true);
   });
   /* Drag out of the tray: press an entry and drag — a ghost follows
@@ -2819,9 +2885,13 @@ setInterval(loadSharedEntries, 60000);
   pinsTrayListEl.addEventListener("pointerdown", (e) => {
     const entry = e.target.closest(".pt-entry");
     if (!entry || (e.pointerType === "mouse" && e.button !== 0)) return;
-    const mk = markers.find(m => m.id === entry.dataset.pinId);
-    if (!mk) return;
-    ptDrag = { mk, sx: e.clientX, sy: e.clientY, active: false, ghost: null, cancelled: false };
+    /* APOC-V303: an entry is identified by the (mapId, store, id)
+       triple it was rendered with — id alone is not an identity in
+       a universal tray. Resolution reads trayEntries303, the exact
+       list the last render produced. */
+    const ent = trayEntries303.find(en => en.mapId === entry.dataset.trayMap && en.store === entry.dataset.trayStore && en.rec.id === entry.dataset.pinId);
+    if (!ent) return;
+    ptDrag = { entry: ent, mk: ent.store === "markers" ? ent.rec : null, name: (typeof trayEntryName303 === "function") ? trayEntryName303(ent) : (ent.rec.name || ent.rec.n || "Pin"), sx: e.clientX, sy: e.clientY, active: false, ghost: null, cancelled: false };
     try { entry.setPointerCapture(e.pointerId); } catch (err) {}
     e.preventDefault();
   });
@@ -2832,7 +2902,7 @@ setInterval(loadSharedEntries, 60000);
       ptDrag.active = true;
       const ghost = document.createElement("div");
       ghost.className = "pt-ghost";
-      ghost.textContent = ptDrag.mk.name || "Marker";
+      ghost.textContent = ptDrag.name || "Pin";
       document.body.appendChild(ghost);
       ptDrag.ghost = ghost;
     }
@@ -2855,17 +2925,45 @@ setInterval(loadSharedEntries, 60000);
        check below. Applies to mouse drags identically. */
     const tr = pinsTrayEl.getBoundingClientRect();
     if (e.clientX >= tr.left && e.clientX <= tr.right && e.clientY >= tr.top && e.clientY <= tr.bottom) return;
+    /* APOC-V303: a FOREIGN entry (its home map is not the map on
+       screen) is never placed here — the drop RESTORES it to its
+       home map at its stored position: one tray:false write to the
+       HOME store through the keyed merge, no coordinate conversion
+       through this map's frame, and no write of any kind to the
+       viewed map's stores. Restore and placement are different
+       gestures; this is the restore. */
+    const ent = d.entry;
+    if (ent && ent.mapId !== currentMapId) { if (typeof restoreEntry303 === "function") await restoreEntry303(ent); return; }
     const r = mapEl.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
     const p = toXY(map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top)));
-    d.mk.x = Math.round(p.x * 100) / 100;
-    d.mk.y = Math.round(p.y * 100) / 100;
-    d.mk.tray = false;
-    pinPatch(d.mk, ["x", "y", "tray"]);
+    if (ent && ent.store === "places") {
+      /* Same-map place: placed at the drop point like a pin, but
+         the write goes through placePatchKey — the places merge —
+         never the full-row savePlaces(). */
+      const pl = ent.rec;
+      const nx = Math.round(p.x * 100) / 100, ny = Math.round(p.y * 100) / 100;
+      const okP = (typeof placePatchKey === "function") ? await placePatchKey(placesKey(), pl.id, { x: nx, y: ny, tray: false }) : false;
+      if (okP) { pl.x = nx; pl.y = ny; pl.tray = false; }
+      drawPlaces();
+      try { draw(); } catch (err) {}
+      renderPinsTray();
+      if (typeof loadTrayAll303 === "function") loadTrayAll303(true);
+      setStatus(okP ? `${pl.n || "Place"} placed — it works like any place now.` : "That place could not be placed — it is still in the tray; try again in a few seconds.");
+      if (!okP) loadPlaces(true);
+      return;
+    }
+    const mk = (ent && ent.store === "markers") ? (markers.find(m => m.id === ent.rec.id) || ent.rec) : d.mk;
+    if (!mk) return;
+    mk.x = Math.round(p.x * 100) / 100;
+    mk.y = Math.round(p.y * 100) / 100;
+    mk.tray = false;
+    pinPatch(mk, ["x", "y", "tray"]);
     const ok = await saveMarkers();
     draw();
     renderPinsTray();
-    setStatus(ok ? `${d.mk.name || "Marker"} placed — it works like any pin now.` : "That pin could not be placed — it is still in the tray; try again in a few seconds.");
+    if (typeof loadTrayAll303 === "function") loadTrayAll303(true);
+    setStatus(ok ? `${mk.name || "Marker"} placed — it works like any pin now.` : "That pin could not be placed — it is still in the tray; try again in a few seconds.");
     if (!ok) loadMarkers(true);
   }
   pinsTrayListEl.addEventListener("pointerup", (e) => { ptDragEnd(e, true); });
@@ -3027,7 +3125,7 @@ setInterval(loadSharedEntries, 60000);
     const q = searchInput.value.trim().toLowerCase();
     if (q.length < 2) { resultsBox.hidden = true; return; }
     const placeHits = currentPlaces().filter(p => p.n.toLowerCase().includes(q) || (p.alias && p.alias.toLowerCase().includes(q)));
-    const markerHits = markers.filter(mk => (mk.name || "").toLowerCase().includes(q));
+    const markerHits = markers.filter(mk => !mk.tray && (mk.name || "").toLowerCase().includes(q)); /* APOC-V303: shelved markers are screened from search, like shelved places */
     const hits = [
       ...placeHits.map(p => ({ label: p.alias && p.n === "Bastion of Last Hope" ? `${p.n} (printed: ${p.alias})` : p.n, kind: p.t || "Place — this map", go: () => focusPlace(p.x, p.y, p.n, p.t || "Place — this map", p.d || "") })),
       ...markerHits.map(mk => ({ label: mk.name, kind: "Shared marker — " + mk.kind, go: () => focusPlace(mk.x, mk.y, mk.name, "Shared marker — " + mk.kind, mk.note || "", "Tap the marker itself on the map to edit or move it.") }))
@@ -3061,7 +3159,7 @@ setInterval(loadSharedEntries, 60000);
   let editingPlace = null, tempPlacePin = null;
   const placesLayer = L.layerGroup().addTo(map);
   const placeForm = $("placeForm");
-  function currentPlaces(){ return currentMapId === "faerun" ? PLACES.filter(p => p.dot === false) : places; } /* APOC-V296: the dotted atlas places are pins now and surface as marker hits; only the search-only residue stays here, so each migrated place is returned exactly once */
+  function currentPlaces(){ return currentMapId === "faerun" ? PLACES.filter(p => p.dot === false) : places.filter(p => !p.tray); } /* APOC-V296: the dotted atlas places are pins now and surface as marker hits; only the search-only residue stays here, so each migrated place is returned exactly once. APOC-V303: shelved places are screened out — a shelved record renders on no appearance of its map, search included */
   /* APOC-V303 (v3.03, 2026-11-15): UNIVERSAL PIN LOOK — a place on a
      non-Faerun map takes its label band from the SAME beside-first
      rule (APOC-V292) in the SAME fixed reference space as draw():
@@ -3074,7 +3172,7 @@ setInterval(loadSharedEntries, 60000);
     const px = frameW() * (p.x / 100) * REF_S, py = frameH() * (1 - p.y / 100) * REF_S;
     const w = 40 + (String(p.n || "").length * 6.3);
     const obs = [];
-    for (const q of places) { if (q !== p) obs.push({ x: frameW() * (q.x / 100) * REF_S, y: frameH() * (1 - q.y / 100) * REF_S }); }
+    for (const q of places) { if (q !== p && !q.tray) obs.push({ x: frameW() * (q.x / 100) * REF_S, y: frameH() * (1 - q.y / 100) * REF_S }); } /* APOC-V303: a shelved place is not a banding obstacle — it renders nowhere */
     for (const mk of markers) { if (mk.tray) continue; if (mk.atlas && !atlasShown()) continue; obs.push({ x: frameW() * (mk.x / 100) * REF_S, y: frameH() * (1 - mk.y / 100) * REF_S }); }
     const box = level => level === 2 ? { x1: px - w / 2, x2: px + w / 2, y1: py + 36, y2: py + 56 } : level === 1 ? { x1: px - w / 2, x2: px + w / 2, y1: py + 12, y2: py + 32 } : { x1: px + 10, x2: px + 10 + w, y1: py - 10, y2: py + 10 };
     const covers = level => { const b = box(level); for (const o of obs) { const dx = Math.max(b.x1 - o.x, 0, o.x - b.x2); const dy = Math.max(b.y1 - o.y, 0, o.y - b.y2); if (Math.hypot(dx, dy) < 10) return true; } return false; };
@@ -3086,6 +3184,9 @@ setInterval(loadSharedEntries, 60000);
     placesLayer.clearLayers();
     if (currentMapId === "faerun") return;
     for (const p of places) {
+      /* APOC-V303: a shelved place renders nowhere — it sits in the
+         universal Pins tray until it is dragged back out. */
+      if (p.tray) continue;
       /* APOC-V303: the place renders through the canonical pin
          factory — the place-pin look (16px dot + name pill), not the
          retired 10px atlas dot. Click/drag behaviour below is the
@@ -3094,6 +3195,7 @@ setInterval(loadSharedEntries, 60000);
       dot.on("click", () => {
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
         if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
+        if (typeof showPlaceCard303 === "function") { showPlaceCard303(p); return; }
         showCard(p.n, "Place — this map", p.d || "", "");
       });
       dot.on("dragend", async () => {
@@ -3145,6 +3247,7 @@ setInterval(loadSharedEntries, 60000);
     editingPlace = state;
     const isEdit = state.mode === "edit";
     $("placeDelete").hidden = !isEdit;
+    $("placeTrayBtn").hidden = !isEdit; /* APOC-V303: the GM route to shelving a place — the editor's Move to tray (wired in the APOC-V303 block) */
     $("placeName").value = isEdit ? (state.p.n || "") : "";
     $("placeNote").value = isEdit ? (state.p.d || "") : "";
     if (!isEdit) tempPlacePin = L.marker(toLatLng(state.x, state.y), { icon: iconFor("place", "New place", true) }).addTo(placesLayer);
@@ -3198,6 +3301,238 @@ setInterval(loadSharedEntries, 60000);
     openEditor: openPlaceEditor, list: currentPlaces, isAtlas: () => currentMapId === "faerun",
     del: async p => { places = places.filter(x => x.id !== p.id); const ok = await savePlaces(); drawPlaces(); refreshPlaceUI(); return ok; }
   };
+
+  /* ================= APOC-V303 (v3.04, 2026-11-15): THE UNIVERSAL
+     PIN TRAY — Shaun's order (via the Campaign Hub): "Have all maps
+     have access to a universal pin tray. Make the pin tray
+     universal." The APOC-V292 tray was a view over ONE array — the
+     current map's markers — so it silently changed contents on
+     every map switch and could not see places at all. Now:
+       - ONE tray for the whole VTT. A loader reads every known
+         map's markers row and (non-Faerûn) places row and lists
+         every shelved record, grouped by HOME MAP (Faerûn first,
+         its V292 grp subgroups intact; Markers/Places sub-heads
+         inside any other map that contributes both).
+       - Shelving is still just `tray:true` on the record in its
+         HOME store — no data migration, no new tray store. A
+         shelved record renders on NO appearance of its map:
+         draw() and drawPlaces() screen it, the label banding
+         ignores it, and search screens it too.
+       - Entry identity is the (mapId, store, id) triple end to
+         end — DOM dataset, drag state, write routing.
+       - RESTORE and PLACEMENT are different gestures. Dragging an
+         entry whose home is the map on screen places it at the
+         drop point (markers as always; places through the merge
+         helper). Dragging a FOREIGN entry restores it in place:
+         one tray:false write to its HOME store, stored x/y
+         untouched, no coordinate conversion, and no write of any
+         kind to the viewed map's stores. Dropping back on the
+         tray cancels, as APOC-V302 established.
+       - Every tray write to a places row goes through
+         placePatchKey — a re-read → apply-by-id → upsert merge —
+         NEVER through savePlaces(), whose full-row upsert is the
+         GH-PIN-REVERT pattern. Marker writes to a foreign map use
+         the same keyed discipline (markerPatchKey303); the current
+         map's markers keep the pinPatch/saveMarkers path verbatim,
+         so the Faerûn map_markers row stays canon-equal after
+         every operation.
+       - Restore writes the home store directly from the map id —
+         it never requires the home map to be registered or viewed
+         on this device; a section whose map is missing from the
+         index lists under the raw map id. */
+  function trayEntryName303(e){ const r = (e && e.rec) || {}; return e && e.store === "places" ? (r.n || "Place") : (r.name || "Marker"); }
+  function trayMarkersKey303(mapId){ return mapId === "faerun" ? "map_markers" : "map_markers_" + mapId; }
+  function trayPlacesKey303(mapId){ return "vtt_places_" + mapId; }
+  function trayPlacesNow303(){ try { return places; } catch (e) { return []; } }
+  function trayMapIndex303(){
+    const idx = [];
+    const seen = new Set();
+    const push = (id, name) => { if (id && !seen.has(id)) { seen.add(id); idx.push({ id, name: name || id }); } };
+    let fName = "Faerûn — World Map", sName = "Arcanic Rendez-Vous — Saint James";
+    try { if (MAPS.faerun && MAPS.faerun.name) fName = MAPS.faerun.name; if (MAPS["saint-james"] && MAPS["saint-james"].name) sName = MAPS["saint-james"].name; } catch (e) {}
+    push("faerun", fName);
+    push("saint-james", sName);
+    try { for (const rec of dropMaps) push(rec.id, rec.name); } catch (e) {}
+    return idx;
+  }
+  function trayDisplayEntries303(){
+    const idx = trayMapIndex303();
+    const nameOf = new Map(idx.map(m => [m.id, m.name]));
+    const byTriple = new Map();
+    const add = (mapId, store, rec) => { if (rec && rec.id && rec.tray) byTriple.set(mapId + "|" + store + "|" + rec.id, { mapId, mapName: nameOf.get(mapId) || mapId, store, rec }); };
+    for (const e of trayShelved303) if (e.mapId !== currentMapId) add(e.mapId, e.store, e.rec);
+    for (const mk of markers) add(currentMapId, "markers", mk);
+    if (currentMapId !== "faerun") for (const p of trayPlacesNow303()) add(currentMapId, "places", p);
+    for (const e of trayShelved303) if (e.mapId === currentMapId) add(e.mapId, e.store, e.rec);
+    const rank = new Map(idx.map((m, i) => [m.id, i]));
+    return [...byTriple.values()].sort((a, b) => (rank.has(a.mapId) ? rank.get(a.mapId) : 999) - (rank.has(b.mapId) ? rank.get(b.mapId) : 999));
+  }
+  let trayLoad303InFlight = false, trayLoad303Pending = false;
+  async function loadTrayAll303(quiet){
+    if (!db) return;
+    if (trayLoad303InFlight) { trayLoad303Pending = true; return; }
+    trayLoad303InFlight = true;
+    try {
+      const found = [];
+      for (const m of trayMapIndex303()) {
+        try {
+          const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", trayMarkersKey303(m.id)).maybeSingle();
+          const arr = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers : [];
+          for (const rec of arr) if (rec && rec.tray) found.push({ mapId: m.id, mapName: m.name, store: "markers", rec });
+        } catch (e) {}
+        if (m.id !== "faerun") {
+          try {
+            const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", trayPlacesKey303(m.id)).maybeSingle();
+            const arr = (data && data.value && Array.isArray(data.value.places)) ? data.value.places : [];
+            for (const rec of arr) if (rec && rec.tray) found.push({ mapId: m.id, mapName: m.name, store: "places", rec });
+          } catch (e) {}
+        }
+      }
+      trayShelved303 = found;
+      if (typeof renderPinsTray === "function") renderPinsTray();
+    } catch (e) {}
+    trayLoad303InFlight = false;
+    if (trayLoad303Pending) { trayLoad303Pending = false; loadTrayAll303(true); }
+  }
+  let trayLive303Timer = null;
+  function trayLiveReload303(){
+    if (trayLive303Timer) return;
+    trayLive303Timer = setTimeout(() => { trayLive303Timer = null; loadTrayAll303(true); }, 1500);
+  }
+  setInterval(() => { if (pinsTrayState.open) loadTrayAll303(true); }, 60000);
+  /* Keyed merge writers — the markers discipline (re-read the row,
+     apply ONLY the patch to the record with this id, upsert the
+     row's own field, serialized on a chain), generalized to any
+     key and to the places field. A record that is not in the row
+     is never invented into it. */
+  let trayMergeChain303 = Promise.resolve();
+  function mergePatchKey303(key, field, id, patch){
+    const job = trayMergeChain303.then(async () => {
+      try {
+        const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+        if (rerr) return false;
+        const arr = (data && data.value && Array.isArray(data.value[field])) ? data.value[field].slice() : [];
+        const i = arr.findIndex(r => r && r.id === id);
+        if (i < 0) return false;
+        arr[i] = Object.assign({}, arr[i], patch);
+        const value = {}; value[field] = arr;
+        const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+        return !error;
+      } catch (e) { return false; }
+    });
+    trayMergeChain303 = job.then(() => {}, () => {});
+    return job;
+  }
+  function placePatchKey(key, id, patch){ return mergePatchKey303(key, "places", id, patch); }
+  function markerPatchKey303(key, id, patch){ return mergePatchKey303(key, "markers", id, patch); }
+  /* Shelve / restore routing by (store, home): the current map's
+     markers ride pinPatch + saveMarkers exactly as before; every
+     other write is a keyed merge against the HOME store. When the
+     home IS the current map, the in-memory record is patched too
+     and the board redraws at once. */
+  async function shelveEntry303(entry){
+    if (entry.store === "places") {
+      const ok = await placePatchKey(trayPlacesKey303(entry.mapId), entry.rec.id, { tray: true });
+      if (ok) {
+        entry.rec.tray = true;
+        if (entry.mapId === currentMapId) {
+          const p = trayPlacesNow303().find(x => x.id === entry.rec.id);
+          if (p) p.tray = true;
+          drawPlaces();
+          try { draw(); } catch (e) {}
+        }
+      }
+      loadTrayAll303(true);
+      return ok;
+    }
+    if (entry.mapId === currentMapId) {
+      const mk = markers.find(m => m.id === entry.rec.id) || entry.rec;
+      mk.tray = true;
+      pinPatch(mk, ["tray"]);
+      const ok = await saveMarkers();
+      draw();
+      if (typeof renderPinsTray === "function") renderPinsTray();
+      loadTrayAll303(true);
+      if (!ok) loadMarkers(true);
+      return ok;
+    }
+    const ok = await markerPatchKey303(trayMarkersKey303(entry.mapId), entry.rec.id, { tray: true });
+    if (ok) entry.rec.tray = true;
+    loadTrayAll303(true);
+    return ok;
+  }
+  async function restoreEntry303(entry){
+    const name = trayEntryName303(entry);
+    const fail = () => setStatus("That pin could not be restored — check the connection and try again.");
+    if (entry.store === "places") {
+      const ok = await placePatchKey(trayPlacesKey303(entry.mapId), entry.rec.id, { tray: false });
+      if (ok) {
+        entry.rec.tray = false;
+        if (entry.mapId === currentMapId) {
+          const p = trayPlacesNow303().find(x => x.id === entry.rec.id);
+          if (p) p.tray = false;
+          drawPlaces();
+          try { draw(); } catch (e) {}
+        }
+      }
+      loadTrayAll303(true);
+      if (typeof renderPinsTray === "function") renderPinsTray();
+      if (!ok) { fail(); return false; }
+      setStatus(entry.mapId === currentMapId ? `${name} is back on the map.` : `${name} is back on ${entry.mapName} — switch to that map to see it.`);
+      return true;
+    }
+    if (entry.mapId === currentMapId) {
+      const mk = markers.find(m => m.id === entry.rec.id) || entry.rec;
+      mk.tray = false;
+      pinPatch(mk, ["tray"]);
+      const ok = await saveMarkers();
+      draw();
+      if (typeof renderPinsTray === "function") renderPinsTray();
+      loadTrayAll303(true);
+      if (!ok) { loadMarkers(true); fail(); return false; }
+      setStatus(`${name} is back on the map.`);
+      return true;
+    }
+    const ok = await markerPatchKey303(trayMarkersKey303(entry.mapId), entry.rec.id, { tray: false });
+    if (ok) entry.rec.tray = false;
+    loadTrayAll303(true);
+    if (typeof renderPinsTray === "function") renderPinsTray();
+    if (!ok) { fail(); return false; }
+    setStatus(`${name} is back on ${entry.mapName} — switch to that map to see it.`);
+    return true;
+  }
+  /* The radial's Shelve (bare markers): the same write the pin
+     card's Move to tray makes — tray:true only, through the merge. */
+  async function shelveMarker303(mk){
+    const ok = await shelveEntry303({ mapId: currentMapId, mapName: currentMapId, store: "markers", rec: mk });
+    setStatus(ok ? `"${mk.name || "Marker"}" is in the Pins tray — drag it back out whenever you want it on the board.` : "That pin could not be shelved — check the connection and try again.");
+  }
+  /* The player-facing place card (APOC-V303): places get their own
+     card builder, mirroring the pin card's shelve affordance —
+     anyone who can open the card can shelve the place, exactly
+     like a pin. The GM route is the place editor's Move to tray
+     button, wired just below. */
+  function showPlaceCard303(p){
+    card.innerHTML = `<button type="button" class="btn pc-tray" id="placeTrayBtn303" title="Take this place off the board and shelve it in the Pins tray">Move to tray</button><button type="button" class="btn pc-close" id="placeCardClose">Close</button><h4 title="Drag to move this card">${esc(p.n)}</h4><span class="pr-kind">Place — this map</span>${p.d ? `<p>${esc(p.d)}</p>` : ""}`;
+    card.hidden = false;
+    pcRestore();
+    $("placeCardClose").addEventListener("click", () => { card.hidden = true; });
+    $("placeTrayBtn303").addEventListener("click", async () => {
+      const ok = await shelveEntry303({ mapId: currentMapId, mapName: currentMapId, store: "places", rec: p });
+      if (!ok) { setStatus("That place could not be shelved — check the connection and try again."); return; }
+      card.hidden = true;
+      setStatus(`"${p.n}" is in the Pins tray — drag it back out whenever you want it on the map.`);
+    });
+  }
+  const placeTrayBtn303 = $("placeTrayBtn");
+  if (placeTrayBtn303) placeTrayBtn303.addEventListener("click", async () => {
+    if (!editingPlace || editingPlace.mode !== "edit") return;
+    const p = editingPlace.p;
+    const ok = await shelveEntry303({ mapId: currentMapId, mapName: currentMapId, store: "places", rec: p });
+    if (!ok) { setStatus("That place could not be shelved — check the connection and try again."); return; }
+    closePlaceEditor();
+    setStatus(`"${p.n}" is in the Pins tray — drag it back out whenever you want it on the map.`);
+  });
 
     $("pushTvBtn").addEventListener("click", () => {
     const u = new URL(location.href);
@@ -3954,7 +4289,7 @@ setInterval(loadSharedEntries, 60000);
   loadTokens();
   setInterval(() => { loadTokens(true); loadVttSettings(true); }, 60000);
   try {
-    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); loadMarkers(true); loadPlaces(true); loadTemplates(true); }).subscribe();
+    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); loadMarkers(true); loadPlaces(true); loadTemplates(true); if (typeof trayLiveReload303 === "function") trayLiveReload303(); }).subscribe(); /* APOC-V303: the universal tray reloads (debounced) on any shared-store change */
   } catch(e) {  }
 
     function effectiveGm(){ try { if (isProjecting()) { try { return sessionStorage.getItem("apocDispGm") === "1"; } catch(e) { return false; } } return gmView && !isProjecting(); } catch(e) { return false; } }     window.effectiveGm = effectiveGm;
@@ -4812,6 +5147,7 @@ setInterval(loadSharedEntries, 60000);
     }
     loadMarkers(true);
     loadPlaces(true);
+    if (typeof loadTrayAll303 === "function") loadTrayAll303(true); /* APOC-V303: the universal tray follows the map switch */
     loadTokens(true);
     loadVttSettings(true);
     fogState = { enabled: false, revealed: [] };
@@ -5758,6 +6094,7 @@ setInterval(loadSharedEntries, 60000);
     }
     if (currentMapId.startsWith("drop-") && !MAPS[currentMapId]) switchMap("faerun");
     try { if (typeof loadActiveMap === "function") loadActiveMap(); } catch(e) {} /* APOC-CP1: a just-registered map becomes switchable immediately (Phase 3 #6b) */
+    try { if (typeof loadTrayAll303 === "function") loadTrayAll303(true); } catch(e) {} /* APOC-V303: a tray opened before the registry landed must not conclude "nothing shelved elsewhere" — reload the universal listing now the map index is complete */
   }
   async function saveDropRegistry(){
     const { error } = await db.from(SETTINGS_TABLE).upsert({ key: DROP_REG_KEY, value: { maps: dropMaps }, updated_at: new Date().toISOString() }, { onConflict: "key" });
@@ -9688,7 +10025,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-1507";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-1608";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -20125,6 +20462,8 @@ body.apoc-side251 #phBarStrip{display:none!important}
 .pins-tray .pt-takeall{width:100%;text-align:center}
 .pins-tray .pt-list{flex:1 1 auto;overflow-y:auto;padding:4px 6px 8px}
 .pins-tray .pt-ghead{margin:8px 2px 3px;font-weight:700;color:#9db8e8;font-size:12px;letter-spacing:.02em}
+.pins-tray .pt-mhead{margin:10px 2px 2px;font-weight:700;color:#e8eefc;font-size:13px;letter-spacing:.02em;border-bottom:1px solid rgba(157,184,232,.35);padding-bottom:2px}
+.pins-tray .pt-map:first-child .pt-mhead{margin-top:2px}
 .pins-tray .pt-entry{display:flex;align-items:center;gap:6px;padding:3px 8px;margin:1px 0;border:1px solid #26314a;border-radius:6px;background:rgba(255,255,255,.045);cursor:grab;touch-action:none;user-select:none}
 .pins-tray .pt-entry:hover{background:rgba(30,64,175,.35)}
 .pins-tray .pt-name{flex:1 1 auto;color:#eef2f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
