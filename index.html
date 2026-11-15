@@ -1730,10 +1730,10 @@ setInterval(loadSharedEntries, 60000);
   function openPinRadial(mk, openMk){
     if (isProjecting() || document.body.classList.contains("map-expanded")) return;
     closePinRadial();
-    const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length);
+    const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || !!mk.atlas; /* APOC-V296: atlas pins take the place-pin set (Open / Lock) */
     const opts = [{ id: "open", label: isRead ? "Open" : "Edit" }];
     opts.push({ id: "lock", label: mk.locked ? "\u{1F513} Unlock position" : "\u{1F512} Lock position" });
-    if (!isRead) opts.push({ id: "delete", label: "Delete", danger: true });
+    if (!isRead || mk.atlas) opts.push({ id: "delete", label: "Delete", danger: true }); /* APOC-V296: an atlas pin also carries Delete — it is a bare record in map_markers, and the migration flag keeps a deleted one deleted */
     const pt = map.latLngToContainerPoint(toLatLng(mk.x, mk.y));
     const cr = map.getContainer().getBoundingClientRect();
     /* Ring centre = the pin's dot, shifted only as far as the
@@ -1804,7 +1804,7 @@ setInterval(loadSharedEntries, 60000);
        A dot is covered when its centre comes within the dot's own
        outer radius (10px: the 16px .mk-dot plus its 2px border) of
        the label box. */
-    const banded = markers.filter(mk => !mk.tray);
+    const banded = markers.filter(mk => !mk.tray && (atlasShown() || !mk.atlas)); /* APOC-V296: atlas pins hidden by their toggle take no part in banding either */
     const pts = banded.map(mk => ({ x: frameW() * (mk.x / 100) * REF_S, y: frameH() * (1 - mk.y / 100) * REF_S }));
     const pillW = mk => 40 + (String(mk.name || "").length * 6.3);
     markers.forEach(mk => { mk._under = false; });
@@ -1834,6 +1834,9 @@ setInterval(loadSharedEntries, 60000);
          it renders nothing and answers nothing until it is dragged
          back out of the tray. */
       if (mk.tray) continue;
+      /* APOC-V296: an atlas pin hidden by the "Atlas places" toggle
+         renders nothing and answers nothing, like a shelved pin. */
+      if (mk.atlas && !atlasShown()) continue;
       /* GM-only markers (mk.gm — Roll20's hidden pins) are not rendered at
          all without GM view; projecting forces player view, so the TV copy
          never sees them either. */
@@ -1846,14 +1849,14 @@ setInterval(loadSharedEntries, 60000);
          tap opens the verbiage, a single click alone does nothing. A
          pin whose record carries locked:true is not draggable at all;
          its lock button lives in the place card (see showPinCard). */
-      const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length);
+      const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || !!mk.atlas; /* APOC-V296: an atlas pin is a read pin — its verbiage is the place card, never the bare-marker editor */
       const isLocked = !!mk.locked;
       const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting() && !isLocked, icon: iconFor(kind, mk.name, false, mk._under, isLocked) }).addTo(layer);
       const openMk = () => {
         closePinRadial();
         const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
-        if (imgs.length) { showPinCard(mk); return; }
+        if (isRead) { showPinCard(mk); return; } /* APOC-V296: read pins open the place card — an atlas pin carries no pictures, so branching on imgs alone sent it to the bare-marker editor */
         openEditor({ mode: "edit", mk });
       };
       /* APOC-V289: this pin's radial opener, handed to the tap
@@ -2169,6 +2172,142 @@ setInterval(loadSharedEntries, 60000);
       saveMarkers().then(() => { grpBackfillBusy = false; }, () => { grpBackfillBusy = false; });
     }
   }
+  /* APOC-V296 (2026-11-14): ATLAS PLACES BECOME PINS — Shaun's order
+     of 2026-11-14 ~20:09 MST: "Make them look just like the pins that
+     I have to put on. In all aspects." The Faerûn atlas places (the
+     page-code PLACES array — white dots whose click opened a lore
+     card) stop being a separate kind of thing: a one-time, guarded
+     migration seeds every dotted PLACES entry into the shared
+     map_markers as an ordinary place pin — same dot + beside label,
+     same press-drag, same double-click place card (the lore line is
+     the pin's note), same radial, same position lock, same Pins
+     tray. The record carries atlas:true, invisible plumbing that
+     lets the standing "Atlas places" toggle show/hide exactly these
+     pins in draw() (atlasShown below); in every other aspect they
+     are ordinary pins. The 3 dot:false PLACES entries (search-only:
+     the Bastion, Silverymoon, Sundabar) never become pins — they
+     stay reachable through search as the residue currentPlaces()
+     returns. Migration discipline (the grp-backfill precedent, on
+     the v2.92 merge rules):
+       - merge-APPEND only: records are added onto a fresh re-read of
+         the store row; existing records are never rewritten, so his
+         pins' fields (tray, grp, locked, positions, notes, imgs)
+         survive byte-identical;
+       - completion is tracked store-side in vtt_atlas_migrated
+         ({v:1, ids:[...]}), NEVER by "name missing from markers" —
+         an atlas pin Shaun deletes stays deleted;
+       - the append save is serialized on the markers saveChain and
+         holds pinSaveActive while in flight, so refreshes defer
+         exactly as they do for pin saves; racing boots converge on
+         the same id set (ids are name slugs) and the append-only
+         save can never duplicate or revert a record. */
+  const ATLAS_FLAG_KEY = "vtt_atlas_migrated";
+  let atlasFlagIds = null; /* null until the flag row has been read */
+  let atlasFlagChain = Promise.resolve();
+  let atlasMigrateBusy = false;
+  function atlasSlug(name){
+    return "atlas-" + String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+  function atlasShown(){ const t = $("atlasToggle"); return !t || !!t.checked; }
+  async function atlasLoadFlag(){
+    if (atlasFlagIds !== null) return atlasFlagIds;
+    try {
+      const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", ATLAS_FLAG_KEY).maybeSingle();
+      atlasFlagIds = (data && data.value && Array.isArray(data.value.ids)) ? data.value.ids.filter(x => typeof x === "string") : [];
+    } catch (e) { atlasFlagIds = []; }
+    return atlasFlagIds;
+  }
+  function atlasSaveFlag(ids){
+    atlasFlagIds = ids.slice();
+    const job = atlasFlagChain.then(async () => {
+      try { await db.from(SETTINGS_TABLE).upsert({ key: ATLAS_FLAG_KEY, value: { v: 1, ids }, updated_at: new Date().toISOString() }, { onConflict: "key" }); } catch (e) {}
+    });
+    atlasFlagChain = job.then(() => {}, () => {});
+    return job;
+  }
+  /* Append-only merge save for the migration itself: re-reads the
+     current markers row, appends ONLY the records whose ids are not
+     already there (never replaces — a fresher page's drag of an
+     atlas pin can never be reverted by a staler page's migration),
+     and upserts the merged array. Serialized on saveChain, and it
+     holds pinSaveActive so incoming loadMarkers refreshes defer
+     until it drains, exactly as for a pin save. */
+  function saveAtlasPins(records){
+    pinSaveActive++;
+    const job = saveChain.then(async () => {
+      try {
+        const key = markersKey();
+        const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+        if (rerr) return false;
+        const arr = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers.slice() : [];
+        const have = new Set(arr.map(m => m && m.id));
+        let added = 0;
+        for (const rec of records) { if (!have.has(rec.id)) { arr.push(rec); have.add(rec.id); added++; } }
+        if (!added) return true;
+        const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value: { markers: arr }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+        return !error;
+      } catch (e) { return false; }
+    });
+    saveChain = job.then(() => {}, () => {});
+    const settle = ok => { pinSaveActive--; if (!pinSaveActive && pinLoadDeferred) { pinLoadDeferred = false; loadMarkers(true); } return ok; };
+    return job.then(settle, () => settle(false));
+  }
+  async function maybeMigrateAtlas(){
+    if (currentMapId !== "faerun" || atlasMigrateBusy) return;
+    atlasMigrateBusy = true;
+    try {
+      const flagSet = new Set(await atlasLoadFlag());
+      const have = new Map();
+      for (const m of markers) if (m && m.id && !have.has(m.id)) have.set(m.id, m);
+      /* Deterministic ids: PLACES order, name slugs; a slug already
+         claimed by a DIFFERENT name (an existing record or an
+         earlier PLACES entry) is suffixed -2, -3, ... — the shipped
+         PLACES carry no collisions (56 unique names, verified), so
+         the suffix path is defensive only. */
+      const claimed = new Map();
+      for (const [id, m] of have) claimed.set(id, m.name || "");
+      /* Flag ids deliberately do NOT claim slugs here: a deleted
+         atlas pin's id lives in the flag (so it is never
+         resurrected — the fresh filter below excludes it), but if
+         the flag claimed its slug under a null name, the collision
+         check would read its own place as claimed by a stranger
+         and mint a suffixed "fresh" duplicate on every boot —
+         the runaway this note guards against. */
+      const dotted = [];
+      for (const p of PLACES) {
+        if (p.dot === false) continue;
+        let id = atlasSlug(p.n);
+        if (claimed.has(id) && claimed.get(id) !== p.n) { let n2 = 2; while (claimed.has(id + "-" + n2)) n2++; id = id + "-" + n2; }
+        claimed.set(id, p.n);
+        dotted.push({ p, id });
+      }
+      const fresh = dotted.filter(d => !have.has(d.id) && !flagSet.has(d.id));
+      if (fresh.length) {
+        const records = fresh.map(d => {
+          const rec = { id: d.id, kind: "place", name: d.p.n, note: d.p.d || "", x: d.p.x, y: d.p.y, gm: false, imgs: [], atlas: true, t: d.p.t || "" };
+          rec.grp = deriveGrp(rec);
+          return rec;
+        });
+        const ok = await saveAtlasPins(records);
+        if (!ok) return; /* a later loadMarkers retries */
+        /* Flag every dotted id that is now accounted for: already on
+           the board, already flagged, or just appended. A deleted
+           atlas pin's id stays in the flag (it was appended once),
+           so it is never resurrected. */
+        const accounted = new Set([...flagSet]);
+        for (const d of dotted) if (have.has(d.id) || fresh.includes(d)) accounted.add(d.id);
+        await atlasSaveFlag([...accounted]);
+        loadMarkers(true);
+        return;
+      }
+      /* Nothing to append — self-heal the flag if the board holds
+         dotted ids the flag has never heard of (a flag write lost
+         between the two saves of an earlier migration). */
+      const missing = dotted.filter(d => have.has(d.id) && !flagSet.has(d.id)).map(d => d.id);
+      if (missing.length) await atlasSaveFlag([...flagSet, ...missing]);
+    } catch (e) { /* best-effort per load; the next loadMarkers retries */ }
+    finally { atlasMigrateBusy = false; }
+  }
   async function loadMarkers(quiet){
     /* In-flight guard (APOC-V292): while this page's own save is
        unresolved, an incoming refresh is deferred, not applied — it
@@ -2187,11 +2326,12 @@ setInterval(loadSharedEntries, 60000);
        the incoming array is canonically equal to the one in memory,
        the DOM is not touched at all. A genuine change still renders
        exactly once. */
-    if (markersCanonEq(incoming, markers)) { maybeBackfillGrp(); return; }
+    if (markersCanonEq(incoming, markers)) { maybeBackfillGrp(); maybeMigrateAtlas(); return; }
     markers = incoming;
     draw();
     setStatus(markers.length ? `${markers.length} shared marker${markers.length === 1 ? "" : "s"} on the table's map — everybody sees the same map.` : "No markers yet — Add marker drops the first one.");
     maybeBackfillGrp();
+    maybeMigrateAtlas();
   }
   /* APOC-V292 (2026-11-14): GH-PIN-REVERT fix — merge-on-save.
      saveMarkers() used to upsert the saving page's ENTIRE in-memory
@@ -2454,7 +2594,7 @@ setInterval(loadSharedEntries, 60000);
   const pinsTrayTitleEl = pinsTrayEl.querySelector("#pinsTrayTitle");
   const pinsTrayLockBtn = pinsTrayEl.querySelector("#pinsTrayLock");
   function pinsTrayGroupOf(mk){
-    if (Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) return (typeof mk.grp === "string" && mk.grp) ? mk.grp : deriveGrp(mk);
+    if ((Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || mk.atlas) return (typeof mk.grp === "string" && mk.grp) ? mk.grp : deriveGrp(mk); /* APOC-V296: atlas pins group with the place pins, never under Markers */
     return "Markers";
   }
   let pinsTrayLastSig = "";
@@ -2704,17 +2844,16 @@ setInterval(loadSharedEntries, 60000);
     showCard(title, kindLabel, body, hint);
     resultsBox.hidden = true;
   }
-  for (const p of PLACES) {
-    if (p.dot === false) continue;
-    const dot = L.marker(toLatLng(p.x, p.y), { pane: "layerMap", icon: L.divIcon({ className: "atlas-icon", html: '<span class="atlas-dot"></span>', iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false }).addTo(atlasLayer);
-    dot.on("click", () => {
-      if (isProjecting()) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b><br>${esc(p.d)}`).openOn(map); return; }
-      showCard(p.n, p.t, p.d, "Atlas lore is the world as canon left it — what stands here now, the table marks.");
-    });
-  }
+  /* APOC-V296: the atlas dot loop that used to stand here is
+     RETIRED \u2014 the dotted PLACES are real pins now (migration above)
+     and render through draw() with every other pin. PLACES remains
+     in the code as the migration source and, for its dot:false
+     entries, the search residue. atlasLayer stays as an (empty)
+     layer group: the map-switch code still seats it. */
     map.on("zoomend moveend", () => { draw(); });
   $("atlasToggle").addEventListener("change", ev => {
     if (ev.target.checked) atlasLayer.addTo(map); else map.removeLayer(atlasLayer);
+    draw(); /* APOC-V296: atlas places are pins now — the toggle shows/hides them in draw() */
   });
   searchInput.addEventListener("input", () => {
     const q = searchInput.value.trim().toLowerCase();
@@ -2748,7 +2887,7 @@ setInterval(loadSharedEntries, 60000);
   let editingPlace = null, tempPlacePin = null;
   const placesLayer = L.layerGroup().addTo(map);
   const placeForm = $("placeForm");
-  function currentPlaces(){ return currentMapId === "faerun" ? PLACES : places; }
+  function currentPlaces(){ return currentMapId === "faerun" ? PLACES.filter(p => p.dot === false) : places; } /* APOC-V296: the dotted atlas places are pins now and surface as marker hits; only the search-only residue stays here, so each migrated place is returned exactly once */
   function drawPlaces(){
     placesLayer.clearLayers();
     if (currentMapId === "faerun") return;
@@ -9306,7 +9445,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-2004";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-2155";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
