@@ -1708,6 +1708,7 @@ setInterval(loadSharedEntries, 60000);
      report — the APOC-V288 card handler's exact semantics. */
   async function togglePinLock(mk){
     mk.locked = !mk.locked;
+    pinPatch(mk, ["locked"]);
     const ok = await saveMarkers();
     draw();
     setStatus(ok ? (mk.locked ? `"${mk.name}" is locked in place.` : `"${mk.name}" is unlocked — it can be dragged again.`) : "That lock change didn't save — check the connection and try again.");
@@ -1720,6 +1721,7 @@ setInterval(loadSharedEntries, 60000);
     if (!confirm(`Delete the marker "${mk.name}" from the shared map? Everybody will stop seeing it.`)) return;
     if (editing && editing.mk === mk) closeEditor();
     markers = markers.filter(x => x.id !== mk.id);
+    pinDelete(mk.id);
     const ok = await saveMarkers();
     if (!ok) { setStatus("That delete didn't go through — try again."); loadMarkers(true); return; }
     draw(); setStatus(`"${mk.name}" deleted for everybody.`);
@@ -1785,35 +1787,52 @@ setInterval(loadSharedEntries, 60000);
        measured on v2.87 bytes: 12 of 120 labels flip between z=0.75
        and z=0.5, 8 more between z=0.75 and z=1.25. */
     const REF_S = Math.pow(2, 0.75);
-    const pts = markers.map(mk => ({ x: frameW() * (mk.x / 100) * REF_S, y: frameH() * (1 - mk.y / 100) * REF_S }));
+    /* APOC-V292 (2026-11-14): beside-first banding — Shaun's standing
+       preference (stated twice, most recently at the 2026-11-14 pin
+       hunt): a pin's words belong NEXT TO its pin. The deterministic
+       reference space above stays exactly as APOC-V288 built it (a
+       pure function of stored positions, identical at every zoom, on
+       every screen, after every reload), but the RULE changes: a
+       label sits beside its dot unless the beside position would
+       cover ANOTHER PIN'S DOT — only then does it drop one band, and
+       a second band only if that band would cover a dot too. The
+       test is per-pin and order-independent: it looks at dot
+       positions only, never at other labels, so no pin's label can
+       be moved by a neighbour's label. Pins shelved in the tray
+       (mk.tray) take no part — neither labelled nor counted as dots.
+       A dot is covered when its centre comes within the dot's own
+       outer radius (10px: the 16px .mk-dot plus its 2px border) of
+       the label box. */
+    const banded = markers.filter(mk => !mk.tray);
+    const pts = banded.map(mk => ({ x: frameW() * (mk.x / 100) * REF_S, y: frameH() * (1 - mk.y / 100) * REF_S }));
     const pillW = mk => 40 + (String(mk.name || "").length * 6.3);
     markers.forEach(mk => { mk._under = false; });
-    markers.forEach((mk, i) => {
-      markers.forEach((o, j) => {
-        if (i === j || o._under) return;
-        if (pts[j].x > pts[i].x && pts[j].x - pts[i].x < pillW(mk) && Math.abs(pts[j].y - pts[i].y) < 20) o._under = true;
-      });
-    });
-    /* Second pass: a dropped pill can still land inside the wide pill band
-       of the marker it dropped for — Silverymoon's pill reaches across
-       Sundabar, and the two sit at nearly the same height, so one band
-       down was not clear (verified on the live page at v1.17). If a
-       dropped pill's box still intersects any other marker's pill box,
-       drop it a second band (mk-under2). Positions never move. */
     const labelBox = (idx, level) => {
-      const p = pts[idx], w = pillW(markers[idx]);
+      const p = pts[idx], w = pillW(banded[idx]);
       if (level === 2) return { x1: p.x - w / 2, x2: p.x + w / 2, y1: p.y + 36, y2: p.y + 56 };
       if (level === 1) return { x1: p.x - w / 2, x2: p.x + w / 2, y1: p.y + 12, y2: p.y + 32 };
       return { x1: p.x + 10, x2: p.x + 10 + w, y1: p.y - 10, y2: p.y + 10 };
     };
-    const boxHit = (a, b) => a.x1 < b.x2 && a.x2 > b.x1 && a.y1 < b.y2 && a.y2 > b.y1;
-    markers.forEach((mk, i) => {
-      if (mk._under !== true) return;
-      const mine = labelBox(i, 1);
-      const clash = markers.some((o, j) => j !== i && boxHit(mine, labelBox(j, o._under ? 1 : 0)));
-      if (clash) mk._under = 2;
+    const coversDot = (idx, level) => {
+      const b = labelBox(idx, level);
+      for (let j = 0; j < banded.length; j++) {
+        if (j === idx) continue;
+        const dx = Math.max(b.x1 - pts[j].x, 0, pts[j].x - b.x2);
+        const dy = Math.max(b.y1 - pts[j].y, 0, pts[j].y - b.y2);
+        if (Math.hypot(dx, dy) < 10) return true;
+      }
+      return false;
+    };
+    banded.forEach((mk, i) => {
+      if (!coversDot(i, 0)) mk._under = false;
+      else if (!coversDot(i, 1)) mk._under = true;
+      else mk._under = 2;
     });
     for (const mk of markers) {
+      /* APOC-V292: a pin shelved in the Pins tray is off the board —
+         it renders nothing and answers nothing until it is dragged
+         back out of the tray. */
+      if (mk.tray) continue;
       /* GM-only markers (mk.gm — Roll20's hidden pins) are not rendered at
          all without GM view; projecting forces player view, so the TV copy
          never sees them either. */
@@ -1966,6 +1985,7 @@ setInterval(loadSharedEntries, 60000);
         if (mk.locked) return;
         if (isProjecting()) { loadMarkers(true); return; }
         const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
+        pinPatch(mk, ["x", "y", "_under"]);
         setStatus(`Saving ${mk.name}'s new position\u2026`);
         const ok = await saveMarkers();
         if (ok) setStatus(`${mk.name} moved \u2014 saved for everybody.`);
@@ -1973,20 +1993,303 @@ setInterval(loadSharedEntries, 60000);
       });
     }
         if (tempPin) layer.addLayer(tempPin);
+    /* APOC-V292: the tray list mirrors the marker array — every
+       redraw keeps its groups and count truthful. */
+    if (typeof renderPinsTray === "function") renderPinsTray();
+  }
+  /* APOC-V292 (2026-11-14): pin subcategories — Shaun's order: the
+     Pins tray groups pins as City / Sky / Non-city (bare markers
+     group separately as "Markers"). The group rides on the pin's own
+     record as `grp`, so a correction is a data edit, never a
+     rebuild. Assignment rule, applied to each place's name + its
+     enriched story: CITY = inside the Bastion's walls (the wards,
+     the Deep and reclaimed levels below them, Dock Ward and the
+     harbor inside its outer lamp); SKY = the place itself is
+     airborne, floating or skyborne (a flying place inside the city
+     is Sky, not City); NON-CITY = everything else on the ground or
+     water of the world — other cities and holds, roads, ruins, the
+     walking Crab Bastion, Shantytown outside the south wall, the
+     Lamp Rock at the harbor's outer edge. The table below is the
+     audited assignment for the 120 placed pins (full list in the
+     v2.92 sweep-report section); deriveGrp falls back to keyword
+     rules for any future pin. */
+  const PIN_GRP292 = {
+    "lp-a-north-ward-mansion-stair": "City",
+    "lp-a-southie-city-block": "City",
+    "lp-building-c": "City",
+    "lp-goner": "Non-city",
+    "lp-hallia": "Non-city",
+    "lp-khaz-barum": "Non-city",
+    "lp-palpiu": "Non-city",
+    "lp-shantytown": "Non-city",
+    "lp-skyhaven": "Sky",
+    "lp-st-james-booze-and-magic": "Sky",
+    "lp-the-abbey-of-two-towers": "Non-city",
+    "lp-the-airship-hall": "City",
+    "lp-the-anchorage-shore": "Non-city",
+    "lp-the-arcade-of-lanterns": "City",
+    "lp-the-arch-city": "Non-city",
+    "lp-the-arch-in-the-woods": "Non-city",
+    "lp-the-athenaeum-stair": "City",
+    "lp-the-black-sail": "Non-city",
+    "lp-the-blue-forest": "Non-city",
+    "lp-the-blue-ice-cave": "Non-city",
+    "lp-the-broken-gate": "Non-city",
+    "lp-the-caged-graves-of-the-city-of-the-dead": "City",
+    "lp-the-camelback": "Non-city",
+    "lp-the-canopy-houses": "Non-city",
+    "lp-the-causeway-line": "Non-city",
+    "lp-the-chained-hands": "Non-city",
+    "lp-the-chateau-of-bare-trees": "Non-city",
+    "lp-the-cinder-reach": "Non-city",
+    "lp-the-city-above-the-weather": "Sky",
+    "lp-the-city-from-a-balloon-basket": "Sky",
+    "lp-the-cliffhouse": "Non-city",
+    "lp-the-crab-bastion": "Non-city",
+    "lp-the-crystal-deep": "Non-city",
+    "lp-the-dead-end-alley": "City",
+    "lp-the-devouring-valley": "Non-city",
+    "lp-the-dragon-road": "Non-city",
+    "lp-the-drowned-temple": "Non-city",
+    "lp-the-drowning-stair": "City",
+    "lp-the-duelists-street": "City",
+    "lp-the-elevator-landing": "City",
+    "lp-the-falls-keep": "Non-city",
+    "lp-the-firestorm-flats": "Non-city",
+    "lp-the-flying-cathedral": "Sky",
+    "lp-the-fog-streets": "City",
+    "lp-the-gilded-cathedral": "City",
+    "lp-the-gilded-crag-temple": "Non-city",
+    "lp-the-gilt-towers": "City",
+    "lp-the-gorge-ruin": "Non-city",
+    "lp-the-gorge-stairs": "Non-city",
+    "lp-the-grand-terminus": "City",
+    "lp-the-graveyard-of-machines": "Non-city",
+    "lp-the-green-columns": "Non-city",
+    "lp-the-harbor-of-the-statue": "City",
+    "lp-the-hate-storm-aftermath": "Non-city",
+    "lp-the-headland-castle": "Non-city",
+    "lp-the-hidden-alchemist": "City",
+    "lp-the-hill-of-two-towers": "Non-city",
+    "lp-the-horologium": "City",
+    "lp-the-house-on-the-rock": "Non-city",
+    "lp-the-inner-steps": "City",
+    "lp-the-iron-insect-stair": "City",
+    "lp-the-ivy-turret": "Non-city",
+    "lp-the-karst-teeth": "Non-city",
+    "lp-the-keening-wall": "Non-city",
+    "lp-the-knights-road": "Non-city",
+    "lp-the-kraken-water": "Non-city",
+    "lp-the-labyrinth-works": "City",
+    "lp-the-lamp-rock": "Non-city",
+    "lp-the-lantern-gate": "Non-city",
+    "lp-the-lantern-lane": "City",
+    "lp-the-lantern-water": "Non-city",
+    "lp-the-linnorms-grave": "Non-city",
+    "lp-the-lion-mountain": "Non-city",
+    "lp-the-long-libraries": "City",
+    "lp-the-lotus-marsh": "Non-city",
+    "lp-the-maw": "Non-city",
+    "lp-the-mirror-lake": "Non-city",
+    "lp-the-moat-castle": "Non-city",
+    "lp-the-monastery-of-the-long-stair": "Non-city",
+    "lp-the-monolith-of-steps": "Non-city",
+    "lp-the-moss-hut": "Non-city",
+    "lp-the-night-reach": "Non-city",
+    "lp-the-night-the-wall-spoke": "City",
+    "lp-the-north-ward-barracks": "City",
+    "lp-the-old-arena": "Non-city",
+    "lp-the-old-giants": "Non-city",
+    "lp-the-organ-temple-the-wooden-nave": "City",
+    "lp-the-outer-canals": "City",
+    "lp-the-pagoda-rock": "City",
+    "lp-the-painted-ruin": "Non-city",
+    "lp-the-pressure-valve": "City",
+    "lp-the-red-door": "City",
+    "lp-the-river-run": "Non-city",
+    "lp-the-rooftop-market": "City",
+    "lp-the-round-keep": "Non-city",
+    "lp-the-ruin-above-the-surf": "Non-city",
+    "lp-the-rune-stones": "Non-city",
+    "lp-the-singing-slot": "Non-city",
+    "lp-the-skull-path": "Non-city",
+    "lp-the-snowbound-village": "Non-city",
+    "lp-the-so-called-dragons-lair": "Non-city",
+    "lp-the-sphere-station": "Sky",
+    "lp-the-spirewood-port": "Non-city",
+    "lp-the-stair-that-argues": "City",
+    "lp-the-statue-cliffs": "Non-city",
+    "lp-the-stave-church-of-the-pass": "Non-city",
+    "lp-the-swimmers-dark": "Non-city",
+    "lp-the-tree-room": "City",
+    "lp-the-turquoise-tower": "Non-city",
+    "lp-the-under-city-caverns": "City",
+    "lp-the-valley-of-the-blimps": "Non-city",
+    "lp-the-vaulted-laboratory": "City",
+    "lp-the-vaulted-way": "City",
+    "lp-the-vermilion-salon": "City",
+    "lp-the-wayside-village": "Non-city",
+    "lp-the-wedge": "City",
+    "lp-the-wheel-isle": "Sky",
+    "lp-the-white-crag": "Non-city",
+    "lp-the-zigga-skyport": "Sky",
+    "lp-vash-nok": "Non-city"
+  };
+  function deriveGrp(mk){
+    if (mk && PIN_GRP292[mk.id]) return PIN_GRP292[mk.id];
+    if (currentMapId === "bastion-city") return "City";
+    const text = ((mk && mk.name) || "") + " " + ((mk && mk.note) || "");
+    if (/skyport|skyhaven|airship|balloon|blimp|dirigible|floating|flying cathedral|sphere station/i.test(text)) return "Sky";
+    if (/north ward|southie|castle ward|dock ward|mid wall|the deep|reclaimed levels|city of the dead/i.test(text)) return "City";
+    return "Non-city";
+  }
+  /* One-time backfill: any place pin (a record carrying pictures)
+     that lacks `grp` gets one — through the same merge-on-save, so
+     the write carries ONLY the grp field of the pins it fills. Once
+     every record carries grp, this never writes again; a group
+     Shaun corrects by hand is never overwritten (only records
+     LACKING grp are filled). */
+  let grpBackfillBusy = false;
+  function maybeBackfillGrp(){
+    if (grpBackfillBusy) return;
+    let filled = 0;
+    for (const mk of markers) {
+      const isPlace = Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length;
+      if (isPlace && !(typeof mk.grp === "string" && mk.grp)) {
+        mk.grp = deriveGrp(mk);
+        pinPatch(mk, ["grp"]);
+        filled++;
+      }
+    }
+    if (filled) {
+      /* One backfill save per page at most until it settles: two
+         loadMarkers calls racing at boot must not each fire one. */
+      grpBackfillBusy = true;
+      saveMarkers().then(() => { grpBackfillBusy = false; }, () => { grpBackfillBusy = false; });
+    }
   }
   async function loadMarkers(quiet){
-    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", markersKey()).maybeSingle();
+    /* In-flight guard (APOC-V292): while this page's own save is
+       unresolved, an incoming refresh is deferred, not applied — it
+       runs once the save chain drains (see saveMarkers). */
+    if (pinSaveActive > 0) { pinLoadDeferred = true; return; }
+    const key = markersKey();
+    if (lastMarkersKey !== key) { pinDirty = new Map(); lastMarkersKey = key; }
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
     if (error) { if (!quiet) setStatus("The shared markers could not be loaded — try again in a few seconds."); return; }
-    markers = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers : [];
+    const incoming = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers : [];
+    /* APOC-V292: GH-PIN-BLINK fix — the 60s poll, the markers-live
+       realtime channel and vtt-live all land here, and the old code
+       replaced the array and rebuilt all 120 marker elements even
+       when nothing had changed (measured: two full churns inside
+       68s of pure idle; every save strobed every other screen). If
+       the incoming array is canonically equal to the one in memory,
+       the DOM is not touched at all. A genuine change still renders
+       exactly once. */
+    if (markersCanonEq(incoming, markers)) { maybeBackfillGrp(); return; }
+    markers = incoming;
     draw();
     setStatus(markers.length ? `${markers.length} shared marker${markers.length === 1 ? "" : "s"} on the table's map — everybody sees the same map.` : "No markers yet — Add marker drops the first one.");
+    maybeBackfillGrp();
   }
-  async function saveMarkers(){
-    const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: markersKey(), value: { markers }, updated_at: new Date().toISOString() },
-      { onConflict: "key" }
-    );
-    return !error;
+  /* APOC-V292 (2026-11-14): GH-PIN-REVERT fix — merge-on-save.
+     saveMarkers() used to upsert the saving page's ENTIRE in-memory
+     markers array: every open page (main screen, Screen 2, TV) holds
+     its own copy, refreshed only by the 60s poll / realtime, so any
+     save from a staler page silently erased newer drags, locks and
+     edits written by fresher pages (hunt of 2026-11-14, probe429 +
+     probe428 P4: convicted on both the drag and the lock route —
+     DATA-LOSS class). Now every mutation site registers exactly what
+     IT changed (pinPatch / pinFull / pinDelete below), and a save
+     re-reads the CURRENT store row, applies only those changes onto
+     it by pin id, and upserts the merged array. A stale page can then
+     only overwrite the pins it actually touched. The {markers:[…]}
+     row shape is unchanged, so every reader (this page, The World at
+     Large, the tracker) is untouched. Saves are serialized on a
+     promise chain, and while any save from THIS page is unresolved,
+     incoming loadMarkers redraws are deferred (the in-flight guard)
+     and applied when the chain drains — a poll landing mid-save can
+     no longer swap the array out from under the saver. */
+  let pinDirty = new Map();
+  let saveChain = Promise.resolve();
+  let pinSaveActive = 0;
+  let pinLoadDeferred = false;
+  let lastMarkersKey = null;
+  function pinPatch(mk, keys){
+    if (!mk || !mk.id) return;
+    let e = pinDirty.get(mk.id);
+    if (e && (e.del || e.record)) return;
+    if (!e) { e = { patch: {} }; pinDirty.set(mk.id, e); }
+    for (const k of keys) e.patch[k] = mk[k];
+  }
+  function pinFull(mk){ if (mk && mk.id) pinDirty.set(mk.id, { record: mk }); }
+  function pinDelete(id){ if (id) pinDirty.set(id, { del: true }); }
+  function pinForget(id){ pinDirty.delete(id); }
+  /* Canonical deep-equal for marker arrays (GH-PIN-BLINK, below):
+     key order is normalized away (JSONB does not promise it), and
+     `_under` is EXCLUDED — it is derived data, recomputed from the
+     stored positions on every draw; the stored copy is dead (the
+     2026-11-14 hunt proved no render path reads it), and comparing
+     it would report a change on every poll forever. */
+  function markersCanonEq(a, b){
+    if (a === b) return true;
+    if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    if (Array.isArray(a)) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (!markersCanonEq(a[i], b[i])) return false;
+      return true;
+    }
+    const ka = Object.keys(a).filter(k => k !== "_under").sort();
+    const kb = Object.keys(b).filter(k => k !== "_under").sort();
+    if (ka.length !== kb.length) return false;
+    for (let i = 0; i < ka.length; i++) {
+      if (ka[i] !== kb[i]) return false;
+      if (!markersCanonEq(a[ka[i]], b[ka[i]])) return false;
+    }
+    return true;
+  }
+  async function saveMarkersNow(key, changes){
+    if (!changes.size) return true;
+    try {
+      const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+      if (rerr) return false;
+      const arr = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers.slice() : [];
+      const idx = new Map();
+      arr.forEach((m, i) => { if (m && m.id && !idx.has(m.id)) idx.set(m.id, i); });
+      for (const [id, ch] of changes) {
+        if (ch.del) { if (idx.has(id)) { arr[idx.get(id)] = null; idx.delete(id); } continue; }
+        if (ch.record) {
+          if (idx.has(id)) arr[idx.get(id)] = ch.record; else arr.push(ch.record);
+          continue;
+        }
+        if (idx.has(id)) Object.assign(arr[idx.get(id)], ch.patch);
+        else { const local = markers.find(m => m.id === id); if (local) arr.push(Object.assign({}, local)); }
+      }
+      const merged = arr.filter(Boolean);
+      const { error } = await db.from(SETTINGS_TABLE).upsert(
+        { key, value: { markers: merged }, updated_at: new Date().toISOString() },
+        { onConflict: "key" }
+      );
+      return !error;
+    } catch (e) { return false; }
+  }
+  function saveMarkers(){
+    const key = markersKey();
+    const changes = pinDirty;
+    pinDirty = new Map();
+    pinSaveActive++;
+    const job = saveChain.then(() => saveMarkersNow(key, changes));
+    saveChain = job.then(() => {}, () => {});
+    return job.then(ok => {
+      pinSaveActive--;
+      if (!pinSaveActive && pinLoadDeferred) { pinLoadDeferred = false; loadMarkers(true); }
+      return ok;
+    }, () => {
+      pinSaveActive--;
+      if (!pinSaveActive && pinLoadDeferred) { pinLoadDeferred = false; loadMarkers(true); }
+      return false;
+    });
   }
   function closeEditor(){ form.hidden = true; editing = null; if (tempPin) { layer.removeLayer(tempPin); tempPin = null; } }
   function openEditor(state){
@@ -2021,7 +2324,7 @@ setInterval(loadSharedEntries, 60000);
        unlocked), so it persists across reloads and devices. The button
        renders in every card presentation because they all share this
        one card element (in-flow, the APOC-V285 docked sheet, floated). */
-    card.innerHTML = `<button type="button" class="btn pc-lock" id="pinLockBtn" aria-pressed="${mk.locked ? "true" : "false"}" title="${mk.locked ? "Position locked — tap to unlock this pin" : "Lock this pin's position"}">${mk.locked ? "\u{1F512}" : "\u{1F513}"}</button><button type="button" class="btn pc-close" id="placeCardClose">Close</button><h4 title="Drag to move this card">${esc(mk.name)}</h4><span class="pr-kind">${esc(mk.kind || "note")}</span>${mk.note ? `<p>${esc(mk.note)}</p>` : ""}<div class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="" data-pin-img="${esc(u)}">`).join("")}</div>${effectiveGm() ? `<div class="map-actions"><button type="button" class="btn" id="pinEditBtn">Edit pin</button></div>` : ""}`;
+    card.innerHTML = `<button type="button" class="btn pc-lock" id="pinLockBtn" aria-pressed="${mk.locked ? "true" : "false"}" title="${mk.locked ? "Position locked — tap to unlock this pin" : "Lock this pin's position"}">${mk.locked ? "\u{1F512}" : "\u{1F513}"}</button><button type="button" class="btn pc-tray" id="pinTrayBtn" title="Take this pin off the board and shelve it in the Pins tray">Move to tray</button><button type="button" class="btn pc-close" id="placeCardClose">Close</button><h4 title="Drag to move this card">${esc(mk.name)}</h4><span class="pr-kind">${esc(mk.kind || "note")}</span>${mk.note ? `<p>${esc(mk.note)}</p>` : ""}<div class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="" data-pin-img="${esc(u)}">`).join("")}</div>${effectiveGm() ? `<div class="map-actions"><button type="button" class="btn" id="pinEditBtn">Edit pin</button></div>` : ""}`;
     card.hidden = false;
     pcRestore();
     $("placeCardClose").addEventListener("click", () => { card.hidden = true; });
@@ -2037,6 +2340,23 @@ setInterval(loadSharedEntries, 60000);
       await togglePinLock(mk);
       const lb = $("pinLockBtn");
       if (lb) { lb.setAttribute("aria-pressed", String(!!mk.locked)); lb.textContent = mk.locked ? "\u{1F512}" : "\u{1F513}"; lb.title = mk.locked ? "Position locked — tap to unlock this pin" : "Lock this pin's position"; }
+    });
+    /* APOC-V292 (2026-11-14): shelve this one pin — the "Move to
+       tray" button sits beside the position lock (same top-left
+       cluster, Shaun's tray order). It flags tray:true on the pin's
+       own record through the merge-on-save (the ONLY field the
+       write carries), closes the card, and the pin leaves the
+       board; the Pins tray lists it under its group, ready to be
+       dragged back out. */
+    $("pinTrayBtn").addEventListener("click", async () => {
+      mk.tray = true;
+      pinPatch(mk, ["tray"]);
+      const ok = await saveMarkers();
+      card.hidden = true;
+      draw();
+      if (typeof renderPinsTray === "function") renderPinsTray();
+      setStatus(ok ? `"${mk.name}" is in the Pins tray — drag it back out whenever you want it on the board.` : "That pin could not be shelved — check the connection and try again.");
+      if (!ok) loadMarkers(true);
     });
     card.querySelectorAll("[data-pin-img]").forEach(im => im.addEventListener("click", () => showPinLightbox(im.getAttribute("data-pin-img"))));
     const eb = $("pinEditBtn");
@@ -2057,6 +2377,7 @@ setInterval(loadSharedEntries, 60000);
     const mk = editing.mk;
     if (!confirm(`Delete the marker "${mk.name}" from the shared map? Everybody will stop seeing it.`)) return;
     markers = markers.filter(x => x.id !== mk.id);
+    pinDelete(mk.id);
     const ok = await saveMarkers();
     if (!ok) { setStatus("That delete didn't go through — try again."); loadMarkers(true); return; }
     closeEditor(); draw(); setStatus(`"${mk.name}" deleted for everybody.`);
@@ -2071,11 +2392,14 @@ setInterval(loadSharedEntries, 60000);
     const imgs = $("markerImgs").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
         const gmOnly = editing.mode === "edit" ? !!editing.mk.gm : false;
     if (editing.mode === "new") {
-      markers.push({ id: newId(), name: title, kind, x: editing.x, y: editing.y, note, imgs, gm: gmOnly });
+      const fresh = { id: newId(), name: title, kind, x: editing.x, y: editing.y, note, imgs, gm: gmOnly };
+      markers.push(fresh);
+      pinFull(fresh);
       const ok = await saveMarkers();
-      if (!ok) { markers.pop(); setStatus("That marker didn't save — check the connection and try again."); return; }
+      if (!ok) { pinForget(fresh.id); markers.pop(); setStatus("That marker didn't save — check the connection and try again."); return; }
     } else {
       Object.assign(editing.mk, { name: title, kind, note, imgs, gm: gmOnly });
+      pinPatch(editing.mk, ["name", "kind", "note", "imgs", "gm"]);
       const ok = await saveMarkers();
       if (!ok) { setStatus("That change didn't save — check the connection and try again."); loadMarkers(true); return; }
     }
@@ -2083,9 +2407,201 @@ setInterval(loadSharedEntries, 60000);
   });
     window.vttMarkers = {
     openEditor, showPinCard, list: () => markers,
-    del: async mk => { markers = markers.filter(x => x.id !== mk.id); const ok = await saveMarkers(); draw(); return ok; },
-    toggleGm: async mk => { mk.gm = !mk.gm; const ok = await saveMarkers(); draw(); return ok; }
+    del: async mk => { markers = markers.filter(x => x.id !== mk.id); pinDelete(mk.id); const ok = await saveMarkers(); draw(); return ok; },
+    toggleGm: async mk => { mk.gm = !mk.gm; pinPatch(mk, ["gm"]); const ok = await saveMarkers(); draw(); return ok; }
   };
+  /* APOC-V292 (2026-11-14): THE PINS TRAY — Shaun's order: a button
+     titled "Pins" that takes ALL the pins off the board into a tray,
+     subcategorized (City / Sky / Non-city; bare markers under
+     "Markers"), alphabetical inside each group, and lets him drag
+     them back out one at a time and place them where he wants.
+     Off-board state is a `tray:true` field on the pin's own record
+     (story, pictures, lock and group all ride along); draw() skips
+     tray pins, so a shelved pin is simply not on the map. Every tray
+     write goes through the merge-on-save above (pinPatch), so taking
+     the whole board or placing one pin can never erase another
+     screen's newer work. The tray panel is a float in the site's
+     standing treatment: movable, resizable, lockable, its geometry
+     kept per device. The Pins chip joins the tab row like every
+     other chip (tabs254 HOME lists it on the left track).
+     Known follow-on, reported to the parent: The World at Large
+     reader does not yet honor `tray` — it keeps showing a shelved
+     pin at its last position until the Maps side is updated. */
+  const PINS_TRAY_KEY = "apocVttPinsTrayV1";
+  let pinsTrayState = { l: 148, t: 64, w: 304, h: 520, locked: false, open: false };
+  try { const savedTray = JSON.parse(localStorage.getItem(PINS_TRAY_KEY) || "null"); if (savedTray && typeof savedTray === "object") pinsTrayState = Object.assign(pinsTrayState, savedTray); } catch (e) {}
+  function pinsTraySave(){ try { localStorage.setItem(PINS_TRAY_KEY, JSON.stringify(pinsTrayState)); } catch (e) {} }
+  const pinsTabBtn = document.createElement("button");
+  pinsTabBtn.id = "pinsTab";
+  pinsTabBtn.className = "btn";
+  pinsTabBtn.type = "button";
+  pinsTabBtn.textContent = "Pins";
+  document.body.appendChild(pinsTabBtn);
+  const pinsTrayEl = document.createElement("section");
+  pinsTrayEl.id = "pinsTray";
+  pinsTrayEl.className = "pins-tray";
+  pinsTrayEl.setAttribute("aria-label", "Pins tray");
+  pinsTrayEl.innerHTML =
+    '<div class="pt-head" id="pinsTrayHead"><span class="pt-title" id="pinsTrayTitle">Pins</span>' +
+    '<button type="button" class="pt-lock" id="pinsTrayLock" aria-pressed="false" title="Lock the tray in place">🔓</button>' +
+    '<button type="button" class="pt-close" id="pinsTrayClose" title="Close the tray">✕</button></div>' +
+    '<div class="pt-actions"><button type="button" class="btn pt-takeall" id="pinsTakeAll">Take all pins off the board</button></div>' +
+    '<div class="pt-list" id="pinsTrayList"></div>' +
+    '<div class="pt-rsz" id="pinsTrayRsz" aria-hidden="true"></div>';
+  document.body.appendChild(pinsTrayEl);
+  const pinsTrayListEl = pinsTrayEl.querySelector("#pinsTrayList");
+  const pinsTrayTitleEl = pinsTrayEl.querySelector("#pinsTrayTitle");
+  const pinsTrayLockBtn = pinsTrayEl.querySelector("#pinsTrayLock");
+  function pinsTrayGroupOf(mk){
+    if (Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) return (typeof mk.grp === "string" && mk.grp) ? mk.grp : deriveGrp(mk);
+    return "Markers";
+  }
+  let pinsTrayLastSig = "";
+  function renderPinsTray(){
+    const shelved = markers.filter(mk => mk.tray);
+    const sig = shelved.map(mk => mk.id + "|" + (mk.locked ? 1 : 0) + "|" + pinsTrayGroupOf(mk) + "|" + (mk.name || "")).join(";");
+    pinsTabBtn.title = shelved.length ? `Pins — ${shelved.length} shelved` : "Pins";
+    if (sig === pinsTrayLastSig && !pinsTrayEl.hidden) return;
+    pinsTrayLastSig = sig;
+    pinsTrayTitleEl.textContent = `Pins — ${shelved.length} shelved`;
+    const groups = new Map();
+    for (const mk of shelved) {
+      const g = pinsTrayGroupOf(mk);
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g).push(mk);
+    }
+    const order = ["City", "Sky", "Non-city", "Markers"];
+    let html = "";
+    for (const g of order) {
+      const arr = groups.get(g);
+      if (!arr || !arr.length) continue;
+      arr.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+      html += `<div class="pt-group" data-grp="${esc(g)}"><div class="pt-ghead">${esc(g)} — ${arr.length}</div>`;
+      for (const mk of arr) html += `<div class="pt-entry" data-pin-id="${esc(mk.id)}" data-name="${esc(mk.name || "Marker")}"><span class="pt-name">${esc(mk.name || "Marker")}</span>${mk.locked ? '<span class="pt-lockbadge" title="Position locked">🔒</span>' : ""}</div>`;
+      html += "</div>";
+    }
+    pinsTrayListEl.innerHTML = html || '<div class="pt-empty">Nothing shelved — every pin is on the board.</div>';
+  }
+  function pinsTrayApply(){
+    pinsTrayEl.style.left = pinsTrayState.l + "px";
+    pinsTrayEl.style.top = pinsTrayState.t + "px";
+    pinsTrayEl.style.width = pinsTrayState.w + "px";
+    pinsTrayEl.style.height = pinsTrayState.h + "px";
+    pinsTrayEl.hidden = !pinsTrayState.open;
+    pinsTrayLockBtn.textContent = pinsTrayState.locked ? "🔒" : "🔓";
+    pinsTrayLockBtn.setAttribute("aria-pressed", pinsTrayState.locked ? "true" : "false");
+    if (pinsTrayState.open) renderPinsTray();
+  }
+  function pinsTrayToggle(force){
+    pinsTrayState.open = typeof force === "boolean" ? force : !pinsTrayState.open;
+    pinsTraySave();
+    pinsTrayApply();
+  }
+  pinsTabBtn.addEventListener("click", () => pinsTrayToggle());
+  pinsTrayEl.querySelector("#pinsTrayClose").addEventListener("click", () => pinsTrayToggle(false));
+  pinsTrayLockBtn.addEventListener("click", () => { pinsTrayState.locked = !pinsTrayState.locked; pinsTraySave(); pinsTrayApply(); });
+  pinsTrayEl.querySelector("#pinsTakeAll").addEventListener("click", async () => {
+    let n = 0;
+    for (const mk of markers) if (!mk.tray) { mk.tray = true; pinPatch(mk, ["tray"]); n++; }
+    if (!n) { setStatus("Every pin is already in the tray."); return; }
+    const ok = await saveMarkers();
+    draw();
+    renderPinsTray();
+    setStatus(ok ? `All ${n} pin${n === 1 ? "" : "s"} are in the tray — drag them back out one at a time to place them.` : "The tray could not be saved — your pins are still on the board; try again in a few seconds.");
+    if (!ok) loadMarkers(true);
+  });
+  /* Drag out of the tray: press an entry and drag — a ghost follows
+     the pointer (mouse or touch); dropping on the map places the
+     pin at the drop point through one merge-save. Esc, or a drop
+     outside the map, cancels with no save at all. A plain click on
+     an entry does nothing. */
+  let ptDrag = null;
+  pinsTrayListEl.addEventListener("pointerdown", (e) => {
+    const entry = e.target.closest(".pt-entry");
+    if (!entry || (e.pointerType === "mouse" && e.button !== 0)) return;
+    const mk = markers.find(m => m.id === entry.dataset.pinId);
+    if (!mk) return;
+    ptDrag = { mk, sx: e.clientX, sy: e.clientY, active: false, ghost: null, cancelled: false };
+    try { entry.setPointerCapture(e.pointerId); } catch (err) {}
+    e.preventDefault();
+  });
+  pinsTrayListEl.addEventListener("pointermove", (e) => {
+    if (!ptDrag) return;
+    if (!ptDrag.active) {
+      if (Math.hypot(e.clientX - ptDrag.sx, e.clientY - ptDrag.sy) < 7) return;
+      ptDrag.active = true;
+      const ghost = document.createElement("div");
+      ghost.className = "pt-ghost";
+      ghost.textContent = ptDrag.mk.name || "Marker";
+      document.body.appendChild(ghost);
+      ptDrag.ghost = ghost;
+    }
+    ptDrag.ghost.style.left = e.clientX + "px";
+    ptDrag.ghost.style.top = e.clientY + "px";
+  });
+  async function ptDragEnd(e, commit){
+    const d = ptDrag;
+    ptDrag = null;
+    if (d && d.ghost) d.ghost.remove();
+    if (!d || !d.active || !commit || d.cancelled) return;
+    const mapEl = document.getElementById("apocMap");
+    if (!mapEl || typeof map === "undefined" || !map) return;
+    const r = mapEl.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+    const p = toXY(map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top)));
+    d.mk.x = Math.round(p.x * 100) / 100;
+    d.mk.y = Math.round(p.y * 100) / 100;
+    d.mk.tray = false;
+    pinPatch(d.mk, ["x", "y", "tray"]);
+    const ok = await saveMarkers();
+    draw();
+    renderPinsTray();
+    setStatus(ok ? `${d.mk.name || "Marker"} placed — it works like any pin now.` : "That pin could not be placed — it is still in the tray; try again in a few seconds.");
+    if (!ok) loadMarkers(true);
+  }
+  pinsTrayListEl.addEventListener("pointerup", (e) => { ptDragEnd(e, true); });
+  pinsTrayListEl.addEventListener("pointercancel", (e) => { ptDragEnd(e, false); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && ptDrag) { ptDrag.cancelled = true; if (ptDrag.ghost) { ptDrag.ghost.remove(); ptDrag.ghost = null; } ptDrag.active = false; }
+  }, true);
+  /* Tray panel move + resize (treatment rules; the lock holds both). */
+  (function(){
+    const head = pinsTrayEl.querySelector("#pinsTrayHead");
+    const rsz = pinsTrayEl.querySelector("#pinsTrayRsz");
+    let mv = null;
+    head.addEventListener("pointerdown", (e) => {
+      if (pinsTrayState.locked || e.target.closest("button")) return;
+      mv = { mode: "move", dx: e.clientX - pinsTrayState.l, dy: e.clientY - pinsTrayState.t };
+      try { head.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    });
+    rsz.addEventListener("pointerdown", (e) => {
+      if (pinsTrayState.locked) return;
+      mv = { mode: "size", sx: e.clientX, sy: e.clientY, w: pinsTrayState.w, h: pinsTrayState.h };
+      try { rsz.setPointerCapture(e.pointerId); } catch (err) {}
+      e.preventDefault();
+    });
+    const onMove = (e) => {
+      if (!mv) return;
+      if (mv.mode === "move") {
+        pinsTrayState.l = Math.max(0, Math.min(window.innerWidth - 80, e.clientX - mv.dx));
+        pinsTrayState.t = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - mv.dy));
+      } else {
+        pinsTrayState.w = Math.max(220, Math.min(window.innerWidth - pinsTrayState.l - 8, mv.w + (e.clientX - mv.sx)));
+        pinsTrayState.h = Math.max(180, Math.min(window.innerHeight - pinsTrayState.t - 8, mv.h + (e.clientY - mv.sy)));
+      }
+      pinsTrayEl.style.left = pinsTrayState.l + "px";
+      pinsTrayEl.style.top = pinsTrayState.t + "px";
+      pinsTrayEl.style.width = pinsTrayState.w + "px";
+      pinsTrayEl.style.height = pinsTrayState.h + "px";
+    };
+    const onUp = () => { if (mv) { mv = null; pinsTraySave(); } };
+    head.addEventListener("pointermove", onMove);
+    head.addEventListener("pointerup", onUp);
+    rsz.addEventListener("pointermove", onMove);
+    rsz.addEventListener("pointerup", onUp);
+  })();
+  pinsTrayApply();
     const PLACES = [
     { n:"Bastion of Last Hope", alias:"Waterdeep", x:11.5, y:19.5, t:"City — one of the four that held", dot:false, d:"Printed as Waterdeep on the canon map — its original name, the City of Splendors. When the APOC hit it became the Bastion of Last Hope, refuge under its mythals, which also bar flying creatures, demons, undead and dragons. Undermountain sprawls below it." },
     { n:"Neverwinter", x:10.8, y:15.3, t:"City", d:"Sword Coast port north of the Bastion, the City of Skilled Hands on the Neverwinter River." },
@@ -8753,7 +9269,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-1638";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-1805";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -19097,6 +19613,28 @@ body.apoc-side251 #phBarStrip{display:none!important}
 })();
 </script>
 
+<style id="APOC-V292-CSS">
+/* APOC-V292 (2026-11-14): Pins tray — a float in the site's standing
+   treatment: movable, resizable, lockable, minimum footprint, the
+   uniform dark high-contrast scheme (no white-on-white). */
+.place-card .pc-tray{float:left;margin:0 8px 2px 0}
+.pins-tray{position:fixed;z-index:1300;display:flex;flex-direction:column;background:rgba(10,12,16,.97);border:1.5px solid #1e40af;border-radius:10px;box-shadow:0 10px 28px rgba(0,0,0,.55);color:#e8ecf3;font:13px/1.35 system-ui,sans-serif;overflow:hidden}
+.pins-tray[hidden]{display:none}
+.pins-tray .pt-head{display:flex;align-items:center;gap:6px;padding:5px 8px;background:rgba(30,64,175,.28);cursor:grab;user-select:none;touch-action:none}
+.pins-tray .pt-title{flex:1 1 auto;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pins-tray .pt-lock,.pins-tray .pt-close{flex:0 0 auto;background:rgba(8,10,14,.85);color:#e8ecf3;border:1px solid #3b4a63;border-radius:6px;padding:1px 7px;cursor:pointer;font-size:12px;line-height:1.5}
+.pins-tray .pt-actions{padding:6px 8px;border-bottom:1px solid #26314a}
+.pins-tray .pt-takeall{width:100%;text-align:center}
+.pins-tray .pt-list{flex:1 1 auto;overflow-y:auto;padding:4px 6px 8px}
+.pins-tray .pt-ghead{margin:8px 2px 3px;font-weight:700;color:#9db8e8;font-size:12px;letter-spacing:.02em}
+.pins-tray .pt-entry{display:flex;align-items:center;gap:6px;padding:3px 8px;margin:1px 0;border:1px solid #26314a;border-radius:6px;background:rgba(255,255,255,.045);cursor:grab;touch-action:none;user-select:none}
+.pins-tray .pt-entry:hover{background:rgba(30,64,175,.35)}
+.pins-tray .pt-name{flex:1 1 auto;color:#eef2f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pins-tray .pt-empty{padding:10px 8px;color:#aeb9c9}
+.pins-tray .pt-rsz{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;touch-action:none}
+.pins-tray .pt-rsz::after{content:"";position:absolute;right:3px;bottom:3px;width:9px;height:9px;border-right:2px solid #5b729e;border-bottom:2px solid #5b729e}
+.pt-ghost{position:fixed;z-index:1400;transform:translate(-50%,-130%);pointer-events:none;background:rgba(10,12,16,.95);border:1.5px solid #1e40af;border-radius:999px;color:#fff;padding:3px 12px;font:600 12px/1.3 system-ui,sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.5);white-space:nowrap}
+</style>
 <style id="APOC-V254-CSS">
 /* APOC-V254 (Shaun, 2026-11-11 16:09-16:10 — "all the buttons can
    move to either side or to the top or bottom and lock off to the
@@ -19176,7 +19714,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
      nests them there). Same migration as V260: their ids drop out of
      any saved tabs254 at the next apply(). */
   var HOME = { mapTab:"L", gmBtn:"L",
-    toolsTab:"L", fogTab:"L", lightTab:"L", drawTab:"L", layersTab:"L", diceTab:"L", grpHead:"L",
+    toolsTab:"L", fogTab:"L", lightTab:"L", drawTab:"L", layersTab:"L", diceTab:"L", grpHead:"L", pinsTab:"L",
     ambBtn:"R", libTab253:"R",
     dmLockBtn:"DM", dmResetTextBtn:"DM", dmExitBtn:"DM" };
   var TABS = Object.keys(HOME);
