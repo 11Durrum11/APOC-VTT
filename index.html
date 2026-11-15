@@ -738,6 +738,11 @@ body.map-expanded .stage-row{display:contents}
 #mapPreview img{display:block;max-width:min(600px,44vw);max-height:60vh;border-radius:6px;background:#111}
 #mapPreview .mp-name{color:#f3e2b3;font-size:.85rem;font-weight:700;padding:6px 2px 0;max-width:600px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
+<style id="APOC-V293L">
+/* APOC-V293L (v2.94): Faerun split-base toggles in the Layers set —
+   same atlas-toggle idiom as Atlas/APOC/Drawings/Tokens. */
+#wordsToggleL293, #cartoucheToggleL293 { white-space: nowrap; }
+</style>
 <style id="APOC-V211-HOLD">
 /* APOC-V211 (Shaun, 2026-11-08 ~03:20): no first-map flash — the map
    panes stay invisible until the saved/current map is the one on the
@@ -940,6 +945,8 @@ body.map-expanded .stage-row{display:contents}
       <label class="atlas-toggle"><input type="checkbox" id="apocToggle" checked> APOC view</label>
       <label class="atlas-toggle"><input type="checkbox" id="drawToggle" checked> Drawings</label>
       <label class="atlas-toggle"><input type="checkbox" id="tokensToggle" checked> Tokens</label>
+      <label class="atlas-toggle" id="wordsToggleL293"><input type="checkbox" id="wordsToggle" checked> Words &amp; Symbols</label>
+      <label class="atlas-toggle" id="cartoucheToggleL293"><input type="checkbox" id="cartoucheToggle" checked> Cartouche</label>
       <button type="button" class="btn" id="rulerBtn" aria-pressed="false">Ruler</button>
       <button type="button" class="btn" id="pingBtn" aria-pressed="false">Ping</button>
       <button type="button" class="btn" id="addTokenBtn">Add token</button>
@@ -1555,7 +1562,7 @@ setInterval(loadSharedEntries, 60000);
   const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
-  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0, wheelPxPerZoomLevel: 240, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false });     for (const [paneName, z] of [["layerMap", 205], ["layerGm", 300], ["layerTokens", 400], ["layerLight", 500], ["layerForeground", 560]]) {
+  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0, wheelPxPerZoomLevel: 240, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false });     for (const [paneName, z] of [["layerBaseLand", 200], ["layerBaseWords", 201], ["layerBaseCart", 202], ["layerMap", 205], ["layerGm", 300], ["layerTokens", 400], ["layerLight", 500], ["layerForeground", 560]]) {
     map.createPane(paneName);
     map.getPane(paneName).style.zIndex = z;
     map.getPane(paneName).style.pointerEvents = "none";
@@ -1566,7 +1573,90 @@ setInterval(loadSharedEntries, 60000);
      frame (phase-corr offset 0.02px, SIFT scale 1.00000), so every pin,
      label band and grid value carries over unchanged. faerun-3e.webp
      stays in the repo as the rollback. */
-  let baseOverlay = L.imageOverlay("assets/maps/faerun-traced.webp", bounds, { pane: "layerMap" }).addTo(map);
+  /* ================= APOC-V293L (v2.94, 2026-11-14): LAYERED FAERUN BASE =================
+     Faerun's base is three stacked image overlays on the SAME bounds —
+     Land (bottom) < Words & Symbols < Cartouche (top) — each on its own
+     pane (200/201/202), all UNDER layerMap (205), so pins, tokens, fog,
+     grid and drawings stay above all three exactly as they did above the
+     single traced base. wordsOn / cartoucheOn persist per map in the
+     vtt settings row through loadVttSettings/saveVttSettings (the
+     gridDark pattern; saveVttSettings always writes the COMPLETE row).
+     Default true when absent = pixel-faithful to the single-base view.
+     Toggling REMOVES/ADDS the Leaflet overlay — a hidden layer
+     contributes no pixels at all. Other maps keep the single overlay;
+     every split helper no-ops when the current map has no layers set. */
+  let wordsOn293 = true, cartoucheOn293 = true, mapOp293 = 1;
+  let wordsOverlay = null, cartoucheOverlay = null;
+  const FAERUN_LAYERS293 = { land: "assets/maps/faerun-land.webp", words: "assets/maps/faerun-words.webp", cartouche: "assets/maps/faerun-cartouche.webp" };
+  function apoc293IsSplit(){ return currentMapId === "faerun"; }
+  function apoc293SyncVis(){
+    try {
+      if (wordsOverlay) { const want = wordsOn293 && apoc293IsSplit(); if (want && !map.hasLayer(wordsOverlay)) wordsOverlay.addTo(map); if (!want && map.hasLayer(wordsOverlay)) map.removeLayer(wordsOverlay); if (want) wordsOverlay.setOpacity(mapOp293); }
+      if (cartoucheOverlay) { const want = cartoucheOn293 && apoc293IsSplit(); if (want && !map.hasLayer(cartoucheOverlay)) cartoucheOverlay.addTo(map); if (!want && map.hasLayer(cartoucheOverlay)) map.removeLayer(cartoucheOverlay); if (want) cartoucheOverlay.setOpacity(mapOp293); }
+    } catch(e) {}
+  }
+  function apoc293SetMapOpacity(op){ mapOp293 = (typeof op === "number" ? op : 1); try { if (wordsOverlay && map.hasLayer(wordsOverlay)) wordsOverlay.setOpacity(mapOp293); if (cartoucheOverlay && map.hasLayer(cartoucheOverlay)) cartoucheOverlay.setOpacity(mapOp293); } catch(e) {} }
+  function apoc293MakeBase(b, srcs){
+    mapOp293 = 1;
+    const land = L.imageOverlay(srcs.land, b, { pane: "layerBaseLand" }).addTo(map);
+    wordsOverlay = L.imageOverlay(srcs.words, b, { pane: "layerBaseWords" });
+    cartoucheOverlay = L.imageOverlay(srcs.cartouche, b, { pane: "layerBaseCart" });
+    apoc293SyncVis();
+    return land;
+  }
+  function apoc293RemoveSplit(){
+    try { if (wordsOverlay && map.hasLayer(wordsOverlay)) map.removeLayer(wordsOverlay); } catch(e) {}
+    try { if (cartoucheOverlay && map.hasLayer(cartoucheOverlay)) map.removeLayer(cartoucheOverlay); } catch(e) {}
+    wordsOverlay = null; cartoucheOverlay = null;
+  }
+  /* Composite texture for the 3D ground (and the clone-stamp sample):
+     land always, words/cartouche when their toggles are on, drawn in
+     stack order onto one canvas — the 3D view therefore shows exactly
+     the 2D split state. Cached per toggle/rotation state. */
+  let compCache293 = {};
+  function apoc293InvalidateComposite(){ compCache293 = {}; }
+  async function apoc293CompositeUrl(rot){
+    const key = (wordsOn293 ? "w1" : "w0") + (cartoucheOn293 ? "c1" : "c0") + "|r" + (rot || 0);
+    if (compCache293[key]) return compCache293[key];
+    const load = src => new Promise((res, rej) => { const im = new Image(); im.crossOrigin = "anonymous"; im.onload = () => res(im); im.onerror = rej; im.src = src; });
+    const parts = [FAERUN_LAYERS293.land]; if (wordsOn293) parts.push(FAERUN_LAYERS293.words); if (cartoucheOn293) parts.push(FAERUN_LAYERS293.cartouche);
+    const imgs = []; for (const src of parts) imgs.push(await load(src));
+    let cv = document.createElement("canvas"); cv.width = 4763; cv.height = 3185;
+    const cx = cv.getContext("2d"); for (const im of imgs) cx.drawImage(im, 0, 0, 4763, 3185);
+    if (rot) cv = rotateCanvasCopy(cv, rot);
+    const url = await new Promise(res => cv.toBlob(b => res(b ? URL.createObjectURL(b) : FAERUN_LAYERS293.land), "image/png"));
+    compCache293[key] = url; return url;
+  }
+  window.__apoc293 = {
+    state: () => ({ wordsOn: wordsOn293, cartoucheOn: cartoucheOn293, split: apoc293IsSplit(), mapOp: mapOp293,
+      land: baseOverlay ? { onMap: map.hasLayer(baseOverlay), nat: (() => { const e = baseOverlay.getElement(); return e ? [e.naturalWidth, e.naturalHeight] : null; })() } : null,
+      words: wordsOverlay ? { onMap: map.hasLayer(wordsOverlay), nat: (() => { const e = wordsOverlay.getElement(); return e ? [e.naturalWidth, e.naturalHeight] : null; })() } : null,
+      cartouche: cartoucheOverlay ? { onMap: map.hasLayer(cartoucheOverlay), nat: (() => { const e = cartoucheOverlay.getElement(); return e ? [e.naturalWidth, e.naturalHeight] : null; })() } : null,
+      panes: ["layerBaseLand", "layerBaseWords", "layerBaseCart"].map(n => { const pn = map.getPane(n); return pn ? Number(pn.style.zIndex) : null; }) }),
+    setWords: v => { wordsOn293 = !!v; const t = $("wordsToggle"); if (t) t.checked = wordsOn293; apoc293InvalidateComposite(); apoc293SyncVis(); },
+    setCartouche: v => { cartoucheOn293 = !!v; const t = $("cartoucheToggle"); if (t) t.checked = cartoucheOn293; apoc293InvalidateComposite(); apoc293SyncVis(); },
+    compositeUrl: () => apoc293CompositeUrl(mapRot || 0)
+  };
+  /* Toggle wiring — checkbox idiom identical to gridToggle: flip state,
+     repaint at once, persist through the one settings writer. */
+  $("wordsToggle").addEventListener("change", async ev => { wordsOn293 = !!ev.target.checked; apoc293InvalidateComposite(); apoc293SyncVis(); const ok = await saveVttSettings(); tokenStatusEl.textContent = ok ? `Words & Symbols ${wordsOn293 ? "shown" : "hidden"}.` : "Words & Symbols didn't save — try again."; });
+  $("cartoucheToggle").addEventListener("change", async ev => { cartoucheOn293 = !!ev.target.checked; apoc293InvalidateComposite(); apoc293SyncVis(); const ok = await saveVttSettings(); tokenStatusEl.textContent = ok ? `Cartouche ${cartoucheOn293 ? "shown" : "hidden"}.` : "Cartouche didn't save — try again."; });
+  /* Layers-set placement + per-map visibility: the ctl-sets builder runs
+     in a later script block, so poll for #set-layers and move the two
+     labels into it; they show only while Faerun (the only split map) is
+     current — mapSelect is the public signal for that. */
+  setInterval(() => {
+    try {
+      const set = document.getElementById("set-layers");
+      const wL = $("wordsToggleL293"), cL = $("cartoucheToggleL293");
+      if (set && wL && wL.parentNode !== set) set.appendChild(wL);
+      if (set && cL && cL.parentNode !== set) set.appendChild(cL);
+      const isF = !$("mapSelect") || $("mapSelect").value === "faerun";
+      if (wL) wL.style.display = isF ? "" : "none";
+      if (cL) cL.style.display = isF ? "" : "none";
+    } catch(e) {}
+  }, 700);
+  let baseOverlay = apoc293MakeBase(bounds, FAERUN_LAYERS293);
   try { applyMapLayerVis(); } catch(e) {}   map.fitBounds([[MH * (1 - 0.34), MW * 0.02], [MH * (1 - 0.005), MW * 0.38]]);
   map.setMaxBounds([[-MH, -MW], [MH * 2, MW * 2]]);   const layer = L.layerGroup().addTo(map);
   const veilLayer = L.layerGroup().addTo(map);
@@ -3217,6 +3307,10 @@ setInterval(loadSharedEntries, 60000);
       gridOY = Number(data.value.gridOY) || 0;
       const gdIn = Number(data.value.gridDark);
       gridDark = (gdIn >= 0 && gdIn <= 100) ? gdIn : 0;
+      if (typeof data.value.wordsOn === "boolean") wordsOn293 = data.value.wordsOn;
+      if (typeof data.value.cartoucheOn === "boolean") cartoucheOn293 = data.value.cartoucheOn;
+      { const wT = $("wordsToggle"); if (wT) wT.checked = wordsOn293; const cT = $("cartoucheToggle"); if (cT) cT.checked = cartoucheOn293; }
+      try { apoc293InvalidateComposite(); apoc293SyncVis(); } catch(e) {}
       if (document.activeElement !== $("gridDark")) $("gridDark").value = gridDark;
       syncGridSize295();   /* APOC-V295: size slider follows the loaded cell */
       if (document.activeElement !== $("scaleFeet")) $("scaleFeet").value = scaleInputVal();
@@ -3227,7 +3321,7 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveVttSettings(){
     const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot, cell: gridCellOverride, gridOX, gridOY, gridDark }, updated_at: new Date().toISOString() },
+      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot, cell: gridCellOverride, gridOX, gridOY, gridDark, wordsOn: wordsOn293, cartoucheOn: cartoucheOn293 }, updated_at: new Date().toISOString() },
       { onConflict: "key" }
     );
     return !error;
@@ -3771,7 +3865,7 @@ setInterval(loadSharedEntries, 60000);
     if (!drawLayers.some(l => l.id === "fg")) drawLayers.push({ id: "fg", name: "Foreground", gm: false, hidden: false });
     if (!drawLayers.some(l => l.id === "map")) drawLayers.push({ id: "map", name: "Map", gm: false, hidden: false, opacity: 1 });   }
     function applyMapLayerVis(){
-    try { const def = drawLayers.find(l => l.id === "map"); if (!def || !baseOverlay) return; baseOverlay.setOpacity(def.hidden ? 0 : (typeof def.opacity === "number" ? def.opacity : 1)); } catch(e) {}
+    try { const def = drawLayers.find(l => l.id === "map"); if (!def || !baseOverlay) return; const op293 = def.hidden ? 0 : (typeof def.opacity === "number" ? def.opacity : 1); baseOverlay.setOpacity(op293); try { apoc293SetMapOpacity(op293); } catch(e) {} } catch(e) {}
   }
   function buildLayerUi(){
     ensureLayerDefs();
@@ -4557,7 +4651,7 @@ setInterval(loadSharedEntries, 60000);
   setInterval(() => { loadDice(true); loadInit(true); }, 30000);
 
     const MAPS = {
-    faerun: { name: "Faerûn — World Map", img: "assets/maps/faerun-traced.webp", w: 4763, h: 3185, cell: 60 },
+    faerun: { name: "Faerûn — World Map", img: "assets/maps/faerun-land.webp", w: 4763, h: 3185, cell: 60, layers: { land: "assets/maps/faerun-land.webp", words: "assets/maps/faerun-words.webp", cartouche: "assets/maps/faerun-cartouche.webp" } },
     "saint-james": { name: "Arcanic Rendez-Vous — Saint James's floors", img: "assets/maps/saint-james-floors.webp", w: 1662, h: 1077, cell: 50 }
   };
   const ACTIVE_KEY = "vtt_active";
@@ -4568,7 +4662,8 @@ setInterval(loadSharedEntries, 60000);
     mapRot = 0;     MW = def.w; MH = def.h; CELL = def.cell;
     bounds = [[0, 0], [MH, MW]];
     map.setMaxBounds([[-MH, -MW], [MH * 2, MW * 2]]);     map.removeLayer(baseOverlay);
-    baseOverlay = L.imageOverlay(def.img, bounds, { pane: "layerMap" }).addTo(map);
+    apoc293RemoveSplit();
+    if (def.layers) { baseOverlay = apoc293MakeBase(bounds, def.layers); } else { baseOverlay = L.imageOverlay(def.img, bounds, { pane: "layerMap" }).addTo(map); }
     try { applyMapLayerVis(); } catch(e) {}     baseOverlay.bringToBack();
     drawVeil();
     $("mapSelect").value = id;
@@ -4619,6 +4714,20 @@ setInterval(loadSharedEntries, 60000);
     cx.drawImage(src, -src.width / 2, -src.height / 2);
     return cv;
   }
+  async function rotatedSrcUrl293(src, keyExtra){
+    if (!mapRot) return src;
+    const key = currentMapId + "|" + keyExtra + "|" + mapRot;
+    if (rotImgCache.has(key)) return rotImgCache.get(key);
+    const resp = await fetch(src);
+    const blob = await resp.blob();
+    const bmp = await createImageBitmap(blob);
+    const cv = rotateCanvasCopy(bmp, mapRot);
+    if (bmp.close) bmp.close();
+    const out = await new Promise(res => cv.toBlob(res, blob.type || "image/png"));
+    const url = URL.createObjectURL(out || blob);
+    rotImgCache.set(key, url);
+    return url;
+  }
   async function rotatedMapUrl(def){
     if (!mapRot) return def.img;
     const key = currentMapId + "|" + mapRot;
@@ -4640,7 +4749,13 @@ setInterval(loadSharedEntries, 60000);
     map.setMaxBounds([[-frameH(), -frameW()], [frameH() * 2, frameW() * 2]]);     if (def) {
       let url = def.img;
       try { url = await rotatedMapUrl(def); } catch(e) { url = def.img; }
-      if (idAtStart !== currentMapId || rotAtStart !== mapRot) return;       if (baseOverlay._url !== url) {
+      if (idAtStart !== currentMapId || rotAtStart !== mapRot) return;       if (def.layers) {
+        const lu = await rotatedSrcUrl293(def.layers.land, "land"), wu = await rotatedSrcUrl293(def.layers.words, "words"), cu = await rotatedSrcUrl293(def.layers.cartouche, "cartouche");
+        if (idAtStart !== currentMapId || rotAtStart !== mapRot) return;
+        map.removeLayer(baseOverlay); apoc293RemoveSplit();
+        baseOverlay = apoc293MakeBase(bounds, { land: lu, words: wu, cartouche: cu });
+        try { applyMapLayerVis(); } catch(e) {}         baseOverlay.bringToBack();
+      } else if (baseOverlay._url !== url) {
         map.removeLayer(baseOverlay);
         baseOverlay = L.imageOverlay(url, bounds, { pane: "layerMap" }).addTo(map);
         try { applyMapLayerVis(); } catch(e) {}         baseOverlay.bringToBack();
@@ -5227,7 +5342,7 @@ setInterval(loadSharedEntries, 60000);
     const x = c.getContext("2d");
     try {
       const def = MAPS[currentMapId];
-      const im = await loadCanvasImage(def.img);
+      const im = await loadCanvasImage(def.layers ? await apoc293CompositeUrl(0) : def.img);
       const tc = document.createElement("canvas");
       tc.width = w; tc.height = h;
       const tx = tc.getContext("2d");
@@ -9024,7 +9139,8 @@ function floorConnected(L, cols, rows){
       cv.getContext("2d").drawImage(gim, 0, 0, cv.width, cv.height);
       groundMat.map = new THREE.CanvasTexture(cv); groundMat.color.set(0xffffff); groundMat.needsUpdate = true;
     };
-        if (TD.rot) { rotatedMapUrl(def).then(u => { if (TD.root === rootRef) gim.src = u || def.img; }); }
+        if (def.layers) { apoc293CompositeUrl(TD.rot || 0).then(u => { if (TD.root === rootRef) gim.src = u || def.img; }).catch(() => { if (TD.root === rootRef) gim.src = def.img; }); }
+    else if (TD.rot) { rotatedMapUrl(def).then(u => { if (TD.root === rootRef) gim.src = u || def.img; }); }
     else gim.src = def.img;
     if (gridOn) {
       const pts = [];
@@ -9445,7 +9561,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-2155";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-2341";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
