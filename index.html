@@ -926,6 +926,7 @@ body.map-expanded .stage-row{display:contents}
         </select>
       </div>
       <span class="field" style="flex:0 1 auto"><label for="gridDark">Grid darkness</label><input id="gridDark" type="range" min="0" max="100" step="1" value="0" style="width:110px" aria-label="Grid darkness"></span>
+      <span class="field" style="flex:0 1 auto"><label for="gridSize">Grid size</label><input id="gridSize" type="range" min="10" max="300" step="1" value="60" style="width:110px" aria-label="Grid size"><span class="muted small" id="gridSizeVal">60 px</span></span><!-- APOC-V295 -->
       <button type="button" class="btn" id="calibBtn" aria-pressed="false">Calibrate grid</button>
       <button type="button" class="btn" id="calibResetBtn">Reset calibration</button>
       <span class="muted small" id="calibStatus"></span>
@@ -3028,6 +3029,40 @@ setInterval(loadSharedEntries, 60000);
     const ok = await saveVttSettings();
     tokenStatusEl.textContent = ok ? `Grid darkness: ${gridDark}%.` : "Grid darkness didn't save — try again.";
   });
+
+  /* APOC-V295 (2026-11-14): grid SIZE slider — Shaun: "have a slide
+     bar dictate the size of the squares and or hexes. for the map."
+     The slider drives the SAME per-map `cell` the v2.70 calibration
+     solves for: it writes gridCellOverride, so cellNow() — which
+     feeds the square spacing, the hex radius (cellNow * 0.575),
+     token snapping and the ruler — follows at once, live on
+     "input"; "change" persists through the one settings writer
+     (saveVttSettings, full row shape). gridOX/gridOY are never
+     touched here, and neither are feetPerSquare / the scale
+     control: this slider dictates square/hex SIZE only. The
+     slider shows the effective size (the stored cell, else the
+     map's own CELL); a calibrated size outside the 10..300 range
+     pins the thumb at the end while the readout still shows the
+     true size. syncGridSize295() is called from loadVttSettings
+     (boot, map switch, reload) and from applyCalib (the slider
+     sits at the solved size). */
+  function syncGridSize295(){
+    const el = $("gridSize"); if (!el) return;
+    const c = Math.round(cellNow());
+    if (document.activeElement !== el) el.value = Math.max(10, Math.min(300, c));
+    const v = $("gridSizeVal"); if (v) v.textContent = c + " px";
+  }
+  $("gridSize").addEventListener("input", () => {
+    gridCellOverride = Math.max(10, Math.min(300, Math.round(Number($("gridSize").value) || 0)));
+    const v = $("gridSizeVal"); if (v) v.textContent = gridCellOverride + " px";
+    drawGrid();
+  });
+  $("gridSize").addEventListener("change", async () => {
+    gridCellOverride = Math.max(10, Math.min(300, Math.round(Number($("gridSize").value) || 0)));
+    drawGrid();
+    const ok = await saveVttSettings();
+    tokenStatusEl.textContent = ok ? `Grid size: ${gridCellOverride} px per ${gridType === "hex" ? "hex" : "square"}.` : "Grid size didn't save — try again.";
+  });
   function scaleInputVal(){ return scaleUnit === "mi" ? Math.round(feetPerSquare / 5280 * 100) / 100 : feetPerSquare; }
   async function loadVttSettings(quiet){
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", vttKey()).maybeSingle();
@@ -3044,6 +3079,7 @@ setInterval(loadSharedEntries, 60000);
       const gdIn = Number(data.value.gridDark);
       gridDark = (gdIn >= 0 && gdIn <= 100) ? gdIn : 0;
       if (document.activeElement !== $("gridDark")) $("gridDark").value = gridDark;
+      syncGridSize295();   /* APOC-V295: size slider follows the loaded cell */
       if (document.activeElement !== $("scaleFeet")) $("scaleFeet").value = scaleInputVal();
       $("scaleUnit").value = scaleUnit;
       $("gridType").value = gridType;
@@ -3535,6 +3571,7 @@ setInterval(loadSharedEntries, 60000);
   async function applyCalib(cell, ox, oy){
     gridCellOverride = cell || 0; gridOX = ox || 0; gridOY = oy || 0;
     drawGrid();
+    syncGridSize295();   /* APOC-V295: size slider sits at the solved size */
     const ok = await saveVttSettings();
     calibStatus(ok ? (gridCellOverride > 0 ? `Grid calibrated: ${gridCellOverride} units per ${gridType === "hex" ? "hex" : "square"}; the grid, the ruler and token snapping all follow it.` : "Calibration cleared — the map's own grid rules again.") : "Calibration didn't save — try again.");
   }
@@ -9269,7 +9306,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-1922";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-2004";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -10392,7 +10429,7 @@ function floorConnected(L, cols, rows){
   var rowSearch = rows[0], rowGrid = rows[1], rowDraw = rows[4], rowLayers = rows[5], rowGen = rows[6];
 
     [fieldOf($("placeSearch")), fieldOf($("mapSelect")), $("mapExpandBtn"), $("fsBtn"), $("view3dBtn"),
-   fieldOf($("gridToggle")), fieldOf($("gridType")), fieldOf($("gridDark")), fieldOf($("scaleFeet"))].forEach(function (el) {
+   fieldOf($("gridToggle")), fieldOf($("gridType")), fieldOf($("gridDark")), fieldOf($("gridSize")), fieldOf($("scaleFeet"))].forEach(function (el) { /* APOC-V295: gridSize field joins the Map set beside gridDark */
     if (el) sets.map.appendChild(el);
   });
     [$("markerForm"), $("placeForm")].forEach(function (el) {
