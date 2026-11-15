@@ -1922,6 +1922,17 @@ setInterval(loadSharedEntries, 60000);
        the label box. */
     const banded = markers.filter(mk => !mk.tray && (atlasShown() || !mk.atlas)); /* APOC-V296: atlas pins hidden by their toggle take no part in banding either */
     const pts = banded.map(mk => ({ x: frameW() * (mk.x / 100) * REF_S, y: frameH() * (1 - mk.y / 100) * REF_S }));
+    /* APOC-V303 (v3.03, 2026-11-15): UNIVERSAL PIN LOOK — Shaun's
+       standing rule "all pins on all maps look the same universally."
+       On maps whose places are not pins (every map but Faerun) the
+       places now render AS pins through the same icon factory
+       (drawPlaces + placeBandLevel, below), so their dots join this
+       banding as obstacles: one beside-first label rule for every dot
+       on the map, whichever store the dot came from. Faerun never
+       reaches this (its places are pins already and `places` stays
+       empty there), so the Faerun label census is untouched. */
+    const obstaclePts = pts.slice();
+    if (currentMapId !== "faerun") for (const p of places) obstaclePts.push({ x: frameW() * (p.x / 100) * REF_S, y: frameH() * (1 - p.y / 100) * REF_S });
     const pillW = mk => 40 + (String(mk.name || "").length * 6.3);
     markers.forEach(mk => { mk._under = false; });
     const labelBox = (idx, level) => {
@@ -1932,10 +1943,10 @@ setInterval(loadSharedEntries, 60000);
     };
     const coversDot = (idx, level) => {
       const b = labelBox(idx, level);
-      for (let j = 0; j < banded.length; j++) {
+      for (let j = 0; j < obstaclePts.length; j++) { /* APOC-V303: obstacles = banded marker dots + (non-Faerun) place dots; a marker's own dot sits at index idx */
         if (j === idx) continue;
-        const dx = Math.max(b.x1 - pts[j].x, 0, pts[j].x - b.x2);
-        const dy = Math.max(b.y1 - pts[j].y, 0, pts[j].y - b.y2);
+        const dx = Math.max(b.x1 - obstaclePts[j].x, 0, obstaclePts[j].x - b.x2);
+        const dy = Math.max(b.y1 - obstaclePts[j].y, 0, obstaclePts[j].y - b.y2);
         if (Math.hypot(dx, dy) < 10) return true;
       }
       return false;
@@ -3038,18 +3049,48 @@ setInterval(loadSharedEntries, 60000);
         maps the GM adds a place at any spot (Add place, then tap the
         map); places render as atlas-style dots, the GM can drag them
         to nudge, click one (GM view) to edit or delete it, and the TV
-        display copy shows them read-only like the atlas dots. ---- */
+        display copy shows them read-only like the atlas dots.
+        APOC-V303 (v3.03, 2026-11-15) SUPERSEDES the atlas-style dot:
+        under the universal pin look the places render through the
+        same pin factory as every marker (placeBandLevel below) —
+        same dot, same name pill, same beside-first banding, same
+        34px hit disc. Their data, drag and click behaviour are
+        unchanged; only the rendering is unified. ---- */
   const placesKey = () => `vtt_places_${currentMapId}`;
   let places = [];
   let editingPlace = null, tempPlacePin = null;
   const placesLayer = L.layerGroup().addTo(map);
   const placeForm = $("placeForm");
   function currentPlaces(){ return currentMapId === "faerun" ? PLACES.filter(p => p.dot === false) : places; } /* APOC-V296: the dotted atlas places are pins now and surface as marker hits; only the search-only residue stays here, so each migrated place is returned exactly once */
+  /* APOC-V303 (v3.03, 2026-11-15): UNIVERSAL PIN LOOK — a place on a
+     non-Faerun map takes its label band from the SAME beside-first
+     rule (APOC-V292) in the SAME fixed reference space as draw():
+     beside the dot unless the beside pill would cover another dot
+     on this map — a place dot or a marker dot — then one band
+     below, then two. Returns iconFor's `under` value (false/true/2),
+     exactly as draw() assigns mk._under. */
+  function placeBandLevel(p){
+    const REF_S = Math.pow(2, 0.75);
+    const px = frameW() * (p.x / 100) * REF_S, py = frameH() * (1 - p.y / 100) * REF_S;
+    const w = 40 + (String(p.n || "").length * 6.3);
+    const obs = [];
+    for (const q of places) { if (q !== p) obs.push({ x: frameW() * (q.x / 100) * REF_S, y: frameH() * (1 - q.y / 100) * REF_S }); }
+    for (const mk of markers) { if (mk.tray) continue; if (mk.atlas && !atlasShown()) continue; obs.push({ x: frameW() * (mk.x / 100) * REF_S, y: frameH() * (1 - mk.y / 100) * REF_S }); }
+    const box = level => level === 2 ? { x1: px - w / 2, x2: px + w / 2, y1: py + 36, y2: py + 56 } : level === 1 ? { x1: px - w / 2, x2: px + w / 2, y1: py + 12, y2: py + 32 } : { x1: px + 10, x2: px + 10 + w, y1: py - 10, y2: py + 10 };
+    const covers = level => { const b = box(level); for (const o of obs) { const dx = Math.max(b.x1 - o.x, 0, o.x - b.x2); const dy = Math.max(b.y1 - o.y, 0, o.y - b.y2); if (Math.hypot(dx, dy) < 10) return true; } return false; };
+    if (!covers(0)) return false;
+    if (!covers(1)) return true;
+    return 2;
+  }
   function drawPlaces(){
     placesLayer.clearLayers();
     if (currentMapId === "faerun") return;
     for (const p of places) {
-      const dot = L.marker(toLatLng(p.x, p.y), { pane: "layerMap", draggable: !isProjecting() && effectiveGm(), icon: L.divIcon({ className: "atlas-icon", html: '<span class="atlas-dot"></span>', iconSize: [10, 10], iconAnchor: [5, 5] }), keyboard: false }).addTo(placesLayer);
+      /* APOC-V303: the place renders through the canonical pin
+         factory — the place-pin look (16px dot + name pill), not the
+         retired 10px atlas dot. Click/drag behaviour below is the
+         pre-V303 behaviour, untouched. */
+      const dot = L.marker(toLatLng(p.x, p.y), { pane: "layerMap", draggable: !isProjecting() && effectiveGm(), icon: iconFor("place", p.n, false, placeBandLevel(p), false), keyboard: false }).addTo(placesLayer);
       dot.on("click", () => {
         if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
         if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
@@ -3067,8 +3108,14 @@ setInterval(loadSharedEntries, 60000);
     if (currentMapId === "faerun") { places = []; drawPlaces(); refreshPlaceUI(); return; }
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", placesKey()).maybeSingle();
     if (error) { if (!quiet) setStatus("This map's places could not be loaded — try again in a few seconds."); return; }
+    const prevPlacesJson = JSON.stringify(places);
     places = (data && data.value && Array.isArray(data.value.places)) ? data.value.places : [];
     drawPlaces();
+    /* APOC-V303: place dots are banding obstacles for the markers
+       now — when the place set actually changed, re-band the markers
+       against it. Unchanged polls skip the redraw entirely (no new
+       churn on the 60s cycle). */
+    if (JSON.stringify(places) !== prevPlacesJson) { try { draw(); } catch (e) {} }
     refreshPlaceUI();
   }
   async function savePlaces(){
@@ -9641,7 +9688,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-1346";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-1507";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
