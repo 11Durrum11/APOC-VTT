@@ -2295,6 +2295,7 @@ setInterval(loadSharedEntries, 60000);
   let atlasFlagIds = null; /* null until the flag row has been read */
   let atlasFlagChain = Promise.resolve();
   let atlasMigrateBusy = false;
+  let atlasAppendDone = false; /* APOC-V299: session latch — a page session may APPEND atlas pins at most once (see maybeMigrateAtlas) */
   function atlasSlug(name){
     return "atlas-" + String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   }
@@ -2343,43 +2344,54 @@ setInterval(loadSharedEntries, 60000);
     return job.then(settle, () => settle(false));
   }
   async function maybeMigrateAtlas(){
-    if (currentMapId !== "faerun" || atlasMigrateBusy) return;
+    if (currentMapId !== "faerun" || atlasMigrateBusy || atlasAppendDone) return;
     atlasMigrateBusy = true;
     try {
       const flagSet = new Set(await atlasLoadFlag());
       const have = new Map();
       for (const m of markers) if (m && m.id && !have.has(m.id)) have.set(m.id, m);
-      /* Deterministic ids: PLACES order, name slugs; a slug already
-         claimed by a DIFFERENT name (an existing record or an
-         earlier PLACES entry) is suffixed -2, -3, ... — the shipped
-         PLACES carry no collisions (56 unique names, verified), so
-         the suffix path is defensive only. */
-      const claimed = new Map();
-      for (const [id, m] of have) claimed.set(id, m.name || "");
-      /* Flag ids deliberately do NOT claim slugs here: a deleted
-         atlas pin's id lives in the flag (so it is never
-         resurrected — the fresh filter below excludes it), but if
-         the flag claimed its slug under a null name, the collision
-         check would read its own place as claimed by a stranger
-         and mint a suffixed "fresh" duplicate on every boot —
-         the runaway this note guards against. */
+      /* APOC-V299: identity of an atlas place is its canonical slug
+         id + the atlas:true plumbing on its record + the migration
+         flag — NEVER its current name. The v2.96 code keyed its
+         collision check on names: rename an atlas pin (or let two
+         screens diverge on its name) and its own slug read as
+         "claimed by a stranger", so the migration minted a suffixed
+         duplicate whose save re-triggered loadMarkers, which minted
+         the next suffix — an unbounded duplicate loop (convicted on
+         the live v2.97/v2.98 bytes: 235 marker POSTs in ~78s). Ids
+         are now a pure function of PLACES — the suffix resolves
+         only collisions WITHIN PLACES itself (the shipped PLACES
+         carry none: 56 unique names, verified) — and a place counts
+         as already-pinned when the flag lists its id OR a record
+         carrying that id + atlas:true is on the board, whatever
+         that record is named today. */
+      const assigned = new Set();
       const dotted = [];
       for (const p of PLACES) {
         if (p.dot === false) continue;
         let id = atlasSlug(p.n);
-        if (claimed.has(id) && claimed.get(id) !== p.n) { let n2 = 2; while (claimed.has(id + "-" + n2)) n2++; id = id + "-" + n2; }
-        claimed.set(id, p.n);
+        if (assigned.has(id)) { let n2 = 2; while (assigned.has(id + "-" + n2)) n2++; id = id + "-" + n2; }
+        assigned.add(id);
         dotted.push({ p, id });
       }
-      const fresh = dotted.filter(d => !have.has(d.id) && !flagSet.has(d.id));
+      const fresh = dotted.filter(d => {
+        if (flagSet.has(d.id)) return false;
+        const m = have.get(d.id);
+        return !(m && m.atlas);
+      });
       if (fresh.length) {
+        /* APOC-V299: latch BEFORE the append attempt — this session
+           appends at most once, even if the save fails; a failed
+           seeding is retried by the next full page load, never by
+           a loadMarkers the save itself triggers. */
+        atlasAppendDone = true;
         const records = fresh.map(d => {
           const rec = { id: d.id, kind: "place", name: d.p.n, note: d.p.d || "", x: d.p.x, y: d.p.y, gm: false, imgs: [], atlas: true, t: d.p.t || "" };
           rec.grp = deriveGrp(rec);
           return rec;
         });
         const ok = await saveAtlasPins(records);
-        if (!ok) return; /* a later loadMarkers retries */
+        if (!ok) return; /* APOC-V299: latched — the next full page load retries, not a later loadMarkers */
         /* Flag every dotted id that is now accounted for: already on
            the board, already flagged, or just appended. A deleted
            atlas pin's id stays in the flag (it was appended once),
@@ -2395,7 +2407,7 @@ setInterval(loadSharedEntries, 60000);
          between the two saves of an earlier migration). */
       const missing = dotted.filter(d => have.has(d.id) && !flagSet.has(d.id)).map(d => d.id);
       if (missing.length) await atlasSaveFlag([...flagSet, ...missing]);
-    } catch (e) { /* best-effort per load; the next loadMarkers retries */ }
+    } catch (e) { /* best-effort per load; flag reads/self-heal retry on the next loadMarkers, appends on the next full load (APOC-V299 latch) */ }
     finally { atlasMigrateBusy = false; }
   }
   async function loadMarkers(quiet){
@@ -9574,7 +9586,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-0213";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-0309";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
