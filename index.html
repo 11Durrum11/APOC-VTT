@@ -655,6 +655,9 @@ body.displaying .td-ui{display:none}
 #zoomBar input[type=range]{width:148px;height:22px;accent-color:#d8b25a;cursor:pointer;margin:0}
 #zoomBar .zb-pinch{display:flex;align-items:center;gap:4px;font-size:.68rem;font-weight:700;letter-spacing:.05em;color:#cfd3da;cursor:pointer;user-select:none;-webkit-user-select:none;white-space:nowrap}
 #zoomBar .zb-pinch input{width:15px;height:15px;margin:0;accent-color:#d8b25a;cursor:pointer;flex:none}
+#zoomBar .zb-step{width:22px;height:22px;flex:none;padding:0;margin:0;background:rgba(38,44,58,.9);border:1px solid hsl(222 18% 34%);border-radius:6px;color:#e8ecf2;font-size:15px;font-weight:700;line-height:1;cursor:pointer}
+#zoomBar .zb-step:active{background:rgba(64,74,96,.95)}
+#zoomBar #zoomReadout{min-width:42px;text-align:right;font-size:.7rem;font-weight:700;color:#cfd3da;font-variant-numeric:tabular-nums;white-space:nowrap}
 body.displaying #zoomBar{display:none !important}
 #mapPanel:fullscreen #zoomBar{display:none !important}
 .map-stage:fullscreen #zoomBar{display:none !important}
@@ -802,7 +805,10 @@ body.map-expanded .stage-row{display:contents}
         </div>
         <div id="zoomBar" hidden>
           <div class="zb-grip" id="zoomBarGrip" title="Drag to move the zoom bar">ZOOM</div>
-          <input type="range" id="zoomSlider" min="-2" max="3" step="0.25" value="0" aria-label="Map zoom">
+          <button type="button" class="zb-step" id="zoomOutBtn" title="Zoom out" aria-label="Zoom out">−</button>
+          <input type="range" id="zoomSlider" min="-2" max="3" step="0.01" value="0" aria-label="Map zoom">
+          <button type="button" class="zb-step" id="zoomInBtn" title="Zoom in" aria-label="Zoom in">+</button>
+          <span id="zoomReadout" title="Current scale (100% = zoom 0)">100%</span>
           <label class="zb-pinch" title="Pinch zoom on/off — two-finger pinch, double-tap and mouse-wheel zoom. The slider always zooms."><input type="checkbox" id="zoomPinchChk"> Pinch</label>
         </div>
       </div>
@@ -1548,7 +1554,7 @@ setInterval(loadSharedEntries, 60000);
   const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
-  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0.25, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false });     for (const [paneName, z] of [["layerMap", 205], ["layerGm", 300], ["layerTokens", 400], ["layerLight", 500], ["layerForeground", 560]]) {
+  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0, wheelPxPerZoomLevel: 240, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false });     for (const [paneName, z] of [["layerMap", 205], ["layerGm", 300], ["layerTokens", 400], ["layerLight", 500], ["layerForeground", 560]]) {
     map.createPane(paneName);
     map.getPane(paneName).style.zIndex = z;
     map.getPane(paneName).style.pointerEvents = "none";
@@ -5746,7 +5752,7 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
   map.on("mousedown", e => {
     if (isProjecting() || armedMode !== "draw" || $("drawTool").value !== "zoom") return;
     const out = e.originalEvent && (e.originalEvent.altKey || e.originalEvent.shiftKey);
-    map.setZoomAround(e.latlng, map.getZoom() + (out ? -1 : 1));
+    if (window.__apocZoom) window.__apocZoom.glideTo(map.getZoom() + (out ? -1 : 1), e.latlng); else map.setZoomAround(e.latlng, map.getZoom() + (out ? -1 : 1));
   });
 
     function psFlow(){ const v = parseFloat((($("psFlow") || {}).value)); return Number.isFinite(v) ? Math.min(1, Math.max(0.02, v)) : 1; }
@@ -8747,7 +8753,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-14-1417";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-14-1638";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -10551,8 +10557,9 @@ function floorConnected(L, cols, rows){
     bar.style.top = Math.min(Math.max(0, p.t), maxT) + "px";
       }
   slider.addEventListener("input", function(){
-    var m = window.map;
-    if (m) m.setZoom(parseFloat(slider.value));
+    var v = parseFloat(slider.value);
+    if (window.__apocZoom) window.__apocZoom.sliderTo(v);
+    else { var m = window.map; if (m) m.setZoom(v); }
   });
   grip.addEventListener("pointerdown", function(e){
     e.preventDefault();
@@ -10580,7 +10587,7 @@ function floorConnected(L, cols, rows){
   (function waitMap(){
     var m = window.map;
     if (m && m.on){
-      m.on("zoomend", function(){ slider.value = m.getZoom(); });
+      m.on("zoomend", function(){ if (window.__apocZoom && window.__apocZoom.glidingFromSlider()) return; slider.value = m.getZoom(); });
       m.on("resize", function(){ sync(); });       m.on("load", function(){ sync(); });
       sync();
       setTimeout(sync, 350);
@@ -10604,7 +10611,7 @@ function floorConnected(L, cols, rows){
     var m = window.map;
     if (!m) return;
     var on = isOn();
-    [["touchZoom", on], ["scrollWheelZoom", on], ["doubleClickZoom", on], ["boxZoom", false], ["keyboard", false]].forEach(function(pair){
+    [["touchZoom", on], ["doubleClickZoom", on], ["boxZoom", false], ["keyboard", false]].forEach(function(pair){ /* APOC-V291: scrollWheelZoom is never enabled — the fluid zoom engine owns the wheel behind this same Pinch gate */
       var h = m[pair[0]];
       if (!h || !h.enable || !h.disable || !h.enabled) return;
       if (pair[1] && !h.enabled()) h.enable();
@@ -16711,6 +16718,8 @@ return module.exports; })();</script>
   #zoomBar{height:36px;padding:3px 6px;gap:5px;max-width:calc(100vw - 12px)}
   #zoomBar .zb-grip{font-size:.66rem;padding:7px 5px}
   #zoomBar input[type=range]{width:104px;height:26px}
+  #zoomBar .zb-step{width:20px;height:24px}
+  #zoomBar #zoomReadout{min-width:36px}
   #zoomBar .zb-pinch{font-size:.7rem}
   #zoomBar .zb-pinch input{width:18px;height:18px}
   /* misc squeezes */
@@ -21120,6 +21129,223 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     card.style.width = Math.round(r.width) + "px";
   }, true);
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", schedule); else schedule();
+})();
+</script>
+<script>
+/* ================= APOC-V291 — FLUID ZOOM ENGINE (land304 / v2.91) =================
+   Shaun's order 2026-11-14: "a more accurate fluid zoom configuration."
+   OBJECTIVE: zooming is one smooth, continuous motion that goes exactly where
+   Shaun is looking — no fixed steps, no drift off the point of intent, and the
+   scale he ends at is the scale he asked for. One engine behind every route:
+   - CONTINUOUS: map zoomSnap is 0 and the bar slider's step is 0.01, so any
+     scale in [-2, 3] can be requested and is landed EXACTLY (was: a 0.25 grid —
+     a 0.9 slider request landed 1.0, err +0.10; setZoom(0.62) landed 0.5).
+   - ACCURATE: wheel glides anchor on the cursor latlng; slider / − / + anchor
+     on the view centre; the glide's final frame applies the target exactly,
+     so zoom-in-then-out returns to the same scale AND centre.
+   - FLUID: an exponential-chase rAF glide passes through every intermediate
+     scale (time-corrected step + a minimum-frame rule, so a step can never
+     collapse into a jump cut); fresh input RETARGETS the running glide —
+     nothing queues. BEFORE: the scale of record jumped in ONE zoom event per
+     transition (only Leaflet's CSS pixels interpolated).
+   Routes: slider drag (input), slider arrow / PageUp / PageDown keys (±0.25 /
+   ±1 through the engine — the native 0.01 key step would crawl), the − / +
+   bar buttons (step 0.25 — NEW buttons; the old click routes were ±1.0),
+   mouse wheel behind the Pinch gate (240 px per zoom level; Leaflet's wheel
+   handler at its 60px default measured +1.5 per 120px notch and +0.5 for a
+   −33 trackpad delta), Draw ▸ zoom tool (glides ±1 around the click point).
+   The Pinch gate itself is untouched (default OFF, persists per device):
+   __apocPinchApply no longer enables Leaflet's scrollWheelZoom — this engine
+   owns the wheel and consults the same gate (__apocPinchOn). Touch pinch
+   stays Leaflet's handler behind the gate; with snap 0 it is continuous too.
+   doubleClickZoom is unchanged (gate-owned; a real double-click on empty map
+   zooms +1 — pre-existing behaviour, flagged in the v2.91 sweep section, NOT
+   changed here). Pin dblclick protection is untouched.
+   Readout: #zoomReadout shows the true current scale as % of zoom 0
+   (2^z × 100), updated on every zoom event — it tracks the glide.
+   Size truth: a ResizeObserver on #apocMap calls invalidateSize and, when a
+   resize (stage-height owner, window resize, boot settling) shifted the view,
+   re-asserts the last settled centre (tracked on moveend, debounced). The
+   re-assert stands down while a pin flow is open (marker editor / pin
+   radial, + a short latch): re-centring on the editor's own resizes panned
+   the view mid-flow and stranded the radial's buttons under the tab chips
+   (probe426 R10e, probe437 — see the pin-flow guard note at the observer).
+   BEFORE: restore landed 11px off centre, a +60px stage resize drifted the
+   centre 31px, a window resize 49px. A one-shot boot re-assert (~9.5s, only
+   if Shaun hasn't touched the map) re-applies the saved view when a late
+   boot pass moved it. The 3D view does NOT share this mechanism (its slider
+   drives camera distance on its own log scale, already continuous) — untouched. */
+(function () {
+  "use strict";
+  var STEP = 0.25;        /* − / + buttons and slider arrow keys */
+  var WHEEL_PX = 240;     /* wheel px per zoom level */
+  var state = { target: null, anchor: null, src: null, raf: 0, frames: 0, lastTs: 0, started: 0 };
+  var M = null, sliderEl = null, readEl = null;
+  var stableCentre = null, scTimer = 0;
+  var userDown = false, interacted = false;
+
+  function clampZ(z) { return Math.max(M.getMinZoom(), Math.min(M.getMaxZoom(), z)); }
+  function gateOn() {
+    if (window.__apocPinchOn) { try { return !!window.__apocPinchOn(); } catch (e) {} }
+    var chk = document.getElementById("zoomPinchChk");
+    if (chk) return !!chk.checked;
+    try { return localStorage.getItem("apocVttPinchZoomV1") === "1"; } catch (e) { return false; }
+  }
+  function applyZ(z) {
+    try {
+      if (state.anchor) M.setZoomAround(state.anchor, z, { animate: false });
+      else M.setZoom(z, { animate: false });
+    } catch (e) {}
+  }
+  function finish() {
+    var wasSlider = state.src === "slider", tgt = state.target;
+    state.target = null; state.anchor = null; state.src = null; state.frames = 0; state.lastTs = 0;
+    if (wasSlider && sliderEl && tgt !== null) { try { sliderEl.value = tgt; } catch (e) {} }
+    updateReadout();
+  }
+  function tick(ts) {
+    state.raf = 0;
+    if (state.target === null || !M) return;
+    var dt = state.lastTs ? Math.min(100, Math.max(1, ts - state.lastTs)) : 16.7;
+    state.lastTs = ts;
+    var cur = M.getZoom(), dz = state.target - cur;
+    if ((Math.abs(dz) < 0.002 && state.frames >= 10) || ts - state.started > 4000) { applyZ(state.target); finish(); return; }
+    var k = 1 - Math.pow(0.74, dt / 16.7); if (k < 0.1) k = 0.1; if (k > 0.38) k = 0.38; /* per-frame close cap: a step spreads over enough frames that it can never read as a jump cut, even on a slow renderer */
+    applyZ(cur + dz * k);
+    state.frames++;
+    state.raf = requestAnimationFrame(tick);
+  }
+  function go(target, anchor, src) {
+    if (!M) return;
+    state.target = clampZ(target);
+    state.anchor = anchor || null;
+    state.src = src || null;
+    state.frames = 0; state.lastTs = 0; state.started = performance.now();
+    if (!state.raf) state.raf = requestAnimationFrame(tick);
+  }
+  function base() { return state.target !== null ? state.target : M.getZoom(); }
+  function updateReadout() {
+    if (!readEl || !M) return;
+    readEl.textContent = Math.round(Math.pow(2, M.getZoom()) * 100) + "%";
+  }
+  function onZoomEvt() {
+    updateReadout();
+    if (sliderEl && state.src !== "slider") { try { sliderEl.value = M.getZoom(); } catch (e) {} }
+  }
+  function onWheel(e) {
+    if (!gateOn()) return;
+    e.preventDefault(); e.stopPropagation();
+    interacted = true;
+    var dy = e.deltaY || 0;
+    if (e.deltaMode === 1) dy *= 16.7; else if (e.deltaMode === 2) dy *= 800;
+    if (!dy) return;
+    var anchor = null;
+    try { anchor = M.mouseEventToLatLng(e); } catch (err) {}
+    go(base() - dy / WHEEL_PX, anchor, "wheel");
+  }
+
+  window.__apocZoom = {
+    sliderTo: function (v) { go(v, null, "slider"); },
+    glideTo: function (v, anchor) { go(v, anchor || null, "api"); },
+    glidingFromSlider: function () { return state.target !== null && state.src === "slider"; }
+  };
+
+  (function boot() {
+    M = window.map || null;
+    sliderEl = document.getElementById("zoomSlider");
+    readEl = document.getElementById("zoomReadout");
+    var inBtn = document.getElementById("zoomInBtn"), outBtn = document.getElementById("zoomOutBtn");
+    if (!M || !M.on || !sliderEl) { setTimeout(boot, 200); return; }
+    var el = M.getContainer();
+
+    M.on("zoom", onZoomEvt);
+    M.on("zoomend", updateReadout);
+    updateReadout();
+
+    if (inBtn) inBtn.addEventListener("click", function () { interacted = true; go(base() + STEP, null, "btn"); });
+    if (outBtn) outBtn.addEventListener("click", function () { interacted = true; go(base() - STEP, null, "btn"); });
+    sliderEl.addEventListener("keydown", function (e) {
+      var d = 0;
+      if (e.key === "ArrowUp" || e.key === "ArrowRight") d = STEP;
+      else if (e.key === "ArrowDown" || e.key === "ArrowLeft") d = -STEP;
+      else if (e.key === "PageUp") d = 1;
+      else if (e.key === "PageDown") d = -1;
+      else return;
+      e.preventDefault();
+      interacted = true;
+      go(base() + d, null, "slider");
+    });
+
+    el.addEventListener("wheel", onWheel, { capture: true, passive: false });
+    el.addEventListener("pointerdown", function () { userDown = true; interacted = true; }, true);
+    window.addEventListener("pointerup", function () { userDown = false; }, true);
+    window.addEventListener("pointercancel", function () { userDown = false; }, true);
+
+    /* stable centre: the centre latlng of the last settled view */
+    try { stableCentre = M.getCenter(); } catch (e) {}
+    M.on("moveend", function () {
+      clearTimeout(scTimer);
+      scTimer = setTimeout(function () { try { stableCentre = M.getCenter(); } catch (e) {} }, 300);
+    });
+
+    /* pin-flow guard (v2.91 fix): while the marker editor is open or a
+       pin radial is on screen, the centre re-assert below stands down.
+       Opening/closing the editor resizes the stage; re-centring on
+       those resizes panned the whole view mid-flow (measured: the
+       just-placed marker's dot shifted ~11px, later ~40px), which
+       moved pins under the fixed-position radial and put its buttons
+       under the edge tab chips — option presses then hit the tabs and
+       the flow (e.g. radial Delete -> confirm -> save) died silently
+       (probe426 R10e on the unguarded bytes; probe437 traces). The
+       latch covers the resize a closing flow itself causes, which can
+       be delivered just after the element hides. invalidateSize (size
+       truth) still runs — only the re-centring pan stands down. */
+    var flowLatchUntil = 0;
+    function flowOpen() {
+      var f = document.getElementById("markerForm"), r = document.getElementById("pinRadial");
+      if ((f && !f.hidden) || r) { flowLatchUntil = performance.now() + 1200; return true; }
+      return performance.now() < flowLatchUntil;
+    }
+
+    /* size truth: keep Leaflet's size honest and the settled centre centred */
+    if ("ResizeObserver" in window) {
+      var lastW = el.clientWidth, lastH = el.clientHeight;
+      new ResizeObserver(function () {
+        var w = el.clientWidth, h = el.clientHeight;
+        if (w === lastW && h === lastH) return;
+        lastW = w; lastH = h;
+        try { M.invalidateSize(); } catch (e) {}
+        if (userDown || state.target !== null || !stableCentre) return;
+        if (document.body.classList.contains("displaying")) return;
+        if (flowOpen()) return;
+        try {
+          var pt = M.latLngToContainerPoint(stableCentre), sz = M.getSize();
+          if (Math.abs(pt.x - sz.x / 2) > 0.5 || Math.abs(pt.y - sz.y / 2) > 0.5) M.setView(stableCentre, M.getZoom(), { animate: false });
+        } catch (e) {}
+      }).observe(el);
+    }
+
+    /* boot settle: if a late boot pass shifted the restored view and Shaun
+       hasn't touched the map, re-apply the saved view once. The matching
+       saved view is identified by zoom + rough centre (map-id free). */
+    setTimeout(function () {
+      try {
+        if (interacted || document.body.classList.contains("displaying")) return;
+        if (flowOpen()) return;
+        var all = JSON.parse(localStorage.getItem("apocVttViewV1") || "null");
+        if (!all) return;
+        var cz = M.getZoom(), match = null, matches = 0;
+        for (var id in all) {
+          var v = all[id];
+          if (!v || !v.c || Math.abs(v.z - cz) > 0.01) continue;
+          var pt = M.latLngToContainerPoint(v.c), sz = M.getSize();
+          var d = Math.hypot(pt.x - sz.x / 2, pt.y - sz.y / 2);
+          if (d < 60) { match = { v: v, d: d }; matches++; }
+        }
+        if (matches === 1 && match.d > 1) M.setView(match.v.c, match.v.z, { animate: false });
+      } catch (e) {}
+    }, 9500);
+  })();
 })();
 </script>
 </body>
