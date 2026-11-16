@@ -10379,7 +10379,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-1708";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-1900";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -12209,7 +12209,7 @@ function floorConnected(L, cols, rows){
   });
   grip.addEventListener("pointerdown", function(e){
     e.preventDefault();
-    try { var __fl246 = JSON.parse(localStorage.getItem("apocVttFreeLayoutV1") || "{}"); if (__fl246["zoombar"] && __fl246["zoombar"].lock) return; } catch(err) {}     var sx = e.clientX, sy = e.clientY, sl = bar.offsetLeft, st = bar.offsetTop;
+    var sx = e.clientX, sy = e.clientY, sl = bar.offsetLeft, st = bar.offsetTop; /* APOC-V305: the FreeLayout "zoombar" lock gate that silently vetoed this drag is removed — see the APOC-V305 block */
     try { grip.setPointerCapture(e.pointerId); } catch(err) {}
     function mv(ev){
       var maxL = Math.max(0, stageW() - bar.offsetWidth);
@@ -13502,7 +13502,11 @@ function floorConnected(L, cols, rows){
       var rp = rec[id];
       if (rp && (rp.w || rp.h) && !el.classList.contains("map-repo")) { if (rp.w) el.style.width = rp.w + "px"; if (rp.h) el.style.height = rp.h + "px"; }       paintLock(el, id);
     });
-    var zb = document.getElementById("zoomBar"); if (zb && !zb.dataset.fpDone) { zb.dataset.fpDone = "1"; addLock(zb, "zoombar", zb); paintLock(zb, "zoombar"); }
+    /* APOC-V305 (v3.06, 2026-11-15): the zoom bar is NOT a FreeLayout
+       piece — no fp lock pin is registered for it. Its stale
+       "zoombar" lock record is inert data from this build on: the
+       bar's own drag (the zoom block's grip handler + APOC-V305's
+       frame drag) is never lock-gated. */
   }
 
   /* APOC-V264 (Shaun, 2026-11-12): the header bubble docks to the
@@ -20548,6 +20552,7 @@ body.apoc-side251 #phBarStrip{display:none!important}
      scan. Marks zoomHomeDone so V247's own homing stops fighting
      the side placement. */
   function positionZoom(){
+    try { if (load().zoomHomeDone) return; } catch(e){} /* APOC-V305 (v3.06, 2026-11-15): honour the settled flag — V247's homer checks zoomHomeDone before homing, this one only ever SET it, and was harmless solely because the bar sat invisible inside the closed Tools set at the boot passes. With the bar floating visible (APOC-V305), an unchecked 6.5s pass here would override Shaun's saved seat; his record carries zoomHomeDone:true, so his seat stands. */
     var dm = $("dmBarV181"), zb = $("zoomBar");
     if (!dm || !zb || !zb.offsetWidth) return;
     var dr = dm.getBoundingClientRect(); if (!dr.width) return;
@@ -22043,6 +22048,14 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     var curT = (rec && typeof rec.t === "number") ? rec.t : parseInt(zb.style.top, 10);
     if (isNaN(curL) || isNaN(curT)) return;
     var nl = curL + dx;
+    /* APOC-V305: clamp the docked seat into the stage exactly as
+       savePos clamps. The dock used to write the seat a few px past
+       the stage edge (and, historically, negative seats), so the
+       record and the resting bar disagreed after a reload. */
+    try {
+      var elDk = document.getElementById("apocMap"), sideDk = elDk && elDk.parentElement, stDk = sideDk && sideDk.parentElement;
+      if (stDk) { var maxLDk = Math.max(0, stDk.clientWidth - zb.offsetWidth); nl = Math.min(Math.max(0, nl), maxLDk); }
+    } catch(e){}
     try { localStorage.setItem(key, JSON.stringify({ l: nl, t: curT })); } catch(e){}
     zb.style.left = nl + "px";
   }
@@ -22232,8 +22245,12 @@ body.apoc-tabs254 .apoc-track{display:none!important}
   function $(id){ return document.getElementById(id); }
   var MOVES = ["toolWallBtn", "toolDoorBtn", "toolWindowBtn", "condBtn",
     "tplConeBtn", "tplCircleBtn", "tplLineBtn", "tplSquareBtn", "tplSizeF", "tplList", "tplStatus",
-    "mapExpandBtn", "fsBtn", "view3dBtn", "mapDdBtn",
-    "zoomBar"];
+    "mapExpandBtn", "fsBtn", "view3dBtn", "mapDdBtn"];
+  /* APOC-V305 (v3.06, 2026-11-15): "zoomBar" is REMOVED from MOVES —
+     the zoom bar no longer nests in the Tools set. It floats free
+     at its authored home in .map-side under its own seat system
+     (see the APOC-V305 block). The #set-tools #zoomBar CSS below is
+     inert from this build on (the bar never enters the set). */
   var TAIL = ["calibBtn", "calibResetBtn", "calibStatus"];
   function elOf(id){
     if (id === "tplSizeF") {
@@ -23084,6 +23101,147 @@ body.apoc-tabs254 .apoc-track{display:none!important}
       } catch (e) {}
     }, 9500);
   })();
+})();
+</script>
+
+<style id="APOC-V305-CSS">
+/* APOC-V305 (v3.06, 2026-11-15): the zoom bar floats free — a touch
+   gesture that starts on the bar belongs to the bar (no browser
+   gesture takeover mid-drag), and the bar's whole frame shows the
+   grab cursor its grip's "Drag to move the zoom bar" title has
+   always promised. The controls keep their own pointer cursors. */
+#zoomBar{touch-action:none;cursor:grab}
+#zoomBar.zb-dragging305{cursor:grabbing}
+#zoomBar .zb-step, #zoomBar .zb-pinch, #zoomBar input{cursor:pointer}
+</style>
+<script>
+/* APOC-V305 (v3.06, 2026-11-15 — Shaun: "Make the overall zoom bar
+   free floating", and his defect report the same evening: "When I
+   hover over the zoom bar it says I can move it but it doesn't let
+   me pick it up or move it").
+   DIAGNOSIS — why the pickup never engaged on the live build
+   (three stacked mechanisms, all in the land318 bytes):
+   (1) APOC-V274R's nest() moved #zoomBar into #set-tools, and its
+       CSS (#set-tools #zoomBar{position:static !important}) made
+       the seat system's left/top writes inert — the bar flowed
+       inside the Tools set, reachable only while the set was open,
+       and no seat write could move it.
+   (2) The grip's pointerdown handler read the FreeLayout record
+       and silently returned when its "zoombar" entry was locked —
+       Shaun's saved record carries {"zoombar":{"lock":true}}, so
+       the drag died at press, while the grip went on showing its
+       "Drag to move the zoom bar" title and grab cursor and the
+       lock pin that set it is display:none outside DM-edit mode.
+   (3) The only drag surface was the small ZOOM grip; the rest of
+       the bar's frame was inert.
+   (4) Dormant but armed: APOC-V251's positionZoom() homes the bar
+       under the DM cluster at the 6.5s/12.5s/16s boot passes. It
+       never fired on the live build only because the bar was
+       invisible inside the closed set at those passes — and unlike
+       V247's homer it never checked the Tuck record's
+       zoomHomeDone flag (it only sets it). Floating the bar makes
+       it visible at those passes, so positionZoom now honours
+       zoomHomeDone like its sibling: Shaun's record carries it,
+       and his saved seat stands.
+   THE FIX: "zoomBar" is out of V274R's MOVES (the bar stays at its
+   authored home in .map-side, positioned by its own seat system —
+   apocVttZoomBarV1 / apocVttZoomBarPhoneV1, the APOC-V301 reseat
+   untouched); the lock gate is out of the grip handler; the bar's
+   fp lock pin is no longer registered. THIS BLOCK adds the frame
+   drag: a press on the bar's body — frame, grip, readout — picks
+   the whole bar up (capture-phase listener on the bar itself, so
+   the grip's own handler never double-drives it); a press on a
+   control (step button, slider, Pinch label/checkbox) is never
+   intercepted and never starts a drag. Mouse and touch alike
+   (pointer events; touch-action:none in the CSS above). The drag
+   clamps into the stage with the seat system's own geometry
+   (stageW / side height + 44) and ends with exactly one seat
+   write, clamped exactly as savePos clamps. */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var bar = document.getElementById("zoomBar");
+  var el = document.getElementById("apocMap");
+  if (!bar || !el || !el.parentElement) return;
+  var side = el.parentElement;
+  var KEY = "apocVttZoomBarV1", PKEY = "apocVttZoomBarPhoneV1";
+  function phoneMq(){ return window.matchMedia("(max-width: 820px)").matches; }
+  function stageW(){ var st = side.parentElement; return st ? st.clientWidth : side.clientWidth; }
+  function clampPos(l, t){
+    var maxL = Math.max(0, stageW() - bar.offsetWidth);
+    var maxT = Math.max(0, side.clientHeight + 44 - bar.offsetHeight);
+    return { l: Math.round(Math.min(Math.max(0, l), maxL)), t: Math.round(Math.min(Math.max(0, t), maxT)) };
+  }
+  function blocked305(){
+    return !!document.fullscreenElement || document.body.classList.contains("displaying") ||
+      document.body.classList.contains("map-expanded") || document.body.classList.contains("map-fs");
+  }
+  var drag = null;
+  bar.addEventListener("pointerdown", function(e){
+    if (drag) return;
+    if (typeof e.button === "number" && e.button !== 0) return;
+    if (bar.hidden || blocked305()) return;
+    var t = e.target;
+    if (!t || !bar.contains(t)) return;
+    if (t.closest && t.closest("button, input, select, textarea, label, a, .fp-lock")) return;
+    e.preventDefault(); e.stopPropagation();
+    drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, sl: bar.offsetLeft, st: bar.offsetTop };
+    try { bar.setPointerCapture(e.pointerId); } catch(err){}
+    bar.classList.add("zb-dragging305");
+  }, true);
+  bar.addEventListener("pointermove", function(e){
+    if (!drag || e.pointerId !== drag.id) return;
+    var p = clampPos(drag.sl + e.clientX - drag.sx, drag.st + e.clientY - drag.sy);
+    bar.style.left = p.l + "px"; bar.style.top = p.t + "px";
+  });
+  function endDrag305(e){
+    if (!drag || (e && e.pointerId !== drag.id)) return;
+    drag = null;
+    bar.classList.remove("zb-dragging305");
+    var p = clampPos(bar.offsetLeft, bar.offsetTop);
+    try { localStorage.setItem(phoneMq() ? PKEY : KEY, JSON.stringify(p)); } catch(err){}
+  }
+  bar.addEventListener("pointerup", endDrag305);
+  bar.addEventListener("pointercancel", endDrag305);
+
+  /* APOC-V305 default seat on PHONE: the seat chain's fallbacks
+     (the desktop record, then the shared default {851,0} captured
+     on a wide desktop) land the bar in the top chip band on a
+     phone, where the tab chips paint over its grip, its − button,
+     its readout and its Pinch toggle. When the phone has no seat
+     of its own — no phone record at load, or a phone record still
+     holding exactly that defaulted desktop value (a dragged phone
+     seat can never hold it: drags clamp to the phone stage) — and
+     the bar has landed in that band, seat it bottom-left, fully
+     on-stage, and write the phone record so it sticks. A genuine
+     phone seat (e.g. the {0,280} fallback) is never touched. */
+  var phoneRecAtLoad = null;
+  try { phoneRecAtLoad = localStorage.getItem(PKEY); } catch(err){}
+  function sharedZoomSeat() {
+    try { var sd = JSON.parse(localStorage.getItem("apocVttSharedDefaultV1") || "null"); if (sd && sd.layout) { var t = JSON.parse(sd.layout); if (t && t.zoomBar && typeof t.zoomBar.l === "number") return t.zoomBar; } } catch(err){}
+    return null;
+  }
+  var seatPoll305 = setInterval(function () {
+    try {
+      if (!phoneMq() || blocked305() || !bar.offsetWidth || !bar.style.left) return;
+      clearInterval(seatPoll305);
+      var fromDefault;
+      if (phoneRecAtLoad === null) fromDefault = true;
+      else {
+        var sz = sharedZoomSeat(), pr = null;
+        try { pr = JSON.parse(phoneRecAtLoad); } catch(err){}
+        fromDefault = !!(sz && pr && pr.l === sz.l && pr.t === sz.t);
+      }
+      if (!fromDefault) return;
+      if (bar.offsetTop >= 100) return;
+      var el = document.getElementById("apocMap"); if (!el || !el.parentElement) return;
+      var sideH = el.parentElement.clientHeight;
+      var t = Math.max(0, sideH - bar.offsetHeight - 12);
+      bar.style.left = "0px"; bar.style.top = t + "px";
+      try { localStorage.setItem(PKEY, JSON.stringify({ l: 0, t: t })); } catch(err){}
+    } catch(err){}
+  }, 200);
+  setTimeout(function () { clearInterval(seatPoll305); }, 6000);
 })();
 </script>
 </body>
