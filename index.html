@@ -3015,14 +3015,24 @@ setInterval(loadSharedEntries, 60000);
         const patch = {};
         for (const k of Object.keys(r)) if (!markersCanonEq(b[k], r[k])) patch[k] = storeClone323(r[k]);
         for (const k of Object.keys(b)) if (!(k in r)) patch[k] = undefined;
-        changes.set(r.id, { patch });
+        /* APOC-V310: the patch carries its base record minus id as
+           `canon`, so a write path that cannot find the id in the
+           fresh row can still resolve the op against an id-less
+           stored copy of the same record (and stamp the id on it). */
+        const pcanon = storeClone323(b); delete pcanon.id;
+        changes.set(r.id, { patch, canon: pcanon });
       } else {
         const ai = baseAnon.findIndex(x => markersCanonEq(x, r));
         if (ai >= 0) baseAnon.splice(ai, 1);
         else changes.set("__anon" + (anonN++), { record: storeClone323(r) });
       }
     }
-    for (const [id] of baseById) if (!seen.has(id)) changes.set(id, { del: true });
+    /* APOC-V310: a delete of an id'd record also carries `canon`
+       (the base record minus its id) — the fallback that lets the
+       write path land the delete on a stored copy that never got
+       the id (GH-ERASE-RESURRECT: the synthesized-id delete used
+       to vanish silently precisely because this was absent). */
+    for (const [id, b] of baseById) if (!seen.has(id)) { const dcanon = storeClone323(b); delete dcanon.id; changes.set(id, { del: true, canon: dcanon }); }
     for (const r of baseAnon) changes.set("__anon" + (anonN++), { del: true, canon: storeClone323(r) });
     return changes;
   }
@@ -3078,6 +3088,54 @@ setInterval(loadSharedEntries, 60000);
       Store.ingest(key, merged);
       return true;
     } catch (e) { return false; }
+  }
+  /* ================= APOC-V310 (v3.10, 2026-11-16): ERASE FIX — GH-ERASE-RESURRECT =================
+     What Shaun erases stays erased. The convicted mechanism (hunt
+     Phase 8, on v3.08 bytes): draw items were created WITHOUT ids;
+     loadDraw synthesized an id IN MEMORY ONLY for items with a
+     numeric x; a later delete/patch keyed by that synthesized id
+     found nothing in the stored row (whose copy stayed id-less),
+     carried no canon fallback, and Store.syncDraw silently skipped
+     the op while returning true — so the page said "Erased.", wrote
+     nothing, and the item resurrected at the next loadDraw ingest.
+     The fix, in four parts:
+       1. STABLE IDS IN THE STORE. drawMintId310 mints unique ids;
+          saveDraw (the one choke point every draw creation flows
+          through) assigns an id to any id-less item — and re-mints
+          a duplicated id — before diffing, so a new item is WRITTEN
+          carrying its id. loadDraw mints ids for id-less stored
+          items and persists them through syncDraw's backfill op
+          exactly once (the row copy is replaced in place; geometry
+          and appearance bytes are untouched apart from the added
+          id). After one load, every item the page can address is
+          addressable in the store.
+       2. CANON FALLBACK. storeRecordDiff323 now carries `canon`
+          (the base record minus id) on dels and patches; syncDraw
+          resolves an id-miss against an id-less (or differently
+          id'd) stored copy by canonical match, lands the op, and
+          stamps the op's id onto the stored copy.
+       3. NO SILENT DROPS. syncDraw counts every op it cannot land;
+          any drop makes the write return FALSE (landed ops in the
+          same batch still write). saveDraw therefore does not
+          advance its shadow on a drop, and the "Erased." status
+          keys off the real result — a failed write can no longer
+          report an erasure.
+       4. All of it rides the Store queue, as Stage 1–2 discipline
+          requires; draw rows keep their {items:[...]} shape — the
+          ids ride INSIDE the items, which the shape already
+          permits. Zero geometry/appearance changes. */
+  let drawIdSeq310 = 0;
+  function drawMintId310(taken){
+    let id;
+    do { id = "d" + Date.now().toString(36) + "-" + (drawIdSeq310++).toString(36) + "-" + Math.floor(Math.random() * 0xffffff).toString(36); } while (taken && taken.has(id));
+    if (taken) taken.add(id);
+    return id;
+  }
+  function drawCanonEqNoId310(a, b){
+    if (!a || !b) return false;
+    const x = storeClone323(a), y = storeClone323(b);
+    delete x.id; delete y.id;
+    return markersCanonEq(x, y);
   }
   const Store = {
     stats: storeStats323,
@@ -3248,29 +3306,73 @@ setInterval(loadSharedEntries, 60000);
           const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
           if (rerr) return false;
           const fresh = (data && data.value && typeof data.value === "object") ? data.value : {};
-          const arr = Array.isArray(fresh.items) ? fresh.items.slice() : [];
+          /* APOC-V310: the working array is a DEEP clone of the
+             fresh row's items. The old code sliced shallowly, so a
+             patch's Object.assign mutated the fresh row's own item
+             objects — and the equality check below then compared
+             the merged value against the already-mutated "fresh"
+             row, concluded nothing had changed, and skipped the
+             write while returning true. That is the second half of
+             GH-ERASE-RESURRECT: patches were silently eaten even
+             when the id WAS found (deletes and record pushes
+             survived only because they change the array itself). */
+          const arr = storeClone323(Array.isArray(fresh.items) ? fresh.items : []);
           const idx = new Map();
           arr.forEach((m, i) => { if (m && m.id && !idx.has(m.id)) idx.set(m.id, i); });
+          /* APOC-V310: `dropped` counts ops that land NOWHERE. Any
+             drop fails the write's return value — success is never
+             reported for an op that did not land. */
+          let dropped = 0;
           for (const [id, ch] of changes) {
+            if (ch.backfill) {
+              /* APOC-V310: persist a load-minted id onto the stored
+                 id-less copy of the same record, in place. Already
+                 carrying the id = already landed, not a drop. */
+              if (idx.has(id)) continue;
+              const bi = arr.findIndex(r => r && !r.id && markersCanonEq(r, ch.canon));
+              if (bi >= 0) { arr[bi] = storeClone323(ch.record); idx.set(id, bi); }
+              else dropped++;
+              continue;
+            }
             if (ch.del) {
               if (idx.has(id)) { arr[idx.get(id)] = null; idx.delete(id); }
-              else if (ch.canon !== undefined) { const ci = arr.findIndex(r => r && !r.id && markersCanonEq(r, ch.canon)); if (ci >= 0) arr[ci] = null; }
+              else if (ch.canon !== undefined) {
+                let ci = arr.findIndex(r => r && !r.id && markersCanonEq(r, ch.canon));
+                if (ci < 0) ci = arr.findIndex(r => r && drawCanonEqNoId310(r, ch.canon));
+                if (ci >= 0) { const rid = arr[ci] && arr[ci].id; arr[ci] = null; if (rid) idx.delete(rid); }
+                else dropped++;
+              }
+              else dropped++;
               continue;
             }
             if (ch.record) {
               if (idx.has(id)) arr[idx.get(id)] = storeClone323(ch.record); else { arr.push(storeClone323(ch.record)); idx.set(id, arr.length - 1); }
               continue;
             }
-            if (idx.has(id)) Object.assign(arr[idx.get(id)], storeClone323(ch.patch));
+            if (ch.patch) {
+              if (idx.has(id)) Object.assign(arr[idx.get(id)], storeClone323(ch.patch));
+              else if (ch.canon !== undefined) {
+                /* APOC-V310: resolve the patch against the stored
+                   id-less (or differently id'd) copy by canon, land
+                   it, and stamp this op's id onto the copy so the
+                   store can address it from now on. */
+                let ci = arr.findIndex(r => r && !r.id && markersCanonEq(r, ch.canon));
+                if (ci < 0) ci = arr.findIndex(r => r && drawCanonEqNoId310(r, ch.canon));
+                if (ci >= 0) { const tgt = arr[ci]; Object.assign(tgt, storeClone323(ch.patch)); tgt.id = id; idx.set(id, ci); }
+                else dropped++;
+              }
+              else dropped++;
+            }
           }
+          Store.drawDropped310 = dropped;
           const value = { items: arr.filter(Boolean), layers: (layers !== null && layers !== undefined) ? storeClone323(layers) : (Array.isArray(fresh.layers) ? fresh.layers : []) };
-          if (markersCanonEq(value, { items: Array.isArray(fresh.items) ? fresh.items : [], layers: Array.isArray(fresh.layers) ? fresh.layers : [] })) { Store.ingestValue(key, fresh); return true; }
+          if (markersCanonEq(value, { items: Array.isArray(fresh.items) ? fresh.items : [], layers: Array.isArray(fresh.layers) ? fresh.layers : [] })) { Store.ingestValue(key, fresh); return dropped === 0; }
           const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
           if (error) return false;
           storeStats323.writes++;
           storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
           Store.ingestValue(key, value);
-          return true;
+          return dropped === 0;
         } catch (e) { return false; }
       });
     },
@@ -5530,7 +5632,31 @@ setInterval(loadSharedEntries, 60000);
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", drawKey()).maybeSingle();
     if (error) return;
     const inItems = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
-        inItems.forEach(it => { if (it && !it.id && typeof it.x === "number") it.id = "s" + Math.round(it.x * 100) + "-" + Math.round(it.y * 100) + "-" + String(it.prop || it.sym || it.img || it.type || "").replace(/[^a-z0-9]/gi, "").slice(-12); });
+    /* APOC-V310: EVERY id-less stored item gets a stable id at
+       ingest — all types, not only numeric-x ones — and the minted
+       ids are PERSISTED through the Store exactly once (one
+       syncDraw write for the whole batch, each id-less row copy
+       replaced in place by its id-carrying twin; geometry and
+       appearance bytes untouched). The old code synthesized the
+       id in memory only, which is exactly what made later deletes
+       and patches unfindable in the store (GH-ERASE-RESURRECT).
+       A load that finds ids already stored mints nothing and
+       writes nothing. If the backfill write itself fails, the ids
+       still live in memory for this session and the canon fallback
+       in the diff keeps this session's ops landable; the next load
+       retries the backfill. */
+    {
+      const taken310 = new Set();
+      for (const it of inItems) if (it && it.id) taken310.add(it.id);
+      const bf310 = new Map();
+      for (const it of inItems) {
+        if (!it || it.id) continue;
+        const canon310 = storeClone323(it);
+        it.id = drawMintId310(taken310);
+        bf310.set(it.id, { backfill: true, canon: canon310, record: storeClone323(it) });
+      }
+      if (bf310.size) { try { await Store.syncDraw(drawKey(), bf310, null); } catch (e) {} }
+    }
     const inLayers = (data && data.value && Array.isArray(data.value.layers) && data.value.layers.length) ? data.value.layers : drawLayers;
     /* APOC-V298 (v2.98, 2026-11-15): GH-PIN-BLINK changed character — the
        same discipline APOC-V292 gave loadMarkers. This poll used to
@@ -5565,6 +5691,21 @@ setInterval(loadSharedEntries, 60000);
   function drawSnapshot(){ return JSON.stringify({ items: drawItems, layers: drawLayers }); }
   async function saveDraw(){
     syncDoorSegs();
+    /* APOC-V310: creation-time ids — every item in the live array
+       carries a stable id BEFORE the diff, so a newly drawn item
+       is written to the store WITH its id (never id-less), and a
+       duplicated item (a JSON copy carries the source's id) is
+       re-minted so two live items never share one address. This
+       is the choke point: every draw creation path in the page
+       funnels into saveDraw. */
+    {
+      const taken310 = new Set();
+      for (const it of drawItems) {
+        if (!it) continue;
+        if (!it.id || taken310.has(it.id)) it.id = drawMintId310(taken310);
+        else taken310.add(it.id);
+      }
+    }
     const snap = drawSnapshot();
     if (drawHist.last !== null && snap !== drawHist.last && !drawHist.applying) {
       drawHist.undo.push(drawHist.last);
@@ -11001,7 +11142,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-16-0029";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-16-0248";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
