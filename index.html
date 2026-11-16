@@ -92,6 +92,14 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
    of the map. It paints nothing: the dot, the label and every label
    placement rule render exactly as before; only the hit area grows. */
 .mk-icon::before{content:"";position:absolute;left:50%;top:50%;width:34px;height:34px;transform:translate(-50%,-50%);border-radius:50%}
+/* APOC-V304 (v3.05, 2026-11-15): word objects — the icon is a bare box the
+   size of the word's sprite rect at the current zoom; the inner div paints
+   the word's own ink from the shared sprite sheet (background-position),
+   rotated in place when the map is rotated (transform-origin 0 0, the
+   builder supplies the corner translate). No fill, no border, no halo:
+   the hit box is the printed extent, nothing more. */
+.wk-icon{background:none;border:none}
+.wk-in{position:absolute;left:0;top:0;transform-origin:0 0;background-repeat:no-repeat;pointer-events:none}
 .mk-locked{cursor:not-allowed}
 .place-card .pc-lock{float:left;margin:0 8px 2px 0;min-width:30px;min-height:26px;padding:1px 6px;font-size:14px;line-height:1;cursor:pointer}
 .place-card .pc-lock[aria-pressed="true"]{background:#1e40af;color:#fff;border-color:#60a5fa}
@@ -1569,7 +1577,7 @@ setInterval(loadSharedEntries, 60000);
   const markersKey = () => currentMapId === "faerun" ? "map_markers" : `map_markers_${currentMapId}`;
   let currentMapId = "faerun";
   const KINDS = ["city", "party", "place", "danger", "note", "ruin", "ghost", "dead", "altered"];
-  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0, wheelPxPerZoomLevel: 240, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false });     for (const [paneName, z] of [["layerBaseLand", 200], ["layerBaseWords", 201], ["layerBaseCart", 202], ["layerMap", 205], ["layerGm", 300], ["layerTokens", 400], ["layerLight", 500], ["layerForeground", 560]]) {
+  const map = L.map("apocMap", { crs: L.CRS.Simple, minZoom: -2, maxZoom: 3, zoomSnap: 0, wheelPxPerZoomLevel: 240, attributionControl: false, zoomControl: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false });     for (const [paneName, z] of [["layerBaseLand", 200], ["layerBaseWords", 201], ["layerBaseCart", 202], ["layerBaseWordObjs", 203], ["layerMap", 205], ["layerGm", 300], ["layerTokens", 400], ["layerLight", 500], ["layerForeground", 560]]) {
     map.createPane(paneName);
     map.getPane(paneName).style.zIndex = z;
     map.getPane(paneName).style.pointerEvents = "none";
@@ -1594,15 +1602,16 @@ setInterval(loadSharedEntries, 60000);
      every split helper no-ops when the current map has no layers set. */
   let wordsOn293 = true, cartoucheOn293 = true, mapOp293 = 1;
   let wordsOverlay = null, cartoucheOverlay = null;
-  const FAERUN_LAYERS293 = { land: "assets/maps/faerun-land.webp", words: "assets/maps/faerun-words.webp", cartouche: "assets/maps/faerun-cartouche.webp" };
+  const FAERUN_LAYERS293 = { land: "assets/maps/faerun-land.webp", words: "assets/maps/faerun-words-remnant.webp", cartouche: "assets/maps/faerun-cartouche.webp" };   /* APOC-V304: the flat Words layer is now the REMNANT (catalogued ink erased at the component level); the 575 catalogued words render as movable objects (APOC-V304 block below). faerun-words.webp stays in the repo as rollback, unreferenced. */
   function apoc293IsSplit(){ return currentMapId === "faerun"; }
   function apoc293SyncVis(){
     try {
       if (wordsOverlay) { const want = wordsOn293 && apoc293IsSplit(); if (want && !map.hasLayer(wordsOverlay)) wordsOverlay.addTo(map); if (!want && map.hasLayer(wordsOverlay)) map.removeLayer(wordsOverlay); if (want) wordsOverlay.setOpacity(mapOp293); }
       if (cartoucheOverlay) { const want = cartoucheOn293 && apoc293IsSplit(); if (want && !map.hasLayer(cartoucheOverlay)) cartoucheOverlay.addTo(map); if (!want && map.hasLayer(cartoucheOverlay)) map.removeLayer(cartoucheOverlay); if (want) cartoucheOverlay.setOpacity(mapOp293); }
+      if (typeof wordsSyncVis304 === "function") wordsSyncVis304();   /* APOC-V304: word objects seat/unseat on the same wordsOn condition */
     } catch(e) {}
   }
-  function apoc293SetMapOpacity(op){ mapOp293 = (typeof op === "number" ? op : 1); try { if (wordsOverlay && map.hasLayer(wordsOverlay)) wordsOverlay.setOpacity(mapOp293); if (cartoucheOverlay && map.hasLayer(cartoucheOverlay)) cartoucheOverlay.setOpacity(mapOp293); } catch(e) {} }
+  function apoc293SetMapOpacity(op){ mapOp293 = (typeof op === "number" ? op : 1); try { if (wordsOverlay && map.hasLayer(wordsOverlay)) wordsOverlay.setOpacity(mapOp293); if (cartoucheOverlay && map.hasLayer(cartoucheOverlay)) cartoucheOverlay.setOpacity(mapOp293); const wp304 = map.getPane("layerBaseWordObjs"); if (wp304) wp304.style.opacity = mapOp293; } catch(e) {} }   /* APOC-V304: the word-objects pane dims with the base */
   function apoc293MakeBase(b, srcs){
     mapOp293 = 1;
     const land = L.imageOverlay(srcs.land, b, { pane: "layerBaseLand" }).addTo(map);
@@ -1623,13 +1632,17 @@ setInterval(loadSharedEntries, 60000);
   let compCache293 = {};
   function apoc293InvalidateComposite(){ compCache293 = {}; }
   async function apoc293CompositeUrl(rot){
-    const key = (wordsOn293 ? "w1" : "w0") + (cartoucheOn293 ? "c1" : "c0") + "|r" + (rot || 0);
+    const key = (wordsOn293 ? "w1" : "w0") + (cartoucheOn293 ? "c1" : "c0") + "|r" + (rot || 0) + "|v" + (typeof wordsPosRev304 === "function" ? wordsPosRev304() : 0);   /* APOC-V304: the cache key carries the word-position revision */
     if (compCache293[key]) return compCache293[key];
     const load = src => new Promise((res, rej) => { const im = new Image(); im.crossOrigin = "anonymous"; im.onload = () => res(im); im.onerror = rej; im.src = src; });
-    const parts = [FAERUN_LAYERS293.land]; if (wordsOn293) parts.push(FAERUN_LAYERS293.words); if (cartoucheOn293) parts.push(FAERUN_LAYERS293.cartouche);
-    const imgs = []; for (const src of parts) imgs.push(await load(src));
+    const imgs = [await load(FAERUN_LAYERS293.land)]; if (wordsOn293) imgs.push(await load(FAERUN_LAYERS293.words));
     let cv = document.createElement("canvas"); cv.width = 4763; cv.height = 3185;
     const cx = cv.getContext("2d"); for (const im of imgs) cx.drawImage(im, 0, 0, 4763, 3185);
+    /* APOC-V304: the word objects are drawn at their CURRENT positions,
+       between the remnant and the cartouche — the 3D ground shows the
+       map as it currently is, moved words included. */
+    if (wordsOn293 && typeof wordsDrawComposite304 === "function") { try { await wordsDrawComposite304(cx); } catch(e) {} }
+    if (cartoucheOn293) { const ci304 = await load(FAERUN_LAYERS293.cartouche); cx.drawImage(ci304, 0, 0, 4763, 3185); }
     if (rot) cv = rotateCanvasCopy(cv, rot);
     const url = await new Promise(res => cv.toBlob(b => res(b ? URL.createObjectURL(b) : FAERUN_LAYERS293.land), "image/png"));
     compCache293[key] = url; return url;
@@ -1704,6 +1717,345 @@ setInterval(loadSharedEntries, 60000);
   let markers = [];
   let editing = null;
   let tempPin = null;
+  /* ================= APOC-V304 (v3.05, 2026-11-15): STAGE 3 — EVERY WORD ITS OWN MOVABLE OBJECT =================
+     Shaun's commission (2026-11-15, route B+C): the Faerûn overland's
+     words stop being paint on the flat Words layer and become individual
+     objects he can pick up and move the way he moves pins. Built exactly
+     per work/stage3-audit.md:
+       - Material: work/layered-map/manifest.json ONLY — 575 records
+         (558 text labels + 14 symbols + 3 misc). Nothing guessed, no
+         records added; Moonpass/Elversult stay absent.
+       - Route (a): the flat layer in pane 201 is now the REMNANT —
+         faerun-words-remnant.webp, the Stage 1 words master with every
+         catalogued component's ink erased AT THE COMPONENT LEVEL
+         (census: owned 918,487 + remnant 235,190 = 1,153,677 total ink
+         px, exact). All unrecorded ink (dotted trails, canopy
+         fragments, no-record names) stays on the remnant. An unmoved
+         map is pixel-identical to the v2.97 stack (recomposition QA
+         gate passed in the asset pipeline).
+       - Objects: one L.marker per record on the NEW pane
+         layerBaseWordObjs (z 203 — above Land/remnant/Cartouche,
+         below layerMap 205, so pins always win overlaps and always
+         draw above words). Each icon is a div painting the record's
+         sprite region from the one shared lossless sheet
+         (faerun-words-sprites.webp) via background-position. Words are
+         DIVS, never img.leaflet-image-layer in panes 200–202, so
+         baseImg() (APOC-V298) can never mistake a word for the base.
+       - Scaling: words are print — icon geometry scales with 2^zoom,
+         rebuilt on zoomend ONLY. Words are NEVER inside draw()'s
+         moveend rebuild and never rebuilt by any poll: idle polls
+         cause zero word DOM churn (canonical-compare gate, below).
+       - Positions: the record's bbox top-left in % of the frame —
+         exactly its manifest bboxPct at default. Rendering subtracts
+         the 3px sprite pad; dragend converts back through the page's
+         own toLatLng/toXY pair, so rotation (rotPct) comes free for
+         positions, and the icon builder rotates the ink itself
+         (mapRot × 90°, anchor corner cycling per §4.4 of the audit).
+       - Persistence: NEW key vtt_words_faerun, deltas only
+         {v:1, pos:{recordId:[xPct,yPct]}}. Saves clone the APOC-V292
+         discipline (dirty map + serialized chain + re-read/apply-by-id
+         + in-flight load deferral). No existing key changes shape;
+         map_markers is untouched. Loads ride the 60s cadence.
+       - Gestures: press-drag moves (Leaflet-native marker dragging,
+         mouse + touch identical); release saves once. Single click /
+         double-click: nothing. Right-click: reset THIS word to its
+         printed spot. "Reset words" button in the Layers set resets
+         all. No radial, no lock, no tray for words in v1 (audit §6/§10,
+         adopted answers). Draggable whenever pins are (not projecting).
+       - Consumers: wordsOn shows/hides objects AND remnant together
+         (apoc293SyncVis seats the group on the same condition); the
+         draw-layer map opacity dims the word pane too; the 3D
+         composite draws word sprites at their CURRENT positions
+         (wordsRev in its cache key); Take Photo has its own words
+         pass at the words pane's z turn. */
+  const WORDS_KEY304 = "vtt_words_faerun";
+  const WORD_SHEET304 = "assets/maps/faerun-words-sprites.webp";
+  const WORD_MANIFEST304 = "assets/maps/faerun-words-manifest.json";
+  const WORD_PADX304 = 3 / 4763 * 100, WORD_PADY304 = 3 / 3185 * 100;
+  var wordsGroup304 = null;              /* var: apoc293SyncVis may call wordsSyncVis304 before this block's lets initialise */
+  let wordRecs304 = null;                /* Map id -> runtime record {id, t, b:[x,y,w,h], s:[x,y,w,h]} */
+  let wordList304 = [];                  /* records in manifest order */
+  let wordPos304 = {};                   /* in-memory deltas {id: [xPct, yPct]} — bbox top-left % */
+  let wordMarkers304 = new Map();        /* id -> L.marker */
+  let wordsBuilt304 = false;
+  let wordsRevCounter304 = 0;            /* bumped on every position change; rides the 3D composite cache key */
+  let wordSheetImgP304 = null;           /* Promise<Image|null> for composite/photo */
+  let wordDragging304 = null;            /* id being dragged on THIS page (loads skip it) */
+  let wordManifestP304 = null;
+  function wordsPosRev304(){ return wordsRevCounter304; }
+  function wordSheet304(){
+    if (!wordSheetImgP304) wordSheetImgP304 = new Promise(res => { const im = new Image(); im.crossOrigin = "anonymous"; im.onload = () => res(im); im.onerror = () => res(null); im.src = WORD_SHEET304; });
+    return wordSheetImgP304;
+  }
+  function wordsLoadManifest304(){
+    if (!wordManifestP304) wordManifestP304 = (async () => {
+      const resp = await fetch(WORD_MANIFEST304);
+      const man = await resp.json();
+      wordList304 = (man && man.labels) || [];
+      wordRecs304 = new Map(wordList304.map(r => [r.id, r]));
+      return wordRecs304;
+    })().catch(() => null);
+    return wordManifestP304;
+  }
+  function wordPosOf304(rec){
+    const p = wordPos304[rec.id];
+    return p ? { x: p[0], y: p[1] } : { x: rec.b[0] / 4763 * 100, y: rec.b[1] / 3185 * 100 };
+  }
+  /* Marker latlng = the sprite rect's anchor corner through toLatLng.
+     The anchor corner cycles with rotation (audit §4.4): rot 0 the
+     sprite's top-left, rot 1 its bottom-left, rot 2 bottom-right,
+     rot 3 top-right — the corner that lands on the rotated frame's
+     top-left, where the icon box sits. */
+  function wordLatLng304(rec, pos){
+    const px = pos.x - WORD_PADX304, py = pos.y - WORD_PADY304;
+    const pw = rec.s[2] / 4763 * 100, ph = rec.s[3] / 3185 * 100;
+    let cx = px, cy = py;
+    if (mapRot === 1) { cy = py + ph; }
+    else if (mapRot === 2) { cx = px + pw; cy = py + ph; }
+    else if (mapRot === 3) { cx = px + pw; }
+    return toLatLng(cx, cy);
+  }
+  function wordIcon304(rec){
+    const k = Math.pow(2, map.getZoom());
+    const sw = rec.s[2], sh = rec.s[3];
+    const w = Math.max(1, Math.round(sw * k)), h = Math.max(1, Math.round(sh * k));
+    let tf = "";
+    if (mapRot === 1) tf = `transform:translate(${Math.round(sh * k)}px,0px) rotate(90deg);`;
+    else if (mapRot === 2) tf = `transform:translate(${w}px,${h}px) rotate(180deg);`;
+    else if (mapRot === 3) tf = `transform:translate(0px,${Math.round(sw * k)}px) rotate(270deg);`;
+    const html = `<div class="wk-in" style="width:${w}px;height:${h}px;background-image:url('${WORD_SHEET304}');background-size:${Math.round(4094 * k)}px ${Math.round(3788 * k)}px;background-position:${-Math.round(rec.s[0] * k)}px ${-Math.round(rec.s[1] * k)}px;${tf}"></div>`;
+    return L.divIcon({ className: "wk-icon", html, iconSize: (mapRot % 2 === 1) ? [Math.max(1, Math.round(sh * k)), Math.max(1, Math.round(sw * k))] : [w, h], iconAnchor: [0, 0] });
+  }
+  function repositionWord304(rec){
+    const m = wordMarkers304.get(rec.id);
+    if (m) m.setLatLng(wordLatLng304(rec, wordPosOf304(rec)));
+  }
+  /* ---- persistence: the APOC-V292 discipline, cloned for words ---- */
+  let wordDirty304 = new Map();          /* id -> [x,y] | null (null = back to printed spot) */
+  let wordSaveChain304 = Promise.resolve();
+  let wordSaveActive304 = 0;
+  let wordLoadDeferred304 = false;
+  function wordPatch304(id, val){
+    if (val === null) { wordDirty304.set(id, null); delete wordPos304[id]; }
+    else { wordDirty304.set(id, val); wordPos304[id] = val; }
+    wordsRevCounter304++;
+    try { apoc293InvalidateComposite(); } catch(e) {}
+  }
+  async function saveWordsNow304(changes){
+    if (!changes.size) return true;
+    try {
+      const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", WORDS_KEY304).maybeSingle();
+      if (rerr) return false;
+      const pos = (data && data.value && data.value.pos && typeof data.value.pos === "object") ? Object.assign({}, data.value.pos) : {};
+      for (const [id, v] of changes) { if (v === null) delete pos[id]; else pos[id] = v; }
+      const { error } = await db.from(SETTINGS_TABLE).upsert(
+        { key: WORDS_KEY304, value: { v: 1, pos }, updated_at: new Date().toISOString() },
+        { onConflict: "key" }
+      );
+      return !error;
+    } catch (e) { return false; }
+  }
+  function saveWords304(){
+    const changes = wordDirty304;
+    wordDirty304 = new Map();
+    wordSaveActive304++;
+    const job = wordSaveChain304.then(() => saveWordsNow304(changes));
+    wordSaveChain304 = job.then(() => {}, () => {});
+    return job.then(ok => {
+      wordSaveActive304--;
+      if (!wordSaveActive304 && wordLoadDeferred304) { wordLoadDeferred304 = false; loadWords304(true); }
+      return ok;
+    }, () => {
+      wordSaveActive304--;
+      if (!wordSaveActive304 && wordLoadDeferred304) { wordLoadDeferred304 = false; loadWords304(true); }
+      return false;
+    });
+  }
+  async function loadWords304(quiet){
+    if (!apoc293IsSplit()) return;
+    if (wordSaveActive304 > 0) { wordLoadDeferred304 = true; return; }
+    const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", WORDS_KEY304).maybeSingle();
+    if (error) { if (!quiet) setStatus("The shared word positions could not be loaded — try again in a few seconds."); return; }
+    const incoming = (data && data.value && data.value.pos && typeof data.value.pos === "object") ? data.value.pos : {};
+    if (markersCanonEq(incoming, wordPos304)) return;   /* canonical gate: equal = zero DOM writes */
+    const prev = wordPos304;
+    wordPos304 = {};
+    for (const id of Object.keys(incoming)) {
+      const v = incoming[id];
+      if (Array.isArray(v) && typeof v[0] === "number" && typeof v[1] === "number") wordPos304[id] = [v[0], v[1]];
+    }
+    wordsRevCounter304++;
+    try { apoc293InvalidateComposite(); } catch(e) {}
+    if (!wordsBuilt304 || !wordRecs304) return;
+    const ids = new Set([...Object.keys(prev), ...Object.keys(wordPos304)]);
+    for (const id of ids) {
+      if (id === wordDragging304) continue;
+      const a = prev[id], b = wordPos304[id];
+      if (a && b && a[0] === b[0] && a[1] === b[1]) continue;
+      if (!a && !b) continue;
+      const rec = wordRecs304.get(id);
+      if (rec) repositionWord304(rec);
+    }
+  }
+  /* ---- markers ---- */
+  function wordMakeMarker304(rec){
+    const m = L.marker(wordLatLng304(rec, wordPosOf304(rec)), { pane: "layerBaseWordObjs", draggable: !isProjecting(), keyboard: false, icon: wordIcon304(rec) });
+    m.on("dragstart", () => { wordDragging304 = rec.id; });
+    m.on("dragend", async () => {
+      wordDragging304 = null;
+      const xy = toXY(m.getLatLng());   /* the anchor corner's % — walk it back to the bbox corner */
+      const pw = rec.s[2] / 4763 * 100, ph = rec.s[3] / 3185 * 100;
+      let px = xy.x, py = xy.y;
+      if (mapRot === 1) { py = xy.y - ph; }
+      else if (mapRot === 2) { px = xy.x - pw; py = xy.y - ph; }
+      else if (mapRot === 3) { px = xy.x - pw; }
+      const bx = Math.round((px + WORD_PADX304) * 100) / 100, by = Math.round((py + WORD_PADY304) * 100) / 100;
+      wordPatch304(rec.id, [bx, by]);
+      const ok = await saveWords304();
+      if (!ok) { setStatus("That move didn't save — drag it again or refresh."); loadWords304(true); }
+    });
+    m.on("contextmenu", async () => {
+      if (!wordPos304[rec.id]) return;   /* already at its printed spot */
+      wordPatch304(rec.id, null);
+      repositionWord304(rec);
+      const ok = await saveWords304();
+      setStatus(ok ? `${rec.t || "That word"} back at its printed spot — saved for everybody.` : "That reset didn't save — try again.");
+      if (!ok) loadWords304(true);
+    });
+    return m;
+  }
+  function wordsSyncVis304(){
+    try {
+      if (!wordsGroup304) return;
+      const want = wordsOn293 && apoc293IsSplit();
+      if (want && !map.hasLayer(wordsGroup304)) wordsGroup304.addTo(map);
+      if (!want && map.hasLayer(wordsGroup304)) map.removeLayer(wordsGroup304);
+    } catch(e) {}
+  }
+  async function wordsBuild304(){
+    if (wordsBuilt304 || !apoc293IsSplit()) return;
+    const recs = await wordsLoadManifest304();
+    if (!recs || !apoc293IsSplit() || wordsBuilt304) return;
+    if (!wordsGroup304) {
+      wordsGroup304 = L.layerGroup();
+      try { map.getPane("layerBaseWordObjs").classList.add("wk-pane304"); } catch(e) {}
+    }
+    for (const rec of wordList304) {
+      const m = wordMakeMarker304(rec);
+      wordMarkers304.set(rec.id, m);
+      m.addTo(wordsGroup304);
+    }
+    wordsBuilt304 = true;
+    wordsSyncVis304();
+    loadWords304(true);
+  }
+  function wordsOnSwitch304(id){
+    if (id === "faerun") {
+      if (wordsBuilt304) { wordsOnRotate304(); loadWords304(true); }
+      else wordsBuild304();
+    } else if (wordsGroup304 && map.hasLayer(wordsGroup304)) map.removeLayer(wordsGroup304);
+  }
+  function wordsOnRotate304(){
+    if (!wordsBuilt304) return;
+    for (const rec of wordList304) {
+      repositionWord304(rec);
+      const m = wordMarkers304.get(rec.id);
+      if (m) {
+        m.setIcon(wordIcon304(rec));
+        if (m.dragging) { if (isProjecting()) m.dragging.disable(); else m.dragging.enable(); }
+      }
+    }
+  }
+  function wordsRescale304(){
+    if (!wordsBuilt304) return;
+    for (const rec of wordList304) {
+      const m = wordMarkers304.get(rec.id);
+      if (m) m.setIcon(wordIcon304(rec));
+    }
+  }
+  map.on("zoomend", () => { wordsRescale304(); });
+  setInterval(() => { loadWords304(true); }, 60000);
+  /* ---- reset all (Layers set button, adopted audit answer 1) ---- */
+  async function wordsResetAll304(){
+    if (!Object.keys(wordPos304).length && !wordDirty304.size) { setStatus("No word has been moved — everything is at its printed spot."); return; }
+    for (const id of Object.keys(wordPos304)) wordDirty304.set(id, null);
+    wordPos304 = {};
+    wordsRevCounter304++;
+    try { apoc293InvalidateComposite(); } catch(e) {}
+    for (const rec of wordList304) repositionWord304(rec);
+    const ok = await saveWords304();
+    setStatus(ok ? "Every word back at its printed spot — saved for everybody." : "That reset didn't save — try again.");
+    if (!ok) loadWords304(true);
+  }
+  const wordsResetBtn304 = document.createElement("button");
+  wordsResetBtn304.type = "button";
+  wordsResetBtn304.className = "btn";
+  wordsResetBtn304.id = "wordsReset304";
+  wordsResetBtn304.textContent = "Reset words";
+  wordsResetBtn304.title = "Put every moved word back at its printed spot";
+  wordsResetBtn304.addEventListener("click", () => { if (confirm("Put every moved word back at its printed spot? Everybody will see the words return to the printed map.")) wordsResetAll304(); });
+  setInterval(() => {
+    try {
+      const set = document.getElementById("set-layers");
+      const cL = $("cartoucheToggleL293");
+      if (set && wordsResetBtn304.parentNode !== set) { if (cL && cL.parentNode === set) cL.after(wordsResetBtn304); else set.appendChild(wordsResetBtn304); }
+      const isF = !$("mapSelect") || $("mapSelect").value === "faerun";
+      wordsResetBtn304.style.display = isF ? "" : "none";
+    } catch(e) {}
+  }, 700);
+  /* ---- 3D composite pass: word sprites at CURRENT positions ---- */
+  async function wordsDrawComposite304(cx){
+    const recs = await wordsLoadManifest304();
+    if (!recs) return;
+    const im = await wordSheet304();
+    if (!im) return;
+    for (const rec of wordList304) {
+      const pos = wordPosOf304(rec);
+      cx.drawImage(im, rec.s[0], rec.s[1], rec.s[2], rec.s[3], pos.x / 100 * 4763 - 3, pos.y / 100 * 3185 - 3, rec.s[2], rec.s[3]);
+    }
+  }
+  /* ---- Take Photo pass: draw each visible word from the sheet at its
+     element's current rect, replaying the icon's rotation transform ---- */
+  async function wordsPhotoPass304(g, mr){
+    if (!wordsBuilt304 || !wordsOn293 || !apoc293IsSplit()) return;
+    const im = await wordSheet304();
+    if (!im) return;
+    let alpha = 1;
+    try { alpha = parseFloat(getComputedStyle(map.getPane("layerBaseWordObjs")).opacity); if (isNaN(alpha)) alpha = 1; } catch(e) {}
+    for (const rec of wordList304) {
+      const m = wordMarkers304.get(rec.id);
+      const el = m && m.getElement ? m.getElement() : null;
+      if (!el || !el.firstChild) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      if (r.right < mr.left || r.left > mr.right || r.bottom < mr.top || r.top > mr.bottom) continue;
+      const kw = (el.firstChild.offsetWidth || rec.s[2]) / rec.s[2];
+      g.save();
+      try { g.globalAlpha = alpha; } catch(e) {}
+      g.translate(Math.round(r.left - mr.left), Math.round(r.top - mr.top));
+      if (mapRot === 1) { g.translate(Math.round(rec.s[3] * kw), 0); g.rotate(Math.PI / 2); }
+      else if (mapRot === 2) { g.translate(Math.round(rec.s[2] * kw), Math.round(rec.s[3] * kw)); g.rotate(Math.PI); }
+      else if (mapRot === 3) { g.translate(0, Math.round(rec.s[2] * kw)); g.rotate(3 * Math.PI / 2); }
+      try { g.drawImage(im, rec.s[0], rec.s[1], rec.s[2], rec.s[3], 0, 0, Math.round(rec.s[2] * kw), Math.round(rec.s[3] * kw)); } catch(e) {}
+      g.restore();
+    }
+  }
+  window.__apoc304 = {
+    state: () => ({ built: wordsBuilt304, count: wordMarkers304.size, moved: Object.keys(wordPos304).length, rev: wordsRevCounter304, pos: Object.assign({}, wordPos304) }),
+    posOf: id => { const rec = wordRecs304 && wordRecs304.get(id); return rec ? wordPosOf304(rec) : null; },
+    rec: id => (wordRecs304 && wordRecs304.get(id)) || null,
+    el: id => { const m = wordMarkers304.get(id); return m && m.getElement ? m.getElement() : null; },
+    marker: id => wordMarkers304.get(id) || null,
+    photoPass: (g, mr) => wordsPhotoPass304(g, mr),
+    drawComposite: cx => wordsDrawComposite304(cx),
+    resetAll: () => wordsResetAll304(),
+    load: quiet => loadWords304(quiet)
+  };
+  try {
+    const s293state = window.__apoc293.state;
+    window.__apoc293.state = () => Object.assign(s293state(), { words304: window.__apoc304.state() });
+  } catch(e) {}
+  wordsBuild304();
   /* APOC-V288 (2026-11-14): pin interaction contract — Shaun's order of
      2026-11-14 11:11 MST, SUPERSEDING the APOC-V278 click-opens
      contract above it in history:
@@ -5113,7 +5465,7 @@ setInterval(loadSharedEntries, 60000);
   setInterval(() => { loadDice(true); loadInit(true); }, 30000);
 
     const MAPS = {
-    faerun: { name: "Faerûn — World Map", img: "assets/maps/faerun-land.webp", w: 4763, h: 3185, cell: 60, layers: { land: "assets/maps/faerun-land.webp", words: "assets/maps/faerun-words.webp", cartouche: "assets/maps/faerun-cartouche.webp" } },
+    faerun: { name: "Faerûn — World Map", img: "assets/maps/faerun-land.webp", w: 4763, h: 3185, cell: 60, layers: { land: "assets/maps/faerun-land.webp", words: "assets/maps/faerun-words-remnant.webp", cartouche: "assets/maps/faerun-cartouche.webp" } },
     "saint-james": { name: "Arcanic Rendez-Vous — Saint James's floors", img: "assets/maps/saint-james-floors.webp", w: 1662, h: 1077, cell: 50 }
   };
   const ACTIVE_KEY = "vtt_active";
@@ -5146,6 +5498,7 @@ setInterval(loadSharedEntries, 60000);
       map.removeLayer(veilLayer);
     }
     loadMarkers(true);
+    try { wordsOnSwitch304(id); } catch(e) {}   /* APOC-V304: word objects exist only on Faerûn */
     loadPlaces(true);
     if (typeof loadTrayAll303 === "function") loadTrayAll303(true); /* APOC-V303: the universal tray follows the map switch */
     loadTokens(true);
@@ -5227,6 +5580,7 @@ setInterval(loadSharedEntries, 60000);
     drawVeil();
     draw();
     drawPlaces();
+    try { wordsOnRotate304(); } catch(e) {}   /* APOC-V304: words re-seat at rotated positions with rotated ink */
     drawTokens();
     drawGrid();
     if (gridOn) gridLayer.addTo(map);
@@ -10025,7 +10379,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-1608";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-1708";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -18342,7 +18696,11 @@ return module.exports; })();</script>
         return cache[src];
       }
       for (var p = 0; p < panes.length; p++) {
-        var nodes = panes[p].el.querySelectorAll("canvas, img");
+        if (panes[p].el.classList && panes[p].el.classList.contains("wk-pane304")) {   /* APOC-V304: word objects are divs — invisible to the canvas/img walk; draw them from the sheet at this pane's z turn */
+          if (window.__apoc304 && window.__apoc304.photoPass) { try { await window.__apoc304.photoPass(g, mr); } catch(e){} }
+          continue;
+        }
+        var nodes = [...panes[p].el.querySelectorAll("canvas, img")].filter(function(nd){ return nd.closest(".leaflet-pane") === panes[p].el; });   /* APOC-V304: scope each pane's walk to its OWN nodes — the map-pane's descendant query otherwise repaints every base image over the word objects drawn at the 203 turn (every real node still draws once, at its own pane's turn, in the same stack order) */
         for (var n = 0; n < nodes.length; n++) {
           var node = nodes[n];
           var r = node.getBoundingClientRect();
@@ -18364,7 +18722,11 @@ return module.exports; })();</script>
         var g2 = cv.getContext("2d");
         g2.fillStyle = "#0b0d10"; g2.fillRect(0, 0, W, H);
         for (var p2 = 0; p2 < panes.length; p2++) {
-          var nodes2 = panes[p2].el.querySelectorAll("canvas, img");
+          if (panes[p2].el.classList && panes[p2].el.classList.contains("wk-pane304")) {
+            if (window.__apoc304 && window.__apoc304.photoPass) { try { await window.__apoc304.photoPass(g2, mr); } catch(e){} }
+            continue;
+          }
+          var nodes2 = [...panes[p2].el.querySelectorAll("canvas, img")].filter(function(nd){ return nd.closest(".leaflet-pane") === panes[p2].el; });   /* APOC-V304: same own-pane scoping as the first walk */
           for (var n2 = 0; n2 < nodes2.length; n2++) {
             var node2 = nodes2[n2];
             var r2 = node2.getBoundingClientRect();
