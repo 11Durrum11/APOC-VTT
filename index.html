@@ -1830,9 +1830,11 @@ setInterval(loadSharedEntries, 60000);
     const m = wordMarkers304.get(rec.id);
     if (m) m.setLatLng(wordLatLng304(rec, wordPosOf304(rec)));
   }
-  /* ---- persistence: the APOC-V292 discipline, cloned for words ---- */
+  /* ---- persistence: APOC-V307 — the APOC-V292 discipline the V304
+     block cloned now lives in the Store (Store.mergePos); the
+     private save chain is deleted, the dirty map + save/load
+     deferral are unchanged, and the wire shape stays {v:1, pos}. ---- */
   let wordDirty304 = new Map();          /* id -> [x,y] | null (null = back to printed spot) */
-  let wordSaveChain304 = Promise.resolve();
   let wordSaveActive304 = 0;
   let wordLoadDeferred304 = false;
   function wordPatch304(id, val){
@@ -1843,24 +1845,13 @@ setInterval(loadSharedEntries, 60000);
   }
   async function saveWordsNow304(changes){
     if (!changes.size) return true;
-    try {
-      const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", WORDS_KEY304).maybeSingle();
-      if (rerr) return false;
-      const pos = (data && data.value && data.value.pos && typeof data.value.pos === "object") ? Object.assign({}, data.value.pos) : {};
-      for (const [id, v] of changes) { if (v === null) delete pos[id]; else pos[id] = v; }
-      const { error } = await db.from(SETTINGS_TABLE).upsert(
-        { key: WORDS_KEY304, value: { v: 1, pos }, updated_at: new Date().toISOString() },
-        { onConflict: "key" }
-      );
-      return !error;
-    } catch (e) { return false; }
+    return Store.mergePos(WORDS_KEY304, changes);
   }
   function saveWords304(){
     const changes = wordDirty304;
     wordDirty304 = new Map();
     wordSaveActive304++;
-    const job = wordSaveChain304.then(() => saveWordsNow304(changes));
-    wordSaveChain304 = job.then(() => {}, () => {});
+    const job = saveWordsNow304(changes);
     return job.then(ok => {
       wordSaveActive304--;
       if (!wordSaveActive304 && wordLoadDeferred304) { wordLoadDeferred304 = false; loadWords304(true); }
@@ -1876,6 +1867,7 @@ setInterval(loadSharedEntries, 60000);
     if (wordSaveActive304 > 0) { wordLoadDeferred304 = true; return; }
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", WORDS_KEY304).maybeSingle();
     if (error) { if (!quiet) setStatus("The shared word positions could not be loaded — try again in a few seconds."); return; }
+    try { Store.ingestValue(WORDS_KEY304, (data && data.value) || null); } catch(e) {}   /* APOC-V307: the row advances the Store's value cache; the canonical gate below still decides the DOM */
     const incoming = (data && data.value && data.value.pos && typeof data.value.pos === "object") ? data.value.pos : {};
     if (markersCanonEq(incoming, wordPos304)) return;   /* canonical gate: equal = zero DOM writes */
     const prev = wordPos304;
@@ -2865,6 +2857,40 @@ setInterval(loadSharedEntries, 60000);
      card edit, lock toggle, tray shelve/restore, take-all, tray
      drag-out, atlas backfill, pin delete) writes through the Store
      and nothing else in the page can write a markers row. */
+  /* ================= APOC-V307 (v3.08, 2026-11-15): THE STORE EVERYWHERE + ROUTED SYNC =================
+     Stage 2 of the redesign. The Stage 1 Store is generalised to
+     EVERY collection, with zero wire-shape changes:
+       - record collections (places / tokens / templates / draw
+         items) write through the same per-collection queue and
+         write-time re-read merge as markers. Their save adapters
+         diff the live array against this page's last-synced shadow
+         (storeRecordDiff323) and emit FIELD-LEVEL patches, whole
+         records for additions, dels for removals — so a save can
+         never clobber a record or a field it did not itself change,
+         and a patch against a record another saver deleted lands
+         nowhere (no resurrections: resurrect-from-cache stays a
+         markers-only Stage 1 behaviour).
+       - whole-value rows (settings / fog / light / words / active)
+         write through mergeRow (named fields merged onto the
+         freshest full row — a settings write can never put a
+         partial row on the wire), putValue (verbatim value with a
+         canonical equality skip, so echo saves write nothing),
+         mergePos (the words delta, exact {v:1, pos} shape) and
+         putRow / removeRow (whole-row creation/removal for the
+         generator, the importers and the story copy path).
+       - every loader sits behind the canonical diff (ingest for
+         record arrays, ingestValue for whole rows): unchanged data
+         = zero renders, zero DOM work — fog's loader included; it
+         was the last unconditional renderer. A per-loader applied
+         key keeps map switch-backs honest (a row unchanged since
+         this page last applied it is skipped; a different map's
+         key always applies in full).
+       - sync is ROUTED (routeSettingsChange324): a change event
+         for key K notifies only K's collection. The vtt-live
+         shotgun, the markers-live and vtt-light-live channels,
+         mergePatchKey303 / trayMergeChain303, the V304 private
+         word-save chain and every whole-array blind save for the
+         collections above are DELETED, not bypassed. */
   function markersCanonEq(a, b){
     if (a === b) return true;
     if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
@@ -2885,8 +2911,56 @@ setInterval(loadSharedEntries, 60000);
   }
   const storeClone323 = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
   const storeCache323 = new Map();   /* key -> array of records (the cache; per-record identity is by id) */
+  const storeValueCache323 = new Map();  /* APOC-V307: key -> cloned whole-row VALUE for object rows (settings, fog, light, words, draw, active) */
   const storeQueues323 = new Map();  /* key -> promise tail of that collection's serialized write queue */
   const storeStats323 = { writes: 0, byKey: {}, ingests: 0, ingestChanges: 0 };
+  /* APOC-V307: which row field carries the record array for a key
+     (null = the row value IS the record, a whole-value row). Used
+     only by the whole-row verbs to keep the right cache fed. */
+  function storeFieldFor323(key){
+    if (key === "map_markers" || key.startsWith("map_markers_")) return "markers";
+    if (key.startsWith("vtt_places_")) return "places";
+    if (key === "vtt_tokens" || key.startsWith("vtt_tokens_")) return "tokens";
+    if (key === "vtt_templates" || key.startsWith("vtt_templates_")) return "items";
+    return null;
+  }
+  /* APOC-V307: three-way record diff — base is this page's
+     last-synced shadow of a collection, cur is the live local
+     array. Produces the changes map the write job consumes:
+     field-level patches for records present in both (only fields
+     that actually differ, so a concurrent saver's other fields
+     are never overwritten), whole records for additions, dels for
+     removals. Id-less records (some draw items) match by canonical
+     equality. A field present in base but absent in cur is carried
+     as undefined, which the JSON clone drops — no save path in the
+     page deletes record fields, so this is a no-op safeguard. */
+  function storeRecordDiff323(base, cur){
+    const changes = new Map();
+    const baseById = new Map(), baseAnon = [];
+    for (const r of (base || [])) { if (r && r.id) { if (!baseById.has(r.id)) baseById.set(r.id, r); } else if (r) baseAnon.push(r); }
+    const seen = new Set();
+    let anonN = 0;
+    for (const r of (cur || [])) {
+      if (!r) continue;
+      if (r.id) {
+        seen.add(r.id);
+        const b = baseById.get(r.id);
+        if (!b) { changes.set(r.id, { record: storeClone323(r) }); continue; }
+        if (markersCanonEq(b, r)) continue;
+        const patch = {};
+        for (const k of Object.keys(r)) if (!markersCanonEq(b[k], r[k])) patch[k] = storeClone323(r[k]);
+        for (const k of Object.keys(b)) if (!(k in r)) patch[k] = undefined;
+        changes.set(r.id, { patch });
+      } else {
+        const ai = baseAnon.findIndex(x => markersCanonEq(x, r));
+        if (ai >= 0) baseAnon.splice(ai, 1);
+        else changes.set("__anon" + (anonN++), { record: storeClone323(r) });
+      }
+    }
+    for (const [id] of baseById) if (!seen.has(id)) changes.set(id, { del: true });
+    for (const r of baseAnon) changes.set("__anon" + (anonN++), { del: true, canon: storeClone323(r) });
+    return changes;
+  }
   function storeEnqueue323(key, job){
     const prev = storeQueues323.get(key) || Promise.resolve();
     const run = prev.then(job, job);
@@ -2897,27 +2971,40 @@ setInterval(loadSharedEntries, 60000);
      only `changes` (id -> {patch} | {record} | {del}) onto it by id,
      upsert the merged array, then advance the cache by diffing the
      written row in. This is v2.92's merge-on-save, verbatim in logic,
-     generalised to any marker collection and reachable only here. */
-  async function storeWriteJob323(key, changes){
+     generalised to any marker collection and reachable only here.
+     APOC-V307: `field` names the row's record-array field (markers
+     by default — the Stage 1 call shape is unchanged) and
+     `resurrect` keeps Stage 1's markers-only patch-on-missing
+     behaviour (push the cached record); every Stage 2 collection
+     passes resurrect=false, so a patch against a record another
+     saver deleted lands nowhere. Id-less dels carry their canonical
+     record (`canon`) and remove its first match in the fresh row. */
+  async function storeWriteJob323(key, changes, field, resurrect){
     if (!changes.size) return true;
+    const fld = field || "markers";
     try {
       const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
       if (rerr) return false;
-      const arr = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers.slice() : [];
+      const arr = (data && data.value && Array.isArray(data.value[fld])) ? data.value[fld].slice() : [];
       const idx = new Map();
       arr.forEach((m, i) => { if (m && m.id && !idx.has(m.id)) idx.set(m.id, i); });
       for (const [id, ch] of changes) {
-        if (ch.del) { if (idx.has(id)) { arr[idx.get(id)] = null; idx.delete(id); } continue; }
+        if (ch.del) {
+          if (idx.has(id)) { arr[idx.get(id)] = null; idx.delete(id); }
+          else if (ch.canon !== undefined) { const ci = arr.findIndex(r => r && !r.id && markersCanonEq(r, ch.canon)); if (ci >= 0) arr[ci] = null; }
+          continue;
+        }
         if (ch.record) {
           if (idx.has(id)) arr[idx.get(id)] = storeClone323(ch.record); else { arr.push(storeClone323(ch.record)); idx.set(id, arr.length - 1); }
           continue;
         }
         if (idx.has(id)) Object.assign(arr[idx.get(id)], storeClone323(ch.patch));
-        else { const cached = (storeCache323.get(key) || []).find(m => m && m.id === id); if (cached) arr.push(storeClone323(cached)); }
+        else if (resurrect) { const cached = (storeCache323.get(key) || []).find(m => m && m.id === id); if (cached) arr.push(storeClone323(cached)); }
       }
       const merged = arr.filter(Boolean);
+      const value = {}; value[fld] = merged;
       const { error } = await db.from(SETTINGS_TABLE).upsert(
-        { key, value: { markers: merged }, updated_at: new Date().toISOString() },
+        { key, value, updated_at: new Date().toISOString() },
         { onConflict: "key" }
       );
       if (error) return false;
@@ -2952,22 +3039,176 @@ setInterval(loadSharedEntries, 60000);
       if (changed && key === markersKey()) markers = Store.list(key);
       return changed;
     },
-    patch(key, id, fields){
+    patch(key, id, fields, field, resurrect){
       if (!id) return Promise.resolve(false);
       const changes = new Map([[id, { patch: storeClone323(fields) }]]);
-      return storeEnqueue323(key, () => storeWriteJob323(key, changes));
+      return storeEnqueue323(key, () => storeWriteJob323(key, changes, field, resurrect));
     },
-    put(key, record){
+    put(key, record, field, resurrect){
       if (!record || !record.id) return Promise.resolve(false);
       const changes = new Map([[record.id, { record: storeClone323(record) }]]);
-      return storeEnqueue323(key, () => storeWriteJob323(key, changes));
+      return storeEnqueue323(key, () => storeWriteJob323(key, changes, field, resurrect));
     },
-    del(key, id){
+    del(key, id, field, resurrect){
       if (!id) return Promise.resolve(false);
       const changes = new Map([[id, { del: true }]]);
-      return storeEnqueue323(key, () => storeWriteJob323(key, changes));
+      return storeEnqueue323(key, () => storeWriteJob323(key, changes, field, resurrect));
     },
-    patchMany(key, changes){ return storeEnqueue323(key, () => storeWriteJob323(key, changes)); },
+    patchMany(key, changes, field, resurrect){ return storeEnqueue323(key, () => storeWriteJob323(key, changes, field, resurrect)); },
+    /* APOC-V307: canonical diff gate for whole-value rows — the
+       ingest() twin for settings / fog / light / words / draw /
+       active. Returns true iff the cached value actually changed;
+       a null value clears the key and never counts as a change. */
+    ingestValue(key, value){
+      if (value === null || value === undefined || typeof value !== "object") { storeValueCache323.delete(key); return false; }
+      storeStats323.ingests++;
+      const prev = storeValueCache323.get(key);
+      if (prev !== undefined && markersCanonEq(value, prev)) return false;
+      storeValueCache323.set(key, storeClone323(value));
+      storeStats323.ingestChanges++;
+      return true;
+    },
+    value(key){ const v = storeValueCache323.get(key); return v === undefined ? null : storeClone323(v); },
+    /* APOC-V307: named-field merge onto the freshest FULL row,
+       inside the queue — the settings discipline (a write can
+       never put a partial row on the wire) and the active-map
+       discipline in one verb. Canonically-equal merges write
+       nothing. */
+    mergeRow(key, fields){
+      const snap = storeClone323(fields);
+      return storeEnqueue323(key, async () => {
+        try {
+          const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+          if (rerr) return false;
+          const fresh = (data && data.value && typeof data.value === "object") ? data.value : {};
+          const merged = Object.assign({}, fresh, snap);
+          if (markersCanonEq(merged, fresh)) { Store.ingestValue(key, fresh); return true; }
+          const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value: merged, updated_at: new Date().toISOString() }, { onConflict: "key" });
+          if (error) return false;
+          storeStats323.writes++;
+          storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
+          Store.ingestValue(key, merged);
+          return true;
+        } catch (e) { return false; }
+      });
+    },
+    /* APOC-V307: verbatim whole-value write through the queue with
+       a canonical equality skip — fog and light saves land here, so
+       an echo save (a render that recomputes the same state)
+       writes nothing. */
+    putValue(key, value){
+      const snap = storeClone323(value);
+      return storeEnqueue323(key, async () => {
+        try {
+          const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+          if (rerr) return false;
+          const fresh = (data && data.value && typeof data.value === "object") ? data.value : null;
+          if (fresh && markersCanonEq(snap, fresh)) { Store.ingestValue(key, fresh); return true; }
+          const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value: snap, updated_at: new Date().toISOString() }, { onConflict: "key" });
+          if (error) return false;
+          storeStats323.writes++;
+          storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
+          Store.ingestValue(key, snap);
+          return true;
+        } catch (e) { return false; }
+      });
+    },
+    /* APOC-V307: whole-row creation/replacement, verbatim, through
+       the queue — the generator's and importers' new-map rows and
+       the story copy path land here (the value is the point of the
+       write, so there is no equality skip). The written value is
+       ingested so the caches stay coherent with the wire. */
+    putRow(key, value){
+      const snap = storeClone323(value);
+      return storeEnqueue323(key, async () => {
+        try {
+          const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value: snap, updated_at: new Date().toISOString() }, { onConflict: "key" });
+          if (error) return false;
+          storeStats323.writes++;
+          storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
+          const fld = storeFieldFor323(key);
+          if (fld && snap && Array.isArray(snap[fld])) Store.ingest(key, snap[fld]);
+          else Store.ingestValue(key, snap);
+          return true;
+        } catch (e) { return false; }
+      });
+    },
+    /* APOC-V307: whole-row removal through the queue (story
+       removal, Screen 2 mirror) — caches evicted with the row. */
+    removeRow(key){
+      return storeEnqueue323(key, async () => {
+        try {
+          const { error } = await db.from(SETTINGS_TABLE).delete().eq("key", key);
+          if (error) return false;
+          storeCache323.delete(key);
+          storeValueCache323.delete(key);
+          return true;
+        } catch (e) { return false; }
+      });
+    },
+    /* APOC-V307: the words delta — APOC-V304's private save clone,
+       absorbed. Re-reads the row inside the queue, applies the
+       id -> [x,y] | null changes onto its pos, upserts the exact
+       {v:1, pos} wire shape; a merge that changes nothing writes
+       nothing. */
+    mergePos(key, changes){
+      return storeEnqueue323(key, async () => {
+        try {
+          const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+          if (rerr) return false;
+          const pos = (data && data.value && data.value.pos && typeof data.value.pos === "object") ? Object.assign({}, data.value.pos) : {};
+          for (const [id, v] of changes) { if (v === null) delete pos[id]; else pos[id] = v; }
+          const value = { v: 1, pos };
+          const fresh = (data && data.value) || null;
+          if (fresh && markersCanonEq(value, fresh)) { Store.ingestValue(key, fresh); return true; }
+          const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+          if (error) return false;
+          storeStats323.writes++;
+          storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
+          Store.ingestValue(key, value);
+          return true;
+        } catch (e) { return false; }
+      });
+    },
+    /* APOC-V307: the draw save — record changes (from the shadow
+       diff) applied onto the freshest row's items inside the
+       queue, with the layers array carried only when it changed
+       (layers === null keeps the freshest row's layers). A merge
+       that lands canonically equal to the fresh row writes
+       nothing. The paint item is an ordinary item here — it is
+       never dropped. */
+    syncDraw(key, changes, layers){
+      return storeEnqueue323(key, async () => {
+        try {
+          const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+          if (rerr) return false;
+          const fresh = (data && data.value && typeof data.value === "object") ? data.value : {};
+          const arr = Array.isArray(fresh.items) ? fresh.items.slice() : [];
+          const idx = new Map();
+          arr.forEach((m, i) => { if (m && m.id && !idx.has(m.id)) idx.set(m.id, i); });
+          for (const [id, ch] of changes) {
+            if (ch.del) {
+              if (idx.has(id)) { arr[idx.get(id)] = null; idx.delete(id); }
+              else if (ch.canon !== undefined) { const ci = arr.findIndex(r => r && !r.id && markersCanonEq(r, ch.canon)); if (ci >= 0) arr[ci] = null; }
+              continue;
+            }
+            if (ch.record) {
+              if (idx.has(id)) arr[idx.get(id)] = storeClone323(ch.record); else { arr.push(storeClone323(ch.record)); idx.set(id, arr.length - 1); }
+              continue;
+            }
+            if (idx.has(id)) Object.assign(arr[idx.get(id)], storeClone323(ch.patch));
+          }
+          const value = { items: arr.filter(Boolean), layers: (layers !== null && layers !== undefined) ? storeClone323(layers) : (Array.isArray(fresh.layers) ? fresh.layers : []) };
+          if (markersCanonEq(value, { items: Array.isArray(fresh.items) ? fresh.items : [], layers: Array.isArray(fresh.layers) ? fresh.layers : [] })) { Store.ingestValue(key, fresh); return true; }
+          const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+          if (error) return false;
+          storeStats323.writes++;
+          storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
+          Store.ingestValue(key, value);
+          return true;
+        } catch (e) { return false; }
+      });
+    },
     /* Atlas migration append: append only records whose ids are not
        already in the freshest row; existing records are never
        rewritten. Serialized on the same per-collection queue. */
@@ -3662,26 +3903,47 @@ setInterval(loadSharedEntries, 60000);
       });
     }
   }
+  /* APOC-V307: places ride the Store — placeShadow is this page's
+     last-synced copy of the collection; savePlaces diffs against it
+     and sends only field-level patches / additions / removals
+     through the Store queue (the whole-row savePlaces is DELETED).
+     Loads sit behind the Store's canonical ingest gate: unchanged
+     data renders nothing. placeAppliedKey keeps map switch-backs
+     honest — a different map's key always applies in full. While a
+     save from this page is unresolved, loads defer (the APOC-V292
+     markers discipline, mirrored). */
+  let placeShadow = [];
+  let placeSaveActive = 0;
+  let placeLoadDeferred = false;
+  let placeAppliedKey = null;
   async function loadPlaces(quiet){
-    if (currentMapId === "faerun") { places = []; drawPlaces(); refreshPlaceUI(); return; }
+    if (currentMapId === "faerun") { places = []; placeShadow = []; placeAppliedKey = ""; drawPlaces(); refreshPlaceUI(); return; }
+    if (placeSaveActive > 0) { placeLoadDeferred = true; return; }
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", placesKey()).maybeSingle();
     if (error) { if (!quiet) setStatus("This map's places could not be loaded — try again in a few seconds."); return; }
-    const prevPlacesJson = JSON.stringify(places);
-    places = (data && data.value && Array.isArray(data.value.places)) ? data.value.places : [];
+    const incoming = (data && data.value && Array.isArray(data.value.places)) ? data.value.places : [];
+    const changed = Store.ingest(placesKey(), incoming);
+    if (!changed && placeAppliedKey === placesKey()) { refreshPlaceUI(); return; }
+    placeAppliedKey = placesKey();
+    places = changed ? incoming : storeClone323(Store.list(placesKey()));
+    placeShadow = storeClone323(places);
     drawPlaces();
     /* APOC-V303: place dots are banding obstacles for the markers
        now — when the place set actually changed, re-band the markers
        against it. Unchanged polls skip the redraw entirely (no new
        churn on the 60s cycle). */
-    if (JSON.stringify(places) !== prevPlacesJson) { try { draw(); } catch (e) {} }
+    try { draw(); } catch (e) {}
     refreshPlaceUI();
   }
   async function savePlaces(){
-    const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: placesKey(), value: { places }, updated_at: new Date().toISOString() },
-      { onConflict: "key" }
-    );
-    return !error;
+    const changes = storeRecordDiff323(placeShadow, places);
+    if (!changes.size) return true;
+    placeSaveActive++;
+    const ok = await Store.patchMany(placesKey(), changes, "places", false);
+    placeSaveActive--;
+    if (ok) placeShadow = storeClone323(places);
+    if (!placeSaveActive && placeLoadDeferred) { placeLoadDeferred = false; loadPlaces(true); }
+    return ok;
   }
   let lastPlaceGm = null;
   function refreshPlaceUI(){
@@ -3785,13 +4047,15 @@ setInterval(loadSharedEntries, 60000);
          kind to the viewed map's stores. Dropping back on the
          tray cancels, as APOC-V302 established.
        - Every tray write to a places row goes through
-         placePatchKey — a re-read → apply-by-id → upsert merge —
-         NEVER through savePlaces(), whose full-row upsert is the
-         GH-PIN-REVERT pattern. Marker writes to a foreign map use
-         the same keyed discipline (markerPatchKey303); the current
-         map's markers keep the pinPatch/saveMarkers path verbatim,
-         so the Faerûn map_markers row stays canon-equal after
-         every operation.
+         placePatchKey — APOC-V307: the Store's patch verb (write-
+         time re-read, named-field merge on the collection queue) —
+         NEVER a whole-array save: that blind upsert was the
+         GH-PIN-REVERT pattern, and savePlaces itself is a shadow-
+         diff Store flush since APOC-V307. Marker writes to a
+         foreign map use the same keyed discipline
+         (markerPatchKey303); the current map's markers keep the
+         pinPatch/saveMarkers path verbatim, so the Faerûn
+         map_markers row stays canon-equal after every operation.
        - Restore writes the home store directly from the map id —
          it never requires the home map to be registered or viewed
          on this device; a section whose map is missing from the
@@ -3845,6 +4109,11 @@ setInterval(loadSharedEntries, 60000);
           try {
             const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", trayPlacesKey303(m.id)).maybeSingle();
             const arr = (data && data.value && Array.isArray(data.value.places)) ? data.value.places : [];
+            /* APOC-V307: the places read advances through the Store's
+               canonical diff gate like the markers read above; if the
+               viewed map's places changed under the scan, the local
+               array + shadow re-sync and the board re-renders. */
+            if (Store.ingestKey(trayPlacesKey303(m.id), arr) && m.id === currentMapId) { places = storeClone323(arr); placeShadow = storeClone323(arr); drawPlaces(); try { draw(); } catch (e) {} }
             for (const rec of arr) if (rec && rec.tray) found.push({ mapId: m.id, mapName: m.name, store: "places", rec });
           } catch (e) {}
         }
@@ -3861,31 +4130,14 @@ setInterval(loadSharedEntries, 60000);
     trayLive303Timer = setTimeout(() => { trayLive303Timer = null; loadTrayAll303(true); }, 1500);
   }
   setInterval(() => { if (pinsTrayState.open) loadTrayAll303(true); }, 60000);
-  /* Keyed merge writers — the markers discipline (re-read the row,
-     apply ONLY the patch to the record with this id, upsert the
-     row's own field, serialized on a chain), generalized to any
-     key and to the places field. A record that is not in the row
-     is never invented into it. */
-  let trayMergeChain303 = Promise.resolve();
-  function mergePatchKey303(key, field, id, patch){
-    const job = trayMergeChain303.then(async () => {
-      try {
-        const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
-        if (rerr) return false;
-        const arr = (data && data.value && Array.isArray(data.value[field])) ? data.value[field].slice() : [];
-        const i = arr.findIndex(r => r && r.id === id);
-        if (i < 0) return false;
-        arr[i] = Object.assign({}, arr[i], patch);
-        const value = {}; value[field] = arr;
-        const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: "key" });
-        return !error;
-      } catch (e) { return false; }
-    });
-    trayMergeChain303 = job.then(() => {}, () => {});
-    return job;
-  }
-  function placePatchKey(key, id, patch){ return mergePatchKey303(key, "places", id, patch); }
-  function markerPatchKey303(key, id, patch){ return Store.patch(key, id, patch); } /* APOC-V306: foreign-map marker writes ride the Store queue for that collection — the old mergePatchKey303 marker path is deleted; mergePatchKey303 itself remains for places only */
+  /* Keyed writers — APOC-V307: mergePatchKey303 and its private
+     chain are DELETED, absorbed into the Store. Both keyed helpers
+     are now the Store's patch verb on the target collection's own
+     queue (write-time re-read, named-field merge, serialized per
+     collection). A record that is not in the row is never invented
+     into it. */
+  function placePatchKey(key, id, patch){ return Store.patch(key, id, patch, "places", false); }
+  function markerPatchKey303(key, id, patch){ return Store.patch(key, id, patch); }
   /* Shelve / restore routing by (store, home): the current map's
      markers ride pinPatch + saveMarkers exactly as before; every
      other write is a keyed merge against the HOME store. When the
@@ -4203,9 +4455,19 @@ setInterval(loadSharedEntries, 60000);
     tokenStatusEl.textContent = ok ? `Grid size: ${gridCellOverride} px per ${gridType === "hex" ? "hex" : "square"}.` : "Grid size didn't save — try again.";
   });
   function scaleInputVal(){ return scaleUnit === "mi" ? Math.round(feetPerSquare / 5280 * 100) / 100 : feetPerSquare; }
+  /* APOC-V307: settingsAppliedKey — the settings key this page last
+     applied in full; the ingestValue gate skips an unchanged row
+     only when the viewed map's key is the applied one. */
+  let settingsAppliedKey = null;
   async function loadVttSettings(quiet){
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", vttKey()).maybeSingle();
-    if (error) return;
+    if (error) return false;
+    /* APOC-V307: the loader sits behind the Store's canonical diff —
+       an unchanged settings row assigns nothing and redraws nothing.
+       Returns whether it applied, so followers (the lighting
+       satellite's repaint) can sit behind the same gate. */
+    if (!Store.ingestValue(vttKey(), (data && data.value) || null) && settingsAppliedKey === vttKey()) return false;
+    settingsAppliedKey = vttKey();
     if (data && data.value) {
       if (Number(data.value.feetPerSquare) > 0) feetPerSquare = Number(data.value.feetPerSquare);
       if (data.value.unit === "mi" || data.value.unit === "ft") scaleUnit = data.value.unit;
@@ -4228,13 +4490,15 @@ setInterval(loadSharedEntries, 60000);
       $("gridType").value = gridType;
       if (gridOn) drawGrid();
     }
+    return true;
   }
   async function saveVttSettings(){
-    const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: vttKey(), value: { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot, cell: gridCellOverride, gridOX, gridOY, gridDark, wordsOn: wordsOn293, cartoucheOn: cartoucheOn293 }, updated_at: new Date().toISOString() },
-      { onConflict: "key" }
-    );
-    return !error;
+    /* APOC-V307: through the Store queue as a mergeRow — the fields
+       below are the FULL row shape for the map (exactly what this
+       function has always written), merged onto the freshest row
+       inside the queue, so the wire never carries a partial row
+       and a concurrent saver's other fields survive. */
+    return Store.mergeRow(vttKey(), { feetPerSquare, unit: scaleUnit, gridType, gridOn, rotation: mapRot, cell: gridCellOverride, gridOX, gridOY, gridDark, wordsOn: wordsOn293, cartoucheOn: cartoucheOn293 });
   }
   $("scaleFeet").addEventListener("change", async () => {
     const v = parseFloat($("scaleFeet").value);
@@ -4250,22 +4514,44 @@ setInterval(loadSharedEntries, 60000);
     tokenStatusEl.textContent = ok ? `Scale unit: ${scaleUnit === "mi" ? "miles" : "feet"} per ${gridType === "hex" ? "hex" : "square"} (same scale, shown in ${scaleUnit === "mi" ? "miles" : "feet"}).` : "Scale unit didn't save — try again.";
   });
 
+  /* APOC-V307: tokens ride the Store — tokShadow is this page's
+     last-synced copy; saveTokens diffs against it and sends only
+     field-level patches / additions / removals through the Store
+     queue (the whole-row saveTokens is DELETED as a write path).
+     Loads sit behind the canonical ingest gate; tokAppliedKey
+     keeps map switch-backs honest; loads defer while a save from
+     this page is unresolved. */
+  let tokShadow = [];
+  let tokSaveActive = 0;
+  let tokLoadDeferred = false;
+  let tokAppliedKey = null;
   async function loadTokens(quiet){
     const forMap271 = currentMapId;
+    if (tokSaveActive > 0) { tokLoadDeferred = true; return; }
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", tokensKey()).maybeSingle();
     if (error) { if (!quiet) tokenStatusEl.textContent = "Tokens could not be loaded — try again in a few seconds."; return; }
-    tokens = (data && data.value && Array.isArray(data.value.tokens)) ? data.value.tokens : [];
+    const incoming = (data && data.value && Array.isArray(data.value.tokens)) ? data.value.tokens : [];
     window.__apocTokensLoadedFor = forMap271;
+    const changed = Store.ingest(tokensKey(), incoming);
+    if (!changed && tokAppliedKey === tokensKey()) return;
+    tokAppliedKey = tokensKey();
+    tokens = changed ? incoming : storeClone323(Store.list(tokensKey()));
+    tokShadow = storeClone323(tokens);
     drawTokens();
     tokenStatusEl.textContent = tokens.length ? `${tokens.length} token${tokens.length === 1 ? "" : "s"} on the table.` : "No tokens yet — Add token drops one at the center of the view.";
   }
   async function saveTokens(){
-    const { error } = await db.from(SETTINGS_TABLE).upsert(
-      { key: tokensKey(), value: { tokens }, updated_at: new Date().toISOString() },
-      { onConflict: "key" }
-    );
-    if (!error && window.__apocFogReady) { try { renderFog(); } catch (e) {} }
-    return !error;
+    const changes = storeRecordDiff323(tokShadow, tokens);
+    let ok = true;
+    if (changes.size) {
+      tokSaveActive++;
+      ok = await Store.patchMany(tokensKey(), changes, "tokens", false);
+      tokSaveActive--;
+      if (ok) tokShadow = storeClone323(tokens);
+      if (!tokSaveActive && tokLoadDeferred) { tokLoadDeferred = false; loadTokens(true); }
+    }
+    if (ok && window.__apocFogReady) { try { renderFog(); } catch (e) {} }
+    return ok;
   }
 
   function tokenPx(size){
@@ -4637,16 +4923,35 @@ setInterval(loadSharedEntries, 60000);
   let tplItems = [];
   let tplShapes = {};
   const tplLayer = L.layerGroup().addTo(map);
+  /* APOC-V307: templates ride the Store — tplShadow diff, field-
+     level patches through the queue, ingest-gated loads (the
+     whole-row saveTemplates is DELETED as a write path). */
+  let tplShadow = [];
+  let tplSaveActive = 0;
+  let tplLoadDeferred = false;
+  let tplAppliedKey = null;
   async function loadTemplates(quiet){
     if (!db) return;
+    if (tplSaveActive > 0) { tplLoadDeferred = true; return; }
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", tplKey()).maybeSingle();
     if (error) return;
-    tplItems = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
+    const incoming = (data && data.value && Array.isArray(data.value.items)) ? data.value.items : [];
+    const changed = Store.ingest(tplKey(), incoming);
+    if (!changed && tplAppliedKey === tplKey()) return;
+    tplAppliedKey = tplKey();
+    tplItems = changed ? incoming : storeClone323(Store.list(tplKey()));
+    tplShadow = storeClone323(tplItems);
     renderTemplates(); buildTplList();
   }
   async function saveTemplates(){
-    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: tplKey(), value: { items: tplItems }, updated_at: new Date().toISOString() }, { onConflict: "key" });
-    return !error;
+    const changes = storeRecordDiff323(tplShadow, tplItems);
+    if (!changes.size) return true;
+    tplSaveActive++;
+    const ok = await Store.patchMany(tplKey(), changes, "items", false);
+    tplSaveActive--;
+    if (ok) tplShadow = storeClone323(tplItems);
+    if (!tplSaveActive && tplLoadDeferred) { tplLoadDeferred = false; loadTemplates(true); }
+    return ok;
   }
   function tplPoints(it){
     const [ox, oy] = toUnits({ x: it.x, y: it.y });
@@ -4749,8 +5054,34 @@ setInterval(loadSharedEntries, 60000);
   loadVttSettings();
   loadTokens();
   setInterval(() => { loadTokens(true); loadVttSettings(true); }, 60000);
+  /* APOC-V307: ROUTED SYNC — the vtt-live shotgun is DELETED. A
+     change event for key K notifies ONLY K's collection, which
+     reconciles through the Store diff (unchanged data = zero
+     events, zero DOM mutations). Dice / initiative / ping route to
+     their own handlers only; vtt_active and vtt_active_2 route to
+     the active-map handler only; the tray follows markers and
+     places keys (its two contents); keys no collection owns are
+     ignored. The 60s polls reconcile through the same gated
+     loaders, so this routing is the only sync shape left. */
+  function routeSettingsChange324(payload){
+    const key = (payload && payload.new && payload.new.key) || (payload && payload.old && payload.old.key) || "";
+    if (!key) return;
+    if (key === "map_markers" || key.startsWith("map_markers_")) { loadMarkers(true); if (typeof trayLiveReload303 === "function") trayLiveReload303(); }
+    else if (key.startsWith("vtt_places_")) { loadPlaces(true); if (typeof trayLiveReload303 === "function") trayLiveReload303(); }
+    else if (key === "vtt_tokens" || key.startsWith("vtt_tokens_")) loadTokens(true);
+    else if (key === "vtt_templates" || key.startsWith("vtt_templates_")) loadTemplates(true);
+    else if (key === "vtt_words_faerun") { try { loadWords304(true); } catch(e) {} }
+    else if (key === "vtt_settings" || key.startsWith("vtt_settings_")) loadVttSettings(true);
+    else if (key === "vtt_draw" || key.startsWith("vtt_draw_")) loadDraw(true);
+    else if (key === "vtt_fog" || key.startsWith("vtt_fog_")) loadFog(true);
+    else if (key === "vtt_light" || key.startsWith("vtt_light_")) loadLighting(true);
+    else if (key === "dice_log") loadDice(true);
+    else if (key === "initiative") loadInit(true);
+    else if (key.startsWith("vtt_ping")) loadPing(true);
+    else if (key === "vtt_active" || key === "vtt_active_2") loadActiveMap();
+  }
   try {
-    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => { loadTokens(true); loadVttSettings(true); loadActiveMap(); loadFog(true); loadDraw(true); loadDice(true); loadInit(true); loadPing(true); loadMarkers(true); loadPlaces(true); loadTemplates(true); if (typeof trayLiveReload303 === "function") trayLiveReload303(); }).subscribe(); /* APOC-V303: the universal tray reloads (debounced) on any shared-store change */
+    db.channel("vtt-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, routeSettingsChange324).subscribe();
   } catch(e) {  }
 
     function effectiveGm(){ try { if (isProjecting()) { try { return sessionStorage.getItem("apocDispGm") === "1"; } catch(e) { return false; } } return gmView && !isProjecting(); } catch(e) { return false; } }     window.effectiveGm = effectiveGm;
@@ -4847,9 +5178,16 @@ setInterval(loadSharedEntries, 60000);
     $("lightControls").hidden = false;
   }
 
+    /* APOC-V307: fogAppliedKey — the fog key this page last applied
+     in full; with the ingestValue gate it makes loadFog a strict
+     no-op (zero renders, zero DOM work) on unchanged fog, on both
+     the poll cadence and routed sync events. */
+    let fogAppliedKey = null;
     async function loadFog(quiet){
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", fogKey()).maybeSingle();
     if (error) return;
+    if (!Store.ingestValue(fogKey(), (data && data.value) || null) && fogAppliedKey === fogKey()) return;
+    fogAppliedKey = fogKey();
     fogState = (data && data.value && typeof data.value === "object")
       ? { enabled: !!data.value.enabled, revealed: Array.isArray(data.value.revealed) ? data.value.revealed : [],
           opacity: (typeof data.value.opacity === "number") ? Math.min(1, Math.max(0.75, data.value.opacity)) : 0.93,
@@ -4862,8 +5200,10 @@ setInterval(loadSharedEntries, 60000);
   async function saveFog(){
     const val = { enabled: fogState.enabled, revealed: fogState.revealed, opacity: (typeof fogState.opacity === "number" ? fogState.opacity : 0.93),
       explored: fogState.explored ? { cell: fogState.explored.cell, cols: fogState.explored.cols, rows: fogState.explored.rows, bits: fogState.explored.bits } : null };
-    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: fogKey(), value: val, updated_at: new Date().toISOString() }, { onConflict: "key" });
-    return !error;
+    /* APOC-V307: through the Store queue via putValue — an echo
+       save (renderFog recomputing the explored bits it just read)
+       is canonically equal to the row and writes nothing. */
+    return Store.putValue(fogKey(), val);
   }
     function maskedShade(group, rectRing, holeRingsLL, fillOpacity, maskId){
     const opts = { pane: "layerLight", color: "transparent", weight: 0, fillColor: "#04060a", fillOpacity, interactive: false };
@@ -5050,9 +5390,12 @@ setInterval(loadSharedEntries, 60000);
        in memory (ids normalized above; key order normalized away by
        markersCanonEq), the DOM is not touched at all. A genuine change
        — another screen drew something — still renders exactly once. */
+    Store.ingestValue(drawKey(), { items: inItems, layers: inLayers });   /* APOC-V307: the row advances the Store's value cache on every load, gated or not */
     if (markersCanonEq(inItems, drawItems) && markersCanonEq(inLayers, drawLayers)) return;
     drawItems = inItems;
     drawLayers = inLayers;
+    drawShadow.items = storeClone323(inItems);   /* APOC-V307: the load is the new sync baseline for the save diff */
+    drawShadow.layers = storeClone323(inLayers);
     drawHist.last = drawSnapshot();
     buildLayerUi();
     renderDraw();
@@ -5061,6 +5404,12 @@ setInterval(loadSharedEntries, 60000);
      drawing change flows through, so it snapshots the state it replaces.
      Loads set the baseline instead (a teammate's change is not my undo). */
   let drawHist = { undo: [], redo: [], applying: false, last: null };
+  /* APOC-V307: drawShadow — this page's last-synced {items, layers};
+     saveDraw diffs against it and sends only the changed records
+     (plus layers when they changed) through the Store queue. The
+     whole-row saveDraw upsert is DELETED as a write path; the undo
+     snapshot discipline above it is untouched. */
+  let drawShadow = { items: [], layers: DEFAULT_DRAW_LAYERS.map(l => ({ ...l })) };
   function drawSnapshot(){ return JSON.stringify({ items: drawItems, layers: drawLayers }); }
   async function saveDraw(){
     syncDoorSegs();
@@ -5073,8 +5422,12 @@ setInterval(loadSharedEntries, 60000);
       drawHist.redo = [];
     }
     drawHist.last = snap;
-    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: drawKey(), value: { items: drawItems, layers: drawLayers }, updated_at: new Date().toISOString() }, { onConflict: "key" });
-    return !error;
+    const changes = storeRecordDiff323(drawShadow.items, drawItems);
+    const layersChanged = !markersCanonEq(drawShadow.layers, drawLayers);
+    if (!changes.size && !layersChanged) return true;
+    const ok = await Store.syncDraw(drawKey(), changes, layersChanged ? drawLayers : null);
+    if (ok) { drawShadow.items = storeClone323(drawItems); drawShadow.layers = storeClone323(drawLayers); }
+    return ok;
   }
     window.vttDraw = {
     items: () => drawItems,
@@ -5619,13 +5972,7 @@ setInterval(loadSharedEntries, 60000);
     loadFog(true);
     loadDraw(true);     setStatus(`Map loaded: ${def.name}.`);
   }
-  async function saveActiveMap(){     let prevA = {};
-    try { const prA = await db.from(SETTINGS_TABLE).select("value").eq("key", ACTIVE_KEY).maybeSingle(); if (prA.data && prA.data.value && typeof prA.data.value === "object") prevA = prA.data.value; } catch(e) {}
-    await db.from(SETTINGS_TABLE).upsert(
-      { key: ACTIVE_KEY, value: Object.assign({}, prevA, { mapId: currentMapId }), updated_at: new Date().toISOString() },
-      { onConflict: "key" }
-    );
-  }
+  async function saveActiveMap(){ return Store.mergeRow(ACTIVE_KEY, { mapId: currentMapId }); }   /* APOC-V307: the read-merge this function always did, now inside the Store queue */
 
     const rotImgCache = new Map();
   function rotateCanvasCopy(src, rot){
@@ -5719,9 +6066,9 @@ setInterval(loadSharedEntries, 60000);
   loadMarkers();
   setInterval(() => loadMarkers(true), 60000);
   setInterval(() => loadPlaces(true), 60000);
-  try {
-    db.channel("markers-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE, filter: "key=eq.map_markers" }, () => loadMarkers(true)).subscribe();
-  } catch(e) {  }
+  /* APOC-V307: the markers-live channel is DELETED — the routed
+     vtt-live subscription (routeSettingsChange324) already sees
+     every map_markers event and routes it to loadMarkers only. */
 
     const pingKey = () => currentMapId === "faerun" ? "vtt_ping" : `vtt_ping_${currentMapId}`;
   let pingShownTs = 0, pingMarker = null, pingHideTimer = null;
@@ -6695,8 +7042,9 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
       if (!newId) { drawStatusEl.textContent = "The .dd2vtt image was added, but the new map could not be identified — its lighting was not written."; return; }
       let ok = false;
       try {
-        const { error } = await db.from(SETTINGS_TABLE).upsert({ key: newId === "faerun" ? "vtt_light" : `vtt_light_${newId}`, value: converted, updated_at: new Date().toISOString() }, { onConflict: "key" });
-        ok = !error;
+        /* APOC-V307: the imported map's lighting row is a whole-row
+           creation — through the Store's putRow. */
+        ok = await Store.putRow(newId === "faerun" ? "vtt_light" : `vtt_light_${newId}`, converted);
       } catch(e) { ok = false; }
       if (ok && currentMapId === newId) { try { await loadLighting(true); } catch(e) {} }
       drawStatusEl.textContent = ok
@@ -7990,11 +8338,18 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     const off = !!src && src.on === false;     const col = off ? "#6b7280" : (src.color || "#ffb347");
     return L.divIcon({ className: "light-icon", html: `<span class="light-dot" style="background:${esc(col)};box-shadow:${off ? "none" : "0 0 14px 5px " + esc(col)}"></span><span class="light-name">${esc(src.name || "Light")}${off ? " (off)" : ""}</span>`, iconAnchor: [9, 9] });
   }
+  /* APOC-V307: lightAppliedKey — same applied-key discipline as
+     the other gated loaders. */
+  let lightAppliedKey = null;
   async function loadLighting(quiet){
     const forMap271 = currentMapId;
     if (!db) return;
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", lightKey()).maybeSingle();
     if (error) return;
+    /* APOC-V307: diff-gated — an unchanged light row rebuilds no
+       state and renders nothing. */
+    if (!Store.ingestValue(lightKey(), (data && data.value) || null) && lightAppliedKey === lightKey()) return;
+    lightAppliedKey = lightKey();
     const v = (data && data.value && typeof data.value === "object") ? data.value : {};
     lightState = { enabled: !!v.enabled, walls: Array.isArray(v.walls) ? v.walls : [], lights: Array.isArray(v.lights) ? v.lights : [], layerHidden: v.layerHidden === true, layerOpacity: (typeof v.layerOpacity === "number" ? v.layerOpacity : 1), ambient: (typeof v.ambient === "number" ? Math.min(1, Math.max(0, v.ambient)) : 1) };     $("lightEnabled").checked = lightState.enabled;
     if ($("ambientRange")) $("ambientRange").value = lightState.ambient;
@@ -8003,8 +8358,9 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
     renderLighting();
     try { buildLayerUi(); } catch(e) {}   }
   async function saveLighting(){
-    const { error } = await db.from(SETTINGS_TABLE).upsert({ key: lightKey(), value: lightState, updated_at: new Date().toISOString() }, { onConflict: "key" });
-    return !error;
+    /* APOC-V307: through the Store queue via putValue (cloned at
+       call time; an unchanged state writes nothing). */
+    return Store.putValue(lightKey(), lightState);
   }
   function flickerFactor(src){
     if (!src.flame) return 1;
@@ -8368,12 +8724,12 @@ if (typeof window !== "undefined") { window.convertDd2vtt = convertDd2vtt; windo
   const _switchMapLT = switchMap;
   switchMap = function(id){ _switchMapLT(id); loadLighting(true); };
   const _loadVttSettingsLT = loadVttSettings;
-  loadVttSettings = async function(q){ await _loadVttSettingsLT(q); renderLighting(); };
+  loadVttSettings = async function(q){ if (await _loadVttSettingsLT(q)) renderLighting(); };   /* APOC-V307: the repaint sits behind the settings loader's diff gate — unchanged settings repaint no lighting (and, through renderLighting's fog coupling, no fog) */
   loadLighting();
   setInterval(() => loadLighting(true), 30000);
-  try {
-    db.channel("vtt-light-live").on("postgres_changes", { event: "*", schema: "public", table: SETTINGS_TABLE }, () => loadLighting(true)).subscribe();
-  } catch(e) {  }
+  /* APOC-V307: the vtt-light-live channel is DELETED — the routed
+     vtt-live subscription routes vtt_light* keys to loadLighting
+     only, and the loader is diff-gated. */
 
     map.on("mousedown", e => {
     if (!rulerOn || isProjecting()) return;
@@ -9517,9 +9873,14 @@ function floorConnected(L, cols, rows){
       wallH, rooms: L.rooms, props: props.filter(p => !p.floorDecor).map(p => ({ prop: p.prop, gx: p.gx, gy: p.gy, fw: p.fw, fh: p.fh, rot: p.rot || 0 })),
       created: new Date().toISOString(), bakedLighting: true };
     const suffix = `_${id}`;
-    await upsertKey("vtt_light" + suffix, { enabled: true, walls, lights });
-    await upsertKey("vtt_draw" + suffix, { items: stampItems, layers: DEFAULT_DRAW_LAYERS.map(l => ({ ...l })) });
-    await upsertKey("vtt_settings" + suffix, { feetPerSquare: 5, unit: "ft", gridType: "square", gridOn: false, rotation: 0 });     await upsertKey(genKey(id), genData);
+    /* APOC-V307: the generated map's light / draw / settings rows
+       are whole-row creations — they land through the Store's
+       putRow (same values, same keys, through the queue). The
+       vtt_gen row itself is out of the Store's scope and keeps
+       upsertKey. */
+    await Store.putRow("vtt_light" + suffix, { enabled: true, walls, lights });
+    await Store.putRow("vtt_draw" + suffix, { items: stampItems, layers: DEFAULT_DRAW_LAYERS.map(l => ({ ...l })) });
+    await Store.putRow("vtt_settings" + suffix, { feetPerSquare: 5, unit: "ft", gridType: "square", gridOn: false, rotation: 0 });     await upsertKey(genKey(id), genData);
     let regOk = true;
     if (!opts.id) {
       const rec = { id, name, w, h, path, cell: GEN_PX, folder: "gen", gen: true };
@@ -10488,7 +10849,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-2026";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-2249";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -13126,11 +13487,9 @@ function floorConnected(L, cols, rows){
       if (!id) return;
       send.disabled = true;
       try {
-        var prevS2 = {};
-        try { var prS2 = await db.from(SETTINGS_TABLE).select("value").eq("key", KEY2).maybeSingle(); if (prS2.data && prS2.data.value && typeof prS2.data.value === "object") prevS2 = prS2.data.value; } catch (e) {}
-        await db.from(SETTINGS_TABLE).upsert(
-          { key: KEY2, value: Object.assign({}, prevS2, { mapId: id }), updated_at: new Date().toISOString() },
-          { onConflict: "key" });
+        /* APOC-V307: the read-merge this handler always did, now
+           inside the Store queue (mergeRow). */
+        var __okS2 = await window.__apocStore323.mergeRow(KEY2, { mapId: id }); if (!__okS2) throw new Error("merge failed");
         send.textContent = "Screen 2: Sent ✓";
       } catch (e) { send.textContent = "Screen 2: Send failed"; }
       setTimeout(function(){ send.textContent = "Screen 2: Send map"; send.disabled = false; }, 2200);
@@ -13138,7 +13497,9 @@ function floorConnected(L, cols, rows){
     mir.addEventListener("click", async function(){
       mir.disabled = true;
       try {
-        var __mirDel = await db.from(SETTINGS_TABLE).delete().eq("key", KEY2); if (__mirDel && __mirDel.error) throw __mirDel.error;         mir.textContent = "Screen 2: Mirroring ✓";
+        /* APOC-V307: the row removal goes through the Store's
+           removeRow (caches evict with the row). */
+        var __okMir = await window.__apocStore323.removeRow(KEY2); if (!__okMir) throw new Error("delete failed");         mir.textContent = "Screen 2: Mirroring ✓";
       } catch (e) { mir.textContent = "Screen 2: Mirror failed"; }
       setTimeout(function(){ mir.textContent = "Screen 2: Mirror"; mir.disabled = false; }, 2200);
     });
@@ -15428,7 +15789,11 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var kinds = ["draw", "tokens", "light", "fog", "settings", "markers", "places", "ping", "gen"];
     var copies = kinds.map(function(kind){
       return d.from(lvTable()).select("value").eq("key", keyFor2(kind, srcId)).maybeSingle().then(function(res){
-        if (res.data && res.data.value) return d.from(lvTable()).upsert({ key: keyFor2(kind, id), value: res.data.value, updated_at: new Date().toISOString() }, { onConflict: "key" });
+        /* APOC-V307: the verbatim copy lands through the Store's
+           putRow — same value, same new key, serialized on that
+           collection's queue, and the Store's caches learn the new
+           row from the write. */
+        if (res.data && res.data.value) return window.__apocStore323.putRow(keyFor2(kind, id), res.data.value);
         return null;
       }).catch(function(){});
     });
@@ -15475,7 +15840,10 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     var jobs = [];
     if (sh) { sh.setRecs((sh.recs() || []).filter(function(r){ return r.id !== id; })); jobs.push(sh.saveRegistry()); if (sh.delDef) sh.delDef(id); }
     var ms = $("mapSelect"); if (ms) { var opt = ms.querySelector("option[value=\"" + id + "\"]"); if (opt) opt.remove(); }
-    if (d) ["draw", "tokens", "light", "fog", "settings", "markers", "places", "ping", "gen"].forEach(function(kind){ jobs.push(d.from(lvTable()).delete().eq("key", keyFor2(kind, id))); });
+    /* APOC-V307: the story's rows are removed through the Store's
+       removeRow — same keys, and the Store's caches evict with the
+       rows. */
+    if (window.__apocStore323) ["draw", "tokens", "light", "fog", "settings", "markers", "places", "ping", "gen"].forEach(function(kind){ jobs.push(window.__apocStore323.removeRow(keyFor2(kind, id))); });
     jobs.push(saveLevels());
     Promise.all(jobs).then(function(){
       lvSig = ""; renderLevels();
@@ -16156,9 +16524,9 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       var mid = (row && row.mapId) || curMap() || "faerun";
       b.disabled = true;
       try {
-        await db.from(SETTINGS_TABLE).upsert(
-          { key: key, value: { mapId: mid, gm: now }, updated_at: new Date().toISOString() },
-          { onConflict: "key" });
+        /* APOC-V307: through the Store's mergeRow — the {mapId, gm}
+           fields this button owns, merged onto the freshest row. */
+        await window.__apocStore323.mergeRow(key, { mapId: mid, gm: now });
         b.setAttribute("aria-pressed", String(now));
       } catch(e){  }
       b.disabled = false;
@@ -18402,7 +18770,7 @@ return module.exports; })();</script>
                 var shared = false;
         try { var up = await db.storage.from("cody-artwork").upload(path, blob, { contentType: "image/png", upsert: false }); shared = !up.error; } catch(e) { shared = false; }
         if (!shared) throw new Error("the shared image upload didn't go through — nothing was registered");
-        await writeSetting("vtt_light_" + id, { enabled: !!(out.lighting && out.lighting.enabled), walls: (out.lighting && out.lighting.walls) || [], lights: (out.lighting && out.lighting.lights) || [], layerHidden: false, layerOpacity: 1 });         var imgByKey = {}; (out.images || []).forEach(function(im){ imgByKey[im.key] = im.dataUri; });
+        await window.__apocStore323.putRow("vtt_light_" + id, { enabled: !!(out.lighting && out.lighting.enabled), walls: (out.lighting && out.lighting.walls) || [], lights: (out.lighting && out.lighting.lights) || [], layerHidden: false, layerOpacity: 1 });         var imgByKey = {}; (out.images || []).forEach(function(im){ imgByKey[im.key] = im.dataUri; });   /* APOC-V307: whole-row creations through the Store's putRow */
         var tileByGuid = {};
         var items = (out.stamps || []).map(function(st){
           var img = "";
@@ -18410,15 +18778,12 @@ return module.exports; })();</script>
           else { var gd = st.damGuid || st.prop || "?"; if (!tileByGuid[gd]) tileByGuid[gd] = guidTile(gd, String(st.prop || gd).replace(/^dam-/, "")); img = tileByGuid[gd]; }
           return { type: "stamp", x: Math.round(st.gx / W * 10000) / 100, y: Math.round(st.gy / H * 10000) / 100, size: st.fw || 1, rot: st.rot || 0, img: img, prop: st.prop || "", fw: st.fw || 1, fh: st.fh || 1, steam: 0, layer: "shared", gm: false };
         });
-        if (items.length) await writeSetting("vtt_draw_" + id, { items: items, layers: [] });         var rec = { id: id, name: name, w: ground.canvas.width, h: ground.canvas.height, cell: ground.cell, path: path };
+        if (items.length) await window.__apocStore323.putRow("vtt_draw_" + id, { items: items, layers: [] });         var rec = { id: id, name: name, w: ground.canvas.width, h: ground.canvas.height, cell: ground.cell, path: path };
         var reg = await readSetting("vtt_dropmaps");
         var regMaps = (reg && Array.isArray(reg.maps)) ? reg.maps.filter(function(m){ return m.id !== id; }) : [];
         regMaps.push(rec);
         await writeSetting("vtt_dropmaps", { maps: regMaps });
-        var act = await readSetting("vtt_active");
-        var actObj = (act && typeof act === "object") ? act : {};
-        actObj.mapId = id;
-        await writeSetting("vtt_active", actObj);         var rp = out.report || {};
+        await window.__apocStore323.mergeRow("vtt_active", { mapId: id });         var rp = out.report || {};   /* APOC-V307: the active-map switch merges through the Store queue */
         damStatus("Imported \"" + name + "\": " + (rp.wallsOut || 0) + " walls, " + ((rp.doorDiagnostics && rp.doorDiagnostics.rotationAxisCandidates) || 0) + " door candidates, " + (rp.stampsOut || 0) + " objects (" + (rp.placeholders || 0) + " placeholders), " + (rp.floors || 0) + " floor tiles" + " — reopening on it now.");
         setTimeout(function(){ location.reload(); }, 900);
       } catch(e) {
@@ -18724,7 +19089,9 @@ return module.exports; })();</script>
     try { var r = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle(); return (r && r.data && r.data.value) || null; } catch(e){ return null; }
   }
   async function writeRow(key, row){
-    await db.from(SETTINGS_TABLE).upsert({ key: key, value: row, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    /* APOC-V307: no callers (dead helper) — rerouted through the
+       Store's mergeRow so no raw upsert survives outside the Store. */
+    await window.__apocStore323.mergeRow(key, row);
   }
 
     var DEFS = [
