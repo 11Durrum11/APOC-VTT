@@ -1712,7 +1712,18 @@ setInterval(loadSharedEntries, 60000);
     className: "mk-icon",
     html: `<div class="mk mk-${KINDS.includes(kind) ? kind : "place"}${temp ? " mk-temp" : ""}${under ? " mk-under" : ""}${under === 2 ? " mk-under2" : ""}${locked ? " mk-locked" : ""}"><span class="mk-dot"></span><span class="mk-label">${esc(name || "New marker")}</span></div>`,
         iconSize: [20, 20],
-    iconAnchor: [8, 8]
+    /* APOC-V308 (v3.09, 2026-11-16): GH-PIN-ANCHOR-4PX corrected in
+       the keyed renderer's icon factory. The old [8,8] anchor assumed
+       the dot's centre sits at (8,8) inside the icon; measured
+       (probe457, 134 pins, icon-internal): a BESIDE pin's dot centre
+       sits at (8, 11.63) — the label pill's height centres the 16px
+       dot in a ~23.3px row — and a BELOW-band pin's dot centre sits
+       at (10, 8) — the dot is centred in the 20px icon width. The
+       per-band anchor below puts the node's anchor exactly on the
+       dot's centre, so a rendered pin centre IS its stored position
+       and a tray drag-out lands on the drop point. Rendering only:
+       no stored position changes; pins shift <=4px once. */
+    iconAnchor: under ? [10, 8] : [8, 11.63]
   });
   let markers = [];
   let editing = null;
@@ -1777,6 +1788,17 @@ setInterval(loadSharedEntries, 60000);
   let wordList304 = [];                  /* records in manifest order */
   let wordPos304 = {};                   /* in-memory deltas {id: [xPct, yPct]} — bbox top-left % */
   let wordMarkers304 = new Map();        /* id -> L.marker */
+  /* APOC-V308 (v3.09, 2026-11-16): the word nodes join the keyed
+     discipline explicitly. They were already created once and held
+     in wordMarkers304 (APOC-V304); now every mutation is gated on a
+     per-word signature of what was last applied — position
+     (effective pos + rotation) and icon (zoom + rotation) — so a
+     rescale/rotate/reposition pass whose inputs did not change for
+     a word does ZERO work on that word's node, and the node's DOM
+     element is never recreated after creation. */
+  let wordNodeSig304 = new Map();        /* id -> { pos, icon } */
+  function wordPosSig304(rec){ const p = wordPosOf304(rec); return p.x + "," + p.y + "|r" + mapRot; }
+  function wordIconSig304(){ return map.getZoom() + "|r" + mapRot; }
   let wordsBuilt304 = false;
   let wordsRevCounter304 = 0;            /* bumped on every position change; rides the 3D composite cache key */
   let wordSheetImgP304 = null;           /* Promise<Image|null> for composite/photo */
@@ -1828,7 +1850,13 @@ setInterval(loadSharedEntries, 60000);
   }
   function repositionWord304(rec){
     const m = wordMarkers304.get(rec.id);
-    if (m) m.setLatLng(wordLatLng304(rec, wordPosOf304(rec)));
+    if (!m) return;
+    /* APOC-V308: mutate only on an actual position/rotation change */
+    const sig = wordPosSig304(rec);
+    const cur = wordNodeSig304.get(rec.id);
+    if (cur && cur.pos === sig) return;
+    m.setLatLng(wordLatLng304(rec, wordPosOf304(rec)));
+    wordNodeSig304.set(rec.id, { pos: sig, icon: cur ? cur.icon : null });
   }
   /* ---- persistence: APOC-V307 — the APOC-V292 discipline the V304
      block cloned now lives in the Store (Store.mergePos); the
@@ -1903,6 +1931,13 @@ setInterval(loadSharedEntries, 60000);
       else if (mapRot === 3) { px = xy.x - pw; }
       const bx = Math.round((px + WORD_PADX304) * 100) / 100, by = Math.round((py + WORD_PADY304) * 100) / 100;
       wordPatch304(rec.id, [bx, by]);
+      /* APOC-V308: the drag left this marker at the raw pointer
+         latlng; snap it to the canonical position for the saved
+         delta (and refresh its signature) so the keyed gate's
+         invariant — signature == applied state — survives a later
+         revert of the delta. Without this, a reverted word could be
+         stranded at the raw drag spot under a matching signature. */
+      repositionWord304(rec);
       const ok = await saveWords304();
       if (!ok) { setStatus("That move didn't save — drag it again or refresh."); loadWords304(true); }
     });
@@ -1935,6 +1970,7 @@ setInterval(loadSharedEntries, 60000);
     for (const rec of wordList304) {
       const m = wordMakeMarker304(rec);
       wordMarkers304.set(rec.id, m);
+      wordNodeSig304.set(rec.id, { pos: wordPosSig304(rec), icon: wordIconSig304() });   /* APOC-V308: creation applies the first signature */
       m.addTo(wordsGroup304);
     }
     wordsBuilt304 = true;
@@ -1953,7 +1989,11 @@ setInterval(loadSharedEntries, 60000);
       repositionWord304(rec);
       const m = wordMarkers304.get(rec.id);
       if (m) {
-        m.setIcon(wordIcon304(rec));
+        /* APOC-V308: the icon is re-applied only when its signature
+           (zoom + rotation) actually changed for this word */
+        const ik = wordIconSig304();
+        const cur = wordNodeSig304.get(rec.id);
+        if (!cur || cur.icon !== ik) { m.setIcon(wordIcon304(rec)); wordNodeSig304.set(rec.id, { pos: cur ? cur.pos : wordPosSig304(rec), icon: ik }); }
         if (m.dragging) { if (isProjecting()) m.dragging.disable(); else m.dragging.enable(); }
       }
     }
@@ -1962,7 +2002,15 @@ setInterval(loadSharedEntries, 60000);
     if (!wordsBuilt304) return;
     for (const rec of wordList304) {
       const m = wordMarkers304.get(rec.id);
-      if (m) m.setIcon(wordIcon304(rec));
+      if (!m) continue;
+      /* APOC-V308: a zoomend whose effective zoom did not change
+         (or a repeat pass) re-applies nothing — the word's node and
+         its icon element are left completely untouched */
+      const ik = wordIconSig304();
+      const cur = wordNodeSig304.get(rec.id);
+      if (cur && cur.icon === ik) continue;
+      m.setIcon(wordIcon304(rec));
+      wordNodeSig304.set(rec.id, { pos: cur ? cur.pos : wordPosSig304(rec), icon: ik });
     }
   }
   map.on("zoomend", () => { wordsRescale304(); });
@@ -2232,9 +2280,158 @@ setInterval(loadSharedEntries, 60000);
   const newId = () => "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   window.map = map; window.toXY = toXY; window.newId = newId;
   function setStatus(msg){ statusEl.textContent = msg; }
+  /* ================= APOC-V308 (v3.09, 2026-11-16): KEYED RENDERING — Stage 3 of the redesign =================
+     Objective, in plain words: blink and churn become structurally
+     impossible. Every pin on every map owns ONE persistent DOM node
+     keyed by its record id: created on first sight, mutated in place
+     (position, label, band, visibility, lock cursor), removed only
+     when the record leaves the rendered set (deleted, shelved, or
+     screened by the atlas/GM toggles). draw() NO LONGER rebuilds:
+     layer.clearLayers() and the per-draw marker construction loop
+     are DELETED, replaced by reconcileKeyedMarkers308 below, driven
+     by the Store's diff (loadMarkers only calls draw() when the
+     Store cache actually changed, or when a local action mutates a
+     record and redraws). Unchanged records cost zero DOM work: the
+     reconcile compares each record against the node's last-applied
+     state and touches only the fields that changed. Handlers resolve
+     their record LIVE by id at event time (the Store's ingest
+     replaces record objects on change, so a closure over a stale
+     record object would resurrect Stage 1's revert class).
+     Label banding (beside-first, APOC-V288/V292 reference space) is
+     a pure function of the marker/place DATA: it is recomputed only
+     when that data signature changes (bandSig308), never on pan or
+     zoom — a moveend draw with unchanged data reuses the cached
+     levels and mutates nothing. */
+  const keyedMk308 = new Map();   /* id -> { m, x, y, rot, iconSig, draggable, mk } */
+  const keyedStats308 = { created: 0, mutated: 0, removed: 0, iconSets: 0, posSets: 0 };
+  let bandCache308 = { sig: null, levels: new Map() };
+  function bandSig308(){
+    return JSON.stringify([currentMapId, frameW(), frameH(), atlasShown() ? 1 : 0,
+      markers.map(m => [m.id, m.x, m.y, m.name || "", m.tray ? 1 : 0, m.atlas ? 1 : 0]),
+      currentMapId === "faerun" ? [] : places.map(p => [p.id, p.x, p.y, p.tray ? 1 : 0])]);
+  }
+  function createKeyedMarker308(mk0, ent){
+    const id = mk0.id;
+    const liveMk = () => markers.find(x => x.id === id) || ent.mk || mk0;
+    const kind = KINDS.includes(mk0.kind) ? mk0.kind : "place";
+    const isLocked0 = !!mk0.locked;
+    const m = L.marker(toLatLng(mk0.x, mk0.y), { pane: "layerMap", draggable: !isProjecting() && !isLocked0, icon: iconFor(kind, mk0.name, false, mk0._under, isLocked0) });
+    ent.m = m;
+    ent.x = mk0.x; ent.y = mk0.y; ent.rot = mapRot;
+    ent.iconSig = kind + "|" + (mk0.name || "") + "|" + (mk0._under === 2 ? 2 : mk0._under ? 1 : 0) + "|" + (isLocked0 ? 1 : 0);
+    ent.draggable = !isProjecting() && !isLocked0;
+    ent.mk = mk0;
+    layer.addLayer(m);
+    const openMk = () => {
+      const mk = liveMk();
+      closePinRadial();
+      const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
+      if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
+      const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || !!mk.atlas; /* APOC-V296: an atlas pin is a read pin */
+      if (isRead) { showPinCard(mk); return; }
+      openEditor({ mode: "edit", mk });
+    };
+    const radialFn = () => openPinRadial(liveMk(), openMk);
+    let dragStartLL = null;
+    m.on("dragstart", () => { closePinRadial(); dragStartLL = m.getLatLng(); });
+    m.on("click", (e) => {
+      const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
+      if (st.suppressPress && st.suppressPress === st.press) { st.suppressPress = null; if (st.press) st.press.done = true; return; }
+      if (st.press) { if (st.press.done) return; st.press.done = true; }
+      const oe = e && e.originalEvent;
+      const cx = oe && typeof oe.clientX === "number" ? oe.clientX : 0;
+      const cy = oe && typeof oe.clientY === "number" ? oe.clientY : 0;
+      v288CommitTap(id, cx, cy, openMk, radialFn, (st.press && st.press.ptype) || (oe && oe.pointerType) || "", (st.press && st.press.t0) || 0);
+    });
+    const iconEl = m.getElement();
+    if (iconEl) iconEl.addEventListener("pointerdown", ev => {
+      if (ev.isPrimary === false) return;
+      if (ev.button !== undefined && ev.button !== 0) return;
+      const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
+      const P = { id, x: ev.clientX, y: ev.clientY, ptype: ev.pointerType || "", t0: Date.now(), done: false, commit: () => v288CommitTap(id, P.x, P.y, openMk, radialFn, P.ptype, P.t0) };
+      st.press = P; v288Press = P;
+    }, { passive: true });
+    if (iconEl) {
+      /* APOC-V288 lock swallow, made live: the press is swallowed
+         exactly while the pin's CURRENT record is locked (the keyed
+         node survives lock toggles, so the check reads the record,
+         not the creation-time state). Only propagation stops; the
+         pin's own click and right-click still fire. */
+      const swallow = ev => { const cur = liveMk(); if (cur && cur.locked) ev.stopPropagation(); };
+      iconEl.addEventListener("pointerdown", swallow);
+      iconEl.addEventListener("mousedown", swallow);
+      iconEl.addEventListener("touchstart", swallow, { passive: true });
+    }
+    if (iconEl) iconEl.addEventListener("dblclick", ev => { ev.stopPropagation(); });
+    if (iconEl) iconEl.addEventListener("contextmenu", ev => {
+      /* APOC-V279: a right-click anywhere on a READ pin's body opens
+         its place card. Bound unconditionally on the keyed node and
+         gated on the live record, so a pin that gains or loses its
+         pictures keeps the right behaviour without a rebuild; bare
+         markers fall through to the map menu exactly as before. */
+      const cur = liveMk();
+      const curRead = !!cur && (!!(Array.isArray(cur.imgs) && cur.imgs.filter(Boolean).length) || !!cur.atlas);
+      if (!curRead) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      openMk();
+    });
+    m.on("dragend", async () => {
+      const mk = liveMk();
+      if (dragStartLL) {
+        const startLL = dragStartLL; dragStartLL = null;
+        const pa = map.latLngToContainerPoint(startLL), pb = map.latLngToContainerPoint(m.getLatLng());
+        const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
+        const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
+        if (dist <= 24) {
+          m.setLatLng(startLL);
+          st.suppressPress = st.press;
+          if (st.press) { if (st.press.done) return; st.press.done = true; }
+          const cr = map.getContainer().getBoundingClientRect();
+          v288CommitTap(id, pa.x + cr.left, pa.y + cr.top, openMk, radialFn, (st.press && st.press.ptype) || "", (st.press && st.press.t0) || 0);
+          return;
+        }
+        if (st.press) st.press.done = true;
+        st.suppressPress = st.press; st.t = 0; st.dt = 0;
+      }
+      if (mk.locked) return;
+      if (isProjecting()) { loadMarkers(true); return; }
+      const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
+      m.setLatLng(toLatLng(mk.x, mk.y));   /* APOC-V308: snap off the raw drag latlng onto the canonical position for the saved coords — the keyed entry below claims these coords as applied, so the node must actually sit there */
+      ent.x = mk.x; ent.y = mk.y; ent.mk = mk;
+      pinPatch(mk, ["x", "y", "_under"]);
+      setStatus(`Saving ${mk.name}'s new position\u2026`);
+      const ok = await saveMarkers();
+      if (ok) setStatus(`${mk.name} moved \u2014 saved for everybody.`);
+      else { setStatus("That move didn't save \u2014 drag it again or refresh."); loadMarkers(true); }
+    });
+    return m;
+  }
+  function updateKeyedMarker308(ent, mk){
+    let dirty = false;
+    if (ent.x !== mk.x || ent.y !== mk.y || ent.rot !== mapRot) {
+      ent.m.setLatLng(toLatLng(mk.x, mk.y));
+      ent.x = mk.x; ent.y = mk.y; ent.rot = mapRot;
+      keyedStats308.posSets++; dirty = true;
+    }
+    const kind = KINDS.includes(mk.kind) ? mk.kind : "place";
+    const isLocked = !!mk.locked;
+    const iconSig = kind + "|" + (mk.name || "") + "|" + (mk._under === 2 ? 2 : mk._under ? 1 : 0) + "|" + (isLocked ? 1 : 0);
+    if (ent.iconSig !== iconSig) {
+      ent.m.setIcon(iconFor(kind, mk.name, false, mk._under, isLocked));
+      ent.iconSig = iconSig;
+      keyedStats308.iconSets++; dirty = true;
+    }
+    const wantDrag = !isProjecting() && !isLocked;
+    if (ent.draggable !== wantDrag && ent.m.dragging) {
+      if (wantDrag) ent.m.dragging.enable(); else ent.m.dragging.disable();
+      ent.draggable = wantDrag; dirty = true;
+    }
+    if (dirty) keyedStats308.mutated++;
+    ent.mk = mk;
+  }
   function draw(){
     closePinRadial();
-    layer.clearLayers();
     /* APOC-V288 (2026-11-14): label placement is computed in a FIXED
        reference space — the pins' stored % positions scaled by the
        frame size at a constant reference zoom (0.75, Shaun's working
@@ -2250,6 +2447,16 @@ setInterval(loadSharedEntries, 60000);
        labels flipped between the side and the bottom on their own —
        measured on v2.87 bytes: 12 of 120 labels flip between z=0.75
        and z=0.5, 8 more between z=0.75 and z=1.25. */
+    /* APOC-V308: banding is recomputed ONLY when the data signature
+       changes; on a cache hit the cached levels are re-applied to the
+       current record objects (ingest replaces them) and the whole
+       computation below is skipped — pan/zoom moveend draws with
+       unchanged data therefore do zero banding work and can never
+       flip a label. */
+    const bandSig = bandSig308();
+    if (bandCache308.sig === bandSig) {
+      for (const mk of markers) mk._under = bandCache308.levels.get(mk.id) || false;
+    } else {
     const REF_S = Math.pow(2, 0.75);
     /* APOC-V292 (2026-11-14): beside-first banding — Shaun's standing
        preference (stated twice, most recently at the 2026-11-14 pin
@@ -2303,172 +2510,30 @@ setInterval(loadSharedEntries, 60000);
       else if (!coversDot(i, 1)) mk._under = true;
       else mk._under = 2;
     });
+      bandCache308 = { sig: bandSig, levels: new Map(banded.map(mk => [mk.id, mk._under])) };
+    }
+    /* APOC-V308: the keyed reconcile replaces the rebuild loop.
+       Desired = the records that render on this map right now;
+       nodes for records that left the set are removed, nodes for
+       new records are created once, and every surviving node is
+       mutated in place only where its record actually changed. */
+    const desired308 = new Map();
     for (const mk of markers) {
-      /* APOC-V292: a pin shelved in the Pins tray is off the board —
-         it renders nothing and answers nothing until it is dragged
-         back out of the tray. */
+      /* APOC-V292: a pin shelved in the Pins tray is off the board. */
       if (mk.tray) continue;
-      /* APOC-V296: an atlas pin hidden by the "Atlas places" toggle
-         renders nothing and answers nothing, like a shelved pin. */
+      /* APOC-V296: an atlas pin hidden by the toggle renders nothing. */
       if (mk.atlas && !atlasShown()) continue;
-      /* GM-only markers (mk.gm — Roll20's hidden pins) are not rendered at
-         all without GM view; projecting forces player view, so the TV copy
-         never sees them either. */
+      /* GM-only markers are not rendered at all without GM view. */
       if (mk.gm && !effectiveGm()) continue;
-      const kind = KINDS.includes(mk.kind) ? mk.kind : "place";
-      /* APOC-V288 (2026-11-14): a pin carrying pictures is a READ pin —
-         its verbiage is the place card; a bare marker's verbiage is the
-         editor. Both follow Shaun's 2026-11-14 contract: press-and-drag
-         moves the pin (one save on release), a double click / double
-         tap opens the verbiage, a single click alone does nothing. A
-         pin whose record carries locked:true is not draggable at all;
-         its lock button lives in the place card (see showPinCard). */
-      const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || !!mk.atlas; /* APOC-V296: an atlas pin is a read pin — its verbiage is the place card, never the bare-marker editor */
-      const isLocked = !!mk.locked;
-      const m = L.marker(toLatLng(mk.x, mk.y), { pane: "layerMap", draggable: !isProjecting() && !isLocked, icon: iconFor(kind, mk.name, false, mk._under, isLocked) }).addTo(layer);
-      const openMk = () => {
-        closePinRadial();
-        const imgs = Array.isArray(mk.imgs) ? mk.imgs.filter(Boolean) : [];
-        if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(mk.name)}</b>${mk.note ? "<br>" + esc(mk.note) : ""}${imgs.length ? `<span class="pin-imgs">${imgs.map(u => `<img src="${esc(u)}" alt="">`).join("")}</span>` : ""}`).openOn(map); return; }
-        if (isRead) { showPinCard(mk); return; } /* APOC-V296: read pins open the place card — an atlas pin carries no pictures, so branching on imgs alone sent it to the bare-marker editor */
-        openEditor({ mode: "edit", mk });
-      };
-      /* APOC-V289: this pin's radial opener, handed to the tap
-         commits; it fires only if a lone mouse commit's pairing
-         window lapses unpaired (v289ScheduleRadial). */
-      const radialFn = () => openPinRadial(mk, openMk);
-      let dragStartLL = null;
-      m.on("dragstart", () => { closePinRadial(); dragStartLL = m.getLatLng(); });
-      m.on("click", (e) => {
-        /* APOC-V288: a click on a pin commits a tap (v288CommitTap) —
-           alone it does nothing at all (no open, no move, no save);
-           paired with a recent tap on the same pin it completes the
-           double click that opens the verbiage. Leaflet delivers a
-           touch tap as a click too, so the same pairing is the double
-           tap. A click trailing a drag is suppressed: that press
-           already resolved at dragend. */
-        const st = v288Taps[mk.id] || (v288Taps[mk.id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-        /* The suppression is PRESS-SCOPED: dragend tags the press
-           whose trailing click must be eaten, and only a click
-           belonging to that same press is eaten. A sticky boolean
-           here was a real defect — when a press's click landed
-           BEFORE its dragend (the touch order), the flag was set
-           after the click had already passed and stayed stuck,
-           silently eating the NEXT press's click and killing one
-           tap of every following double tap on that pin. */
-        if (st.suppressPress && st.suppressPress === st.press) { st.suppressPress = null; if (st.press) st.press.done = true; return; }
-        /* One press commits AT MOST once, whichever route gets there
-           first: if this press already committed (a touch tap can
-           deliver its dragend after its click), this click is the
-           same press arriving again — it must not commit a second
-           time and pair with itself. */
-        if (st.press) { if (st.press.done) return; st.press.done = true; }
-        const oe = e && e.originalEvent;
-        const cx = oe && typeof oe.clientX === "number" ? oe.clientX : 0;
-        const cy = oe && typeof oe.clientY === "number" ? oe.clientY : 0;
-        v288CommitTap(mk.id, cx, cy, openMk, radialFn, (st.press && st.press.ptype) || (oe && oe.pointerType) || "", (st.press && st.press.t0) || 0); /* APOC-V302: the press's pointerdown time rides along for touch pairing */
-      });
-      const iconEl = m.getElement();
-      if (iconEl) iconEl.addEventListener("pointerdown", ev => {
-        /* APOC-V288: register the press so the pointerup recovery can
-           commit its tap if neither the click nor a dragend resolves
-           it. Primary button / touch only — a right press belongs to
-           the contextmenu path and never registers. (On a locked pin
-           the swallow listener below stops this same event reaching
-           the MAP; listeners on the element itself still run.) */
-        if (ev.isPrimary === false) return;
-        if (ev.button !== undefined && ev.button !== 0) return;
-        const st = v288Taps[mk.id] || (v288Taps[mk.id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-        const P = { id: mk.id, x: ev.clientX, y: ev.clientY, ptype: ev.pointerType || "", t0: Date.now(), done: false, commit: () => v288CommitTap(mk.id, P.x, P.y, openMk, radialFn, P.ptype, P.t0) }; /* APOC-V302: t0 = this press's pointerdown time, handed to the touch pairing */
-        st.press = P; v288Press = P;
-      }, { passive: true });
-      if (isLocked && iconEl) {
-        /* APOC-V288: a locked pin swallows the press itself, so the
-           gesture cannot fall through to a map pan either — a press-
-           and-drag on a locked pin moves NOTHING at all: not the pin,
-           not the map, and nothing saves. Only propagation stops; the
-           pin's own click (and with it the double-click open) and its
-           right-click are separate events and still fire. */
-        const swallow = ev => { ev.stopPropagation(); };
-        iconEl.addEventListener("pointerdown", swallow);
-        iconEl.addEventListener("mousedown", swallow);
-        iconEl.addEventListener("touchstart", swallow, { passive: true });
-      }
-      if (iconEl) iconEl.addEventListener("dblclick", ev => {
-        /* APOC-V288: a double-click ON a pin is the pin's own gesture —
-           keep it from reaching the map, where the same double press
-           would otherwise also fire the map's dblclick paths (the
-           door/window toggle, and double-click zoom whenever the pinch
-           toggle has that handler enabled). */
-        ev.stopPropagation();
-      });
-      if (isRead) {
-        if (iconEl) iconEl.addEventListener("contextmenu", ev => {
-          /* APOC-V279 (2026-11-13): a right-click ON a read pin opens
-             its place card — the same card the double-click opens
-             (retained unchanged under the APOC-V288 contract: a right
-             click is neither a single click nor a double click, so it
-             does not conflict with either). The
-             map's own context menu (the #apocMap listener) ignores the
-             event target and re-derives its hit geometrically (nearest
-             marker anchor within 26px, then classifyMarker), so a
-             right-press landing on the pin's label — the pill runs
-             well past 26px from the anchor, and 89 of the 120
-             landscape pills are dropped a band or two below the dot —
-             fell outside every anchor's radius and Shaun got the bare
-             Map menu ("Add marker here" / "Add token") for a press on
-             the pin's own body. Intercepting the event on the pin's
-             icon element (dot and label are both inside it) makes the
-             pin's whole rendered body open the card; stopPropagation
-             keeps the map menu from appearing for this press, and
-             presses anywhere else keep the existing menu untouched.
-             Bare markers get no binding: their right-click menu path
-             is unchanged. */
-          ev.preventDefault();
-          ev.stopPropagation();
-          openMk();
-        });
-      }
-      m.on("dragend", async () => {
-        if (dragStartLL) {
-          /* APOC-V288 drag discriminator: judge the drag by the pin's
-             own on-screen displacement against the 24px envelope.
-             Within it, the press was a tap or hand jitter, not a move:
-             snap back, save nothing, open nothing (the tap half of a
-             double click pairs in the click handler instead). Beyond
-             it, the drag is a real move and owns the press: its
-             trailing click is suppressed so it can neither pair nor
-             open, and the move saves once, below. */
-          const startLL = dragStartLL; dragStartLL = null;
-          const pa = map.latLngToContainerPoint(startLL), pb = map.latLngToContainerPoint(m.getLatLng());
-          const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
-          const st = v288Taps[mk.id] || (v288Taps[mk.id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-          if (dist <= 24) {
-            /* Micro-drag: snap back and save nothing. The tap commits
-               HERE if it hasn't already — the click after a drag is
-               unreliable in this Leaflet build, and on touch the click
-               can land BEFORE this dragend, so the press-done gate
-               (not ordering) is what guarantees one commit per press.
-               The trailing click, if it arrives, is suppressed. */
-            m.setLatLng(startLL);
-            st.suppressPress = st.press;
-            if (st.press) { if (st.press.done) return; st.press.done = true; }
-            const cr = map.getContainer().getBoundingClientRect();
-            v288CommitTap(mk.id, pa.x + cr.left, pa.y + cr.top, openMk, radialFn, (st.press && st.press.ptype) || "", (st.press && st.press.t0) || 0); /* APOC-V302: pointerdown time, as at the click route */
-            return;
-          }
-          if (st.press) st.press.done = true;
-          st.suppressPress = st.press; st.t = 0; st.dt = 0; /* APOC-V302: a real drag breaks a touch pairing too, exactly as it breaks the mouse one */
-        }
-        if (mk.locked) return;
-        if (isProjecting()) { loadMarkers(true); return; }
-        const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
-        pinPatch(mk, ["x", "y", "_under"]);
-        setStatus(`Saving ${mk.name}'s new position\u2026`);
-        const ok = await saveMarkers();
-        if (ok) setStatus(`${mk.name} moved \u2014 saved for everybody.`);
-        else { setStatus("That move didn't save \u2014 drag it again or refresh."); loadMarkers(true); }
-      });
+      desired308.set(mk.id, mk);
+    }
+    for (const [id, ent] of [...keyedMk308]) {
+      if (!desired308.has(id)) { layer.removeLayer(ent.m); keyedMk308.delete(id); keyedStats308.removed++; }
+    }
+    for (const [id, mk] of desired308) {
+      const ent = keyedMk308.get(id);
+      if (!ent) { const e2 = { m: null, x: 0, y: 0, rot: 0, iconSig: "", draggable: false, mk }; keyedMk308.set(id, e2); createKeyedMarker308(mk, e2); keyedStats308.created++; }
+      else updateKeyedMarker308(ent, mk);
     }
         if (tempPin) layer.addLayer(tempPin);
     /* APOC-V292: the tray list mirrors the marker array — every
@@ -3877,32 +3942,119 @@ setInterval(loadSharedEntries, 60000);
     if (!covers(1)) return true;
     return 2;
   }
-  function drawPlaces(){
-    placesLayer.clearLayers();
-    if (currentMapId === "faerun") return;
-    for (const p of places) {
-      /* APOC-V303: a shelved place renders nowhere — it sits in the
-         universal Pins tray until it is dragged back out. */
-      if (p.tray) continue;
-      /* APOC-V303: the place renders through the canonical pin
-         factory — the place-pin look (16px dot + name pill), not the
-         retired 10px atlas dot. Click/drag behaviour below is the
-         pre-V303 behaviour, untouched. */
-      const dot = L.marker(toLatLng(p.x, p.y), { pane: "layerMap", draggable: !isProjecting() && effectiveGm(), icon: iconFor("place", p.n, false, placeBandLevel(p), false), keyboard: false }).addTo(placesLayer);
-      dot.on("click", () => {
-        if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
-        if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
-        if (typeof showPlaceCard303 === "function") { showPlaceCard303(p); return; }
-        showCard(p.n, "Place — this map", p.d || "", "");
-      });
-      dot.on("dragend", async () => {
-        const xy = toXY(dot.getLatLng()); p.x = xy.x; p.y = xy.y;
-        const ok = await savePlaces();
-        if (!ok) { setStatus("That move didn't save — drag it again or refresh."); loadPlaces(true); }
-        else setStatus(`${p.n} moved — saved for everybody.`);
-      });
-    }
+  /* ================= APOC-V308 (v3.09, 2026-11-16): KEYED PLACES =================
+     Places join the keyed discipline: one persistent node per place
+     id on the viewed map, created once, mutated in place, removed
+     only when the place leaves the rendered set. placesLayer.
+     clearLayers() is DELETED. placeBandLevel stays the pure
+     beside-first function of APOC-V303, but its results are cached
+     by data signature (placeBandSig308) and recomputed only when
+     the places/markers data changes — never on pan/zoom. Handlers
+     resolve their place LIVE by id (loadPlaces replaces the places
+     array on Store ingest). */
+  const keyedPl308 = new Map();   /* id -> { m, x, y, rot, iconSig, draggable, p } */
+  const keyedPlStats308 = { created: 0, mutated: 0, removed: 0, iconSets: 0, posSets: 0 };
+  let placeBandCache308 = { sig: null, levels: new Map() };
+  function placeBandSig308(){
+    return JSON.stringify([currentMapId, frameW(), frameH(), atlasShown() ? 1 : 0,
+      places.map(p => [p.id, p.x, p.y, p.n || "", p.tray ? 1 : 0]),
+      markers.map(m => [m.id, m.x, m.y, m.tray ? 1 : 0, m.atlas ? 1 : 0])]);
   }
+  function createKeyedPlace308(p0, ent){
+    const id = p0.id;
+    const livePl = () => places.find(x => x.id === id) || ent.p || p0;
+    const level = placeBandCache308.levels.get(id);
+    const m = L.marker(toLatLng(p0.x, p0.y), { pane: "layerMap", draggable: !isProjecting() && effectiveGm(), icon: iconFor("place", p0.n, false, level === undefined ? placeBandLevel(p0) : level, false), keyboard: false });
+    ent.m = m; ent.x = p0.x; ent.y = p0.y; ent.rot = mapRot;
+    ent.iconSig = (p0.n || "") + "|" + (level === 2 ? 2 : level ? 1 : 0);
+    ent.draggable = !isProjecting() && effectiveGm();
+    ent.p = p0;
+    placesLayer.addLayer(m);
+    m.on("click", () => {
+      const p = livePl();
+      if (!p) return;
+      if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
+      if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
+      if (typeof showPlaceCard303 === "function") { showPlaceCard303(p); return; }
+      showCard(p.n, "Place \u2014 this map", p.d || "", "");
+    });
+    m.on("dragend", async () => {
+      const p = livePl();
+      if (!p) return;
+      const xy = toXY(m.getLatLng()); p.x = xy.x; p.y = xy.y;
+      m.setLatLng(toLatLng(p.x, p.y));   /* APOC-V308: canonical snap, as on markers */
+      ent.x = p.x; ent.y = p.y; ent.p = p;
+      const ok = await savePlaces();
+      if (!ok) { setStatus("That move didn't save \u2014 drag it again or refresh."); loadPlaces(true); }
+      else setStatus(`${p.n} moved \u2014 saved for everybody.`);
+    });
+    return m;
+  }
+  function updateKeyedPlace308(ent, p){
+    let dirty = false;
+    if (ent.x !== p.x || ent.y !== p.y || ent.rot !== mapRot) {
+      ent.m.setLatLng(toLatLng(p.x, p.y));
+      ent.x = p.x; ent.y = p.y; ent.rot = mapRot;
+      keyedPlStats308.posSets++; dirty = true;
+    }
+    const level = placeBandCache308.levels.get(p.id);
+    const lvl = level === undefined ? placeBandLevel(p) : level;
+    const iconSig = (p.n || "") + "|" + (lvl === 2 ? 2 : lvl ? 1 : 0);
+    if (ent.iconSig !== iconSig) {
+      ent.m.setIcon(iconFor("place", p.n, false, lvl, false));
+      ent.iconSig = iconSig;
+      keyedPlStats308.iconSets++; dirty = true;
+    }
+    const wantDrag = !isProjecting() && effectiveGm();
+    if (ent.draggable !== wantDrag && ent.m.dragging) {
+      if (wantDrag) ent.m.dragging.enable(); else ent.m.dragging.disable();
+      ent.draggable = wantDrag; dirty = true;
+    }
+    if (dirty) keyedPlStats308.mutated++;
+    ent.p = p;
+  }
+  function drawPlaces(){
+    if (currentMapId === "faerun") {
+      for (const [id, ent] of [...keyedPl308]) { placesLayer.removeLayer(ent.m); keyedPl308.delete(id); keyedPlStats308.removed++; }
+      return;
+    }
+    const sig = placeBandSig308();
+    if (placeBandCache308.sig !== sig) {
+      const levels = new Map();
+      for (const p of places) { if (!p.tray) levels.set(p.id, placeBandLevel(p)); }
+      placeBandCache308 = { sig, levels };
+    }
+    const desired = new Map();
+    for (const p of places) { if (p.tray) continue; desired.set(p.id, p); }
+    for (const [id, ent] of [...keyedPl308]) {
+      if (!desired.has(id)) { placesLayer.removeLayer(ent.m); keyedPl308.delete(id); keyedPlStats308.removed++; }
+    }
+    for (const [id, p] of desired) {
+      const ent = keyedPl308.get(id);
+      if (!ent) { const e2 = { m: null, x: 0, y: 0, rot: 0, iconSig: "", draggable: false, p }; keyedPl308.set(id, e2); createKeyedPlace308(p, e2); keyedPlStats308.created++; }
+      else updateKeyedPlace308(ent, p);
+    }
+    if (tempPlacePin && !placesLayer.hasLayer(tempPlacePin)) placesLayer.addLayer(tempPlacePin);
+  }
+  /* APOC-V308: battery surface for the keyed renderer — node lookup
+     by record id, creation/mutation/removal counters, and the
+     banding census, so identity can be asserted from outside. */
+  window.__apoc308 = {
+    stats: () => ({ markers: Object.assign({}, keyedStats308), places: Object.assign({}, keyedPlStats308), keyedMarkers: keyedMk308.size, keyedPlaces: keyedPl308.size }),
+    markerEl: id => { const e = keyedMk308.get(id); return e && e.m && e.m.getElement ? e.m.getElement() : null; },
+    marker: id => { const e = keyedMk308.get(id); return e ? e.m : null; },
+    markerIds: () => [...keyedMk308.keys()],
+    placeEl: id => { const e = keyedPl308.get(id); return e && e.m && e.m.getElement ? e.m.getElement() : null; },
+    place: id => { const e = keyedPl308.get(id); return e ? e.m : null; },
+    placeIds: () => [...keyedPl308.keys()],
+    wordEl: id => { const m = wordMarkers304.get(id); return m && m.getElement ? m.getElement() : null; },
+    wordMarker: id => wordMarkers304.get(id) || null,
+    wordIds: () => [...wordMarkers304.keys()],
+    bandCensus: () => { const c = { side: 0, below1: 0, below2: 0 }; for (const mk of markers) { if (mk.tray || (mk.atlas && !atlasShown())) continue; if (mk._under === 2) c.below2++; else if (mk._under) c.below1++; else c.side++; } return c; },
+    bandOf: id => { const mk = markers.find(m => m.id === id); return mk ? (mk._under === 2 ? 2 : mk._under ? 1 : 0) : null; },
+    draw: () => draw(),
+    drawPlaces: () => drawPlaces()
+  };
   /* APOC-V307: places ride the Store — placeShadow is this page's
      last-synced copy of the collection; savePlaces diffs against it
      and sends only field-level patches / additions / removals
@@ -10849,7 +11001,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-2249";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-16-0029";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
