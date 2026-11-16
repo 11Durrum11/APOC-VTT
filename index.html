@@ -4045,18 +4045,25 @@ setInterval(loadSharedEntries, 60000);
        check below. Applies to mouse drags identically. */
     const tr = pinsTrayEl.getBoundingClientRect();
     if (e.clientX >= tr.left && e.clientX <= tr.right && e.clientY >= tr.top && e.clientY <= tr.bottom) return;
-    /* APOC-V303: a FOREIGN entry (its home map is not the map on
-       screen) is never placed here — the drop RESTORES it to its
-       home map at its stored position: one tray:false write to the
-       HOME store through the keyed merge, no coordinate conversion
-       through this map's frame, and no write of any kind to the
-       viewed map's stores. Restore and placement are different
-       gestures; this is the restore. */
+    /* APOC-V312 (v3.12, 2026-11-16): a FOREIGN entry (its home map
+       is not the map on screen) is MOVED to the viewed map at the
+       drop point — Shaun's ruling 2026-11-16, SUPERSEDING the
+       APOC-V303 restore-in-place rule. The drop must land inside
+       the viewed map's bounds (a drop outside the map, like a drop
+       back on the tray above, cancels with no write at all); the
+       move itself is moveEntry312 below: exactly one Store delete
+       from the home collection + exactly one Store put into the
+       viewed map's collection of the same kind (or, for a place
+       landing on Faerun — the one map with no places store — a
+       minimal translation into a Faerun marker). A pin must never
+       leave the tray without appearing on the viewed map: a case
+       that cannot be honoured REFUSES VISIBLY inside moveEntry312
+       (entry stays in the tray, record unmoved, zero writes). */
     const ent = d.entry;
-    if (ent && ent.mapId !== currentMapId) { if (typeof restoreEntry303 === "function") await restoreEntry303(ent); return; }
     const r = mapEl.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
     const p = toXY(map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top)));
+    if (ent && ent.mapId !== currentMapId) { if (typeof moveEntry312 === "function") await moveEntry312(ent, p); return; }
     if (ent && ent.store === "places") {
       /* Same-map place: placed at the drop point like a pin, but
          the write goes through placePatchKey — the places merge —
@@ -4554,11 +4561,12 @@ setInterval(loadSharedEntries, 60000);
        - RESTORE and PLACEMENT are different gestures. Dragging an
          entry whose home is the map on screen places it at the
          drop point (markers as always; places through the merge
-         helper). Dragging a FOREIGN entry restores it in place:
-         one tray:false write to its HOME store, stored x/y
-         untouched, no coordinate conversion, and no write of any
-         kind to the viewed map's stores. Dropping back on the
-         tray cancels, as APOC-V302 established.
+         helper). [APOC-V312 SUPERSEDES the next sentence for
+         drag-out:] Dragging a FOREIGN entry originally restored
+         it in place; since v3.12 it MOVES to the viewed map at
+         the drop point (see the APOC-V312 block at moveEntry312).
+         Dropping back on the tray cancels, as APOC-V302
+         established.
        - Every tray write to a places row goes through
          placePatchKey — APOC-V307: the Store's patch verb (write-
          time re-read, named-field merge on the collection queue) —
@@ -4725,6 +4733,170 @@ setInterval(loadSharedEntries, 60000);
     if (typeof renderPinsTray === "function") renderPinsTray();
     if (!ok) { fail(); return false; }
     setStatus(`${name} is back on ${entry.mapName} — switch to that map to see it.`);
+    return true;
+  }
+  /* ================= APOC-V312 (v3.12, 2026-11-16): TRAY DRAG-OUT
+     MOVES A PIN TO THE VIEWED MAP =================
+     Shaun's ruling (2026-11-16): "I pull a pin out of the tray. I
+     put it on the map and it disappears." — a pin dragged out of
+     the tray onto the map he is looking at lands ON THAT MAP, at
+     the drop point, visible immediately and after reload. This
+     SUPERSEDES the APOC-V303 foreign-map restore-in-place rule for
+     drag-out (restoreEntry303 above is no longer a drag-out path).
+     STORE-ROUTING AUDIT (tray entries are (mapId, store, id)
+     triples since APOC-V303; keys resolved by trayMarkersKey303 /
+     trayPlacesKey303):
+       map          markers store            places store
+       faerun       map_markers              NONE — loadPlaces()
+                                             returns [] and
+                                             drawPlaces() clears
+                                             every keyed place on
+                                             Faerun; its PLACES are
+                                             page code, not a store
+       saint-james  map_markers_saint-james  vtt_places_saint-james
+       bastion-city map_markers_bastion-city vtt_places_bastion-city
+       any other    map_markers_<id>         vtt_places_<id>
+       (drop/gen/lib maps: both keys are live collections —
+       loadMarkers/loadPlaces run for every non-Faerun map, and
+       the tray loader reads both keys for every non-Faerun map)
+     MOVE RULES:
+       - markers -> markers, places -> places, of the SAME KIND,
+         whenever a landing store of that kind exists for the
+         viewed map (every map for markers; every non-Faerun map
+         for places). The record clone rides along untouched apart
+         from x/y = the drop point (viewed map's % frame) and
+         tray:false — name, note, imgs, grp, locked, gm, atlas and
+         every other field preserved.
+       - TRANSLATED CASE (the only one the audit found): a place
+         dragged onto Faerun has NO same-kind landing store, so the
+         record is translated MINIMALLY into a Faerun marker:
+         {id (unchanged), kind:"place", name: rec.n, note: rec.d,
+         x/y = drop point, gm: !!rec.gm, imgs: rec.imgs || [],
+         tray:false} plus locked / grp / atlas / t only when the
+         source record actually carries them. It renders with
+         Faerun's normal marker rendering for kind "place" —
+         nothing bespoke.
+       - REFUSAL CASE (the only one the audit found): the viewed
+         map's landing store ALREADY holds a record with the same
+         id. A Store put would silently replace that record and
+         the pin counts would lie, so the move REFUSES VISIBLY:
+         zero writes, the home record unmoved (still shelved), the
+         entry stays in the tray, and setStatus says so in plain
+         words. No other refusal case exists in the audit: every
+         other (source kind, viewed map) pair has a landing store
+         or the translation above.
+       - The move itself is EXACTLY TWO Store ops, in this order,
+         each exactly once, serialized by awaiting them in turn
+         through the Store's per-collection queues: Store.del on
+         the home collection, then Store.put of the moved record
+         into the target collection. No whole-row hand writes, no
+         other writes. If the put fails after the delete landed, a
+         failure-path-only rollback put returns the original record
+         to its home store and the move reports failure — a pin is
+         never silently lost.
+       - ATLAS SAFETY: a moved atlas record keeps atlas:true and
+         its canonical id, and the move never touches the
+         vtt_atlas_migrated flag. Migration candidacy (APOC-V299)
+         keys on canonical id + atlas:true + that flag — a flagged
+         id is never re-minted whether the record sits on Faerun or
+         has been user-moved elsewhere, so a moved atlas pin is
+         treated as placed, not missing: no re-mint, no duplicate,
+         per-store counts change only by the move (home -1,
+         viewed +1, total constant).
+       - BOOKKEEPING: after the move the record lives in the viewed
+         map's store, so the tray loader lists any later shelving
+         of it under its NEW home map's section; shelving it there
+         and dragging it out while viewing its original map moves
+         it back by this same path.
+       - RENDER: the target collection is the viewed map's own, so
+         Store.put ingests it into the viewed collection's cache
+         (markers: the `markers` array itself; places: re-synced
+         from the Store cache below) and draw()/drawPlaces() create
+         the keyed node (APOC-V308 machinery) on the viewed map at
+         once. Hover (APOC-V311) resolves records live from their
+         home store, so a moved pin's hover works on its new map
+         with no extra wiring. */
+  window.__apoc312Moves = window.__apoc312Moves || [];
+  async function moveEntry312(entry, p){
+    /* Visible refusal signal: setStatus (the tray's house channel)
+       PLUS the APOC-V256 toast, which is visible wherever the drop
+       lands — a refusal must never be silent. */
+    const refuseNote312 = msg => { setStatus(msg); try { if (typeof window.__apocDropNote === "function") window.__apocDropNote(msg); } catch (e) {} };
+    const name = trayEntryName303(entry);
+    const srcMap = entry.mapId, srcStore = entry.store, rec = entry.rec;
+    const dstMap = currentMapId;
+    const nx = Math.round(p.x * 100) / 100, ny = Math.round(p.y * 100) / 100;
+    let dstStore = srcStore, translated = false;
+    if (srcStore === "places" && dstMap === "faerun") { dstStore = "markers"; translated = true; }
+    if (srcStore !== "markers" && srcStore !== "places") {
+      window.__apoc312Moves.push({ id: rec && rec.id, srcMap, srcStore, dstMap, dstStore, translated, refused: "unknown-store" });
+      refuseNote312(`"${name}" could not be placed on this map — it stays in the tray.`);
+      if (typeof renderPinsTray === "function") renderPinsTray();
+      return false;
+    }
+    const srcKey = srcStore === "markers" ? trayMarkersKey303(srcMap) : trayPlacesKey303(srcMap);
+    const dstKey = dstStore === "markers" ? trayMarkersKey303(dstMap) : trayPlacesKey303(dstMap);
+    const dstField = dstStore === "markers" ? "markers" : "places";
+    let newRec;
+    if (!translated) {
+      newRec = storeClone323(rec);
+      newRec.x = nx; newRec.y = ny; newRec.tray = false;
+    } else {
+      newRec = { id: rec.id, kind: "place", name: rec.n || rec.name || "Place", note: rec.d || rec.note || "", x: nx, y: ny, gm: !!rec.gm, imgs: Array.isArray(rec.imgs) ? storeClone323(rec.imgs) : [], tray: false };
+      if (rec.locked !== undefined) newRec.locked = rec.locked;
+      if (rec.grp) newRec.grp = rec.grp;
+      if (rec.atlas) newRec.atlas = true;
+      if (rec.t) newRec.t = rec.t;
+    }
+    /* Refusal pre-check (READS only, zero writes): the landing
+       store already holding this id would make the put a silent
+       replacement. Check the freshest row, falling back to the
+       Store cache / the viewed map's live arrays. */
+    let collision = false;
+    try {
+      const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", dstKey).maybeSingle();
+      const arr = (data && data.value && Array.isArray(data.value[dstField])) ? data.value[dstField] : null;
+      if (arr) collision = arr.some(r => r && r.id === rec.id);
+      else collision = (Store.list(dstKey) || []).some(r => r && r.id === rec.id);
+    } catch (e) { collision = (Store.list(dstKey) || []).some(r => r && r.id === rec.id); }
+    if (!collision && dstMap === currentMapId) {
+      if (dstStore === "markers") collision = markers.some(r => r && r.id === rec.id);
+      else { try { collision = trayPlacesNow303().some(r => r && r.id === rec.id); } catch (e) {} }
+    }
+    if (collision) {
+      window.__apoc312Moves.push({ id: rec.id, srcMap, srcStore, dstMap, dstStore, translated, refused: "target-id-collision", x: nx, y: ny });
+      refuseNote312(`"${name}" could not be placed on this map — a pin with the same identity is already on this map. It stays in the tray.`);
+      if (typeof renderPinsTray === "function") renderPinsTray();
+      return false;
+    }
+    const okDel = srcStore === "markers" ? await Store.del(srcKey, rec.id) : await Store.del(srcKey, rec.id, "places", false);
+    if (!okDel) {
+      window.__apoc312Moves.push({ id: rec.id, srcMap, srcStore, dstMap, dstStore, translated, refused: "home-delete-failed", x: nx, y: ny });
+      refuseNote312(`"${name}" could not be moved — it stays in the tray; try again in a few seconds.`);
+      loadTrayAll303(true);
+      return false;
+    }
+    const okPut = dstStore === "markers" ? await Store.put(dstKey, newRec) : await Store.put(dstKey, newRec, "places", false);
+    if (!okPut) {
+      try { if (srcStore === "markers") await Store.put(srcKey, storeClone323(rec)); else await Store.put(srcKey, storeClone323(rec), "places", false); } catch (e) {}
+      window.__apoc312Moves.push({ id: rec.id, srcMap, srcStore, dstMap, dstStore, translated, refused: "target-put-failed-rolled-back", x: nx, y: ny });
+      refuseNote312(`"${name}" could not be placed on this map — it stays in the tray; try again in a few seconds.`);
+      loadTrayAll303(true);
+      if (typeof renderPinsTray === "function") renderPinsTray();
+      return false;
+    }
+    window.__apoc312Moves.push({ id: rec.id, srcMap, srcStore, dstMap, dstStore, translated, refused: null, x: nx, y: ny });
+    if (dstStore === "places" && dstMap === currentMapId) {
+      try { places = storeClone323(Store.list(dstKey)); placeShadow = storeClone323(places); } catch (e) {}
+      drawPlaces();
+      try { draw(); } catch (e) {}
+    } else if (dstStore === "markers" && dstMap === currentMapId) {
+      try { draw(); } catch (e) {}
+      if (translated) { try { drawPlaces(); } catch (e) {} }
+    }
+    if (typeof renderPinsTray === "function") renderPinsTray();
+    loadTrayAll303(true);
+    setStatus(`${name} placed on this map.`);
     return true;
   }
   /* The radial's Shelve (bare markers): the same write the pin
@@ -11402,7 +11574,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-16-0437";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-16-0708";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
