@@ -1737,6 +1737,197 @@ setInterval(loadSharedEntries, 60000);
   let markers = [];
   let editing = null;
   let tempPin = null;
+  /* ================= APOC-V313 (v3.13, 2026-11-16): ONE POINTER MACHINE =================
+     Stage 4 of the redesign (work/vtt-teardown/REDESIGN-BRIEF.md).
+     Objective, in plain words: a press means one thing everywhere.
+     Press-and-drag moves; a double-press opens; a lone press opens
+     the options radial after the pairing window — on every draggable
+     thing (pins, places, words, tokens, templates, tray entries,
+     draw stamps and the zoom-bar float), mouse and touch alike, with
+     no gesture system fighting another.
+     THE MACHINE: idle -> pressed -> dragging (past 10px resistance)
+     -> drop; a release under resistance is a click. Pairing is
+     computed from POINTERDOWN times (650ms mouse / 900ms touch+pen —
+     Shaun's measured phone double-taps run ~595ms; the windows DO
+     NOT SHRINK). One code path serves mouse and touch. Lock refusal
+     lives inside the machine: a press whose canDrag() is false can
+     never move its thing, and crossing the resistance on such a
+     press is a refused drag — no move, no save, no click.
+     ACCEPTED BEHAVIOUR CHANGE (Shaun's Stage 4 ruling): drags start
+     at 10px resistance instead of the old move-then-snap-back. The
+     V288 <=24px micro-drag snap-back rule is REPLACED: a 5px (or
+     9px) press-move-release never moves and never saves — it counts
+     as a click; an 11px press-move-release is a drag. Drag-cancel
+     (a right press mid-drag, Esc mid-drag, pointercancel, or the
+     window losing focus mid-drag) restores the start position and
+     leaves the record untouched — no save, no move, no click.
+     Leaflet marker dragging is DISABLED for every machine-served
+     layer (the machine moves the marker itself via setLatLng); map
+     pan keeps Leaflet's own handling, and the machine disables map
+     dragging only for the duration of a claimed press that it took
+     away from the map, restoring it on release/cancel exactly when
+     it was the one that disabled it.
+     This block REPLACES (deleted, not bypassed): the APOC-V288
+     press machinery (tap commits, the pointerup recovery, the
+     dragend micro-drag snap-back), the APOC-V289 radial pairing
+     scheduler, the APOC-V302 touch pairing path, and the
+     per-feature drag code for pins, places, words, tokens,
+     templates, tray drag-outs, group grab, single-stamp drag and
+     the zoom-bar float. The verbs hanging off the machine's
+     outcomes are the features' own, unchanged. */
+  const PointerMachine313 = (() => {
+    const RESIST = 10, PAIR_DIST = 24;
+    const WIN_MOUSE = 650, WIN_TOUCH = 900;
+    let session = null;
+    const pairing = new Map();
+    let pendingRadial = null;
+    const anyPressHooks = [];
+    const surfaceFactories = [];
+    let surfaceBound = false;
+    const stats = { presses: 0, drags: 0, clicks: 0, pairs: 0, cancels: 0, drops: 0, refused: 0 };
+    const winFor = t => (t === "mouse" ? WIN_MOUSE : WIN_TOUCH);
+    function cancelPendingRadial(){ if (pendingRadial) { clearTimeout(pendingRadial.timer); pendingRadial = null; } }
+    function fireAnyPress(){ for (const f of anyPressHooks) { try { f(); } catch (e) {} } }
+    function mayClaim(opts){ try { return !opts.canPress || !!opts.canPress(); } catch (e) { return false; } }
+    function canDragNow(opts){ try { return !opts.canDrag || !!opts.canDrag(); } catch (e) { return false; } }
+    function claim(opts, e, el){
+      if (session) return false;
+      if (e.isPrimary === false) return false;
+      const ptype = e.pointerType || "mouse";
+      if (ptype === "mouse" && typeof e.button === "number" && e.button !== 0) return false;
+      if (opts.exclude && opts.exclude(e.target)) return false;
+      if (!mayClaim(opts)) return false;
+      cancelPendingRadial(); fireAnyPress();
+      const s = { opts, el: el || null, pointerId: e.pointerId, ptype, downT: Date.now(),
+        sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY, dragging: false,
+        startLL: null, startPt: null, startPos: null, mapRestore: false };
+      if (opts.moveMode === "latlng" && opts.marker) {
+        try { s.startLL = opts.marker.getLatLng(); s.startPt = map.latLngToContainerPoint(s.startLL); } catch (err) {}
+      }
+      if (opts.moveMode === "element" && opts.getPos) { try { s.startPos = opts.getPos(); } catch (err) {} }
+      if (opts.mapClaim && typeof map !== "undefined" && map.dragging && map.dragging.enabled()) { map.dragging.disable(); s.mapRestore = true; }
+      session = s; stats.presses++;
+      if (el) { try { el.setPointerCapture(e.pointerId); } catch (err) {} }
+      if (opts.onPress) { try { opts.onPress(s); } catch (err) {} }
+      return true;
+    }
+    function endSession(s){
+      if (session === s) session = null;
+      if (s.mapRestore) { try { if (map.dragging && !map.dragging.enabled()) map.dragging.enable(); } catch (e) {} }
+    }
+    function doCancel(s, reason){
+      if (!s || session !== s) return;
+      stats.cancels++;
+      if (s.dragging && s.opts.moveMode === "latlng" && s.opts.marker && s.startLL) { try { s.opts.marker.setLatLng(s.startLL); } catch (e) {} }
+      if (s.dragging && s.opts.moveMode === "element" && s.startPos && s.opts.setPos) { try { s.opts.setPos(s.startPos.l, s.startPos.t); } catch (e) {} }
+      if (s.opts.onCancel) { try { s.opts.onCancel(s, reason); } catch (e) {} }
+      endSession(s);
+    }
+    function doUp(s){
+      const opts = s.opts;
+      if (s.dragging) {
+        stats.drops++;
+        if (!canDragNow(opts)) { stats.refused++; endSession(s); return; }
+        if (opts.onDrop) { try { opts.onDrop(s); } catch (err) {} }
+        endSession(s); return;
+      }
+      stats.clicks++;
+      if (!opts.pairing) { if (opts.onClick) { try { opts.onClick(s); } catch (err) {} } endSession(s); return; }
+      const key = opts.key;
+      const prev = pairing.get(key);
+      const w = winFor(s.ptype);
+      if (prev && s.downT - prev.t <= w && Math.hypot(s.sx - prev.x, s.sy - prev.y) <= PAIR_DIST) {
+        pairing.delete(key); cancelPendingRadial(); stats.pairs++;
+        if (opts.onPair) { try { opts.onPair(s); } catch (err) {} }
+        endSession(s); return;
+      }
+      pairing.set(key, { t: s.downT, x: s.sx, y: s.sy });
+      if (s.ptype === "mouse" && opts.onUnpaired) {
+        cancelPendingRadial();
+        const delay = Math.max(0, s.downT + w - Date.now());
+        const rec = { key, timer: 0 };
+        rec.timer = setTimeout(() => { if (pendingRadial === rec) { pendingRadial = null; try { opts.onUnpaired(s); } catch (err) {} } }, delay);
+        pendingRadial = rec;
+      }
+      endSession(s);
+    }
+    document.addEventListener("pointermove", e => {
+      const s = session; if (!s || e.pointerId !== s.pointerId) return;
+      s.lx = e.clientX; s.ly = e.clientY;
+      if (!s.dragging) {
+        if (Math.hypot(e.clientX - s.sx, e.clientY - s.sy) <= RESIST) return;
+        s.dragging = true; stats.drags++;
+        if (canDragNow(s.opts) && s.opts.onDragStart) { try { s.opts.onDragStart(s); } catch (err) {} }
+        if (!canDragNow(s.opts)) return;
+      }
+      if (!canDragNow(s.opts)) return;
+      const opts = s.opts;
+      if (opts.moveMode === "latlng" && opts.marker && s.startPt) {
+        const ll = map.containerPointToLatLng(L.point(s.startPt.x + (e.clientX - s.sx), s.startPt.y + (e.clientY - s.sy)));
+        opts.marker.setLatLng(ll);
+        if (opts.onMove) { try { opts.onMove(s, ll); } catch (err) {} }
+      } else if (opts.moveMode === "element" && opts.setPos && s.startPos) {
+        opts.setPos(s.startPos.l + (e.clientX - s.sx), s.startPos.t + (e.clientY - s.sy));
+        if (opts.onMove) { try { opts.onMove(s); } catch (err) {} }
+      } else if (opts.onMove) { try { opts.onMove(s); } catch (err) {} }
+    }, true);
+    document.addEventListener("pointerup", e => { const s = session; if (!s || e.pointerId !== s.pointerId) return; s.lx = e.clientX; s.ly = e.clientY; doUp(s); }, true);
+    document.addEventListener("pointercancel", e => { const s = session; if (!s || e.pointerId !== s.pointerId) return; doCancel(s, "pointercancel"); }, true);
+    document.addEventListener("pointerdown", e => { if (session && typeof e.button === "number" && e.button === 2) doCancel(session, "right-press"); }, true);
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && session) doCancel(session, "esc"); }, true);
+    window.addEventListener("blur", () => { if (session) doCancel(session, "blur"); });
+    function bindElement(el, opts){
+      if (!el) return;
+      el.__pm313 = opts;
+      el.addEventListener("pointerdown", e => {
+        if (opts.exclude && opts.exclude(e.target)) return;
+        if (claim(opts, e, el)) { e.preventDefault(); e.stopPropagation(); }
+      }, !!opts.capture);
+      el.addEventListener("mousedown", e => { if (el.__pm313 === opts && mayClaim(opts) && !(opts.exclude && opts.exclude(e.target))) e.stopPropagation(); });
+      el.addEventListener("touchstart", e => { if (el.__pm313 === opts && mayClaim(opts) && !(opts.exclude && opts.exclude(e.target))) e.stopPropagation(); }, { passive: true });
+    }
+    function bindMarker(m, opts){
+      opts.marker = m; opts.moveMode = "latlng"; opts.mapClaim = true;
+      m.__pm313 = opts;
+      const el = m.getElement ? m.getElement() : null;
+      if (el) bindElement(el, opts);
+    }
+    function refreshMarker(m){
+      const opts = m && m.__pm313; if (!opts) return;
+      const el = m.getElement ? m.getElement() : null;
+      if (el && el.__pm313 !== opts) bindElement(el, opts);
+    }
+    function bindDelegate(container, selector, factory){
+      container.addEventListener("pointerdown", e => {
+        if (session) return;
+        const el = e.target && e.target.closest ? e.target.closest(selector) : null;
+        if (!el || !container.contains(el)) return;
+        let opts = null; try { opts = factory(el, e); } catch (err) {}
+        if (!opts) return;
+        if (claim(opts, e, el)) { e.preventDefault(); e.stopPropagation(); }
+      });
+    }
+    function registerSurface(factory){
+      surfaceFactories.push(factory);
+      if (surfaceBound) return; surfaceBound = true;
+      const c = map.getContainer();
+      c.addEventListener("pointerdown", e => {
+        if (session) return;
+        for (const f of surfaceFactories) {
+          let opts = null; try { opts = f(e); } catch (err) {}
+          if (opts) { opts.surface = true; opts.mapClaim = true; if (claim(opts, e, c)) { e.preventDefault(); e.stopPropagation(); } return; }
+        }
+      }, true);
+    }
+    return { claim, bindElement, bindMarker, refreshMarker, bindDelegate, registerSurface, cancelPendingRadial,
+      cancelActive: reason => { if (session) doCancel(session, reason || "api"); },
+      onAnyPress: f => anyPressHooks.push(f),
+      state: () => ({ active: !!session, dragging: !!(session && session.dragging), key: session ? session.opts.key : null, type: session ? session.ptype : null }),
+      stats: () => Object.assign({}, stats) };
+  })();
+  window.PointerMachine313 = PointerMachine313;
+  window.__apoc313 = { state: () => PointerMachine313.state(), stats: () => PointerMachine313.stats() };
+  try { const st313 = document.createElement("style"); st313.id = "APOC-V313-CSS"; st313.textContent = ".leaflet-marker-icon{touch-action:none}"; document.head.appendChild(st313); } catch (e) {}
   /* ================= APOC-V304 (v3.05, 2026-11-15): STAGE 3 — EVERY WORD ITS OWN MOVABLE OBJECT =================
      Shaun's commission (2026-11-15, route B+C): the Faerûn overland's
      words stop being paint on the flat Words layer and become individual
@@ -1928,9 +2119,14 @@ setInterval(loadSharedEntries, 60000);
   }
   /* ---- markers ---- */
   function wordMakeMarker304(rec){
-    const m = L.marker(wordLatLng304(rec, wordPosOf304(rec)), { pane: "layerBaseWordObjs", draggable: !isProjecting(), keyboard: false, icon: wordIcon304(rec) });
-    m.on("dragstart", () => { wordDragging304 = rec.id; });
-    m.on("dragend", async () => {
+    const m = L.marker(wordLatLng304(rec, wordPosOf304(rec)), { pane: "layerBaseWordObjs", draggable: false, keyboard: false, icon: wordIcon304(rec) });   /* APOC-V313: Leaflet dragging disabled — the pointer machine moves this marker */
+    PointerMachine313.bindMarker(m, {
+      key: "word:" + rec.id,
+      canPress: () => !isProjecting(),
+      canDrag: () => !isProjecting(),
+      onDragStart: () => { wordDragging304 = rec.id; },
+      onCancel: () => { wordDragging304 = null; repositionWord304(rec); },
+      onDrop: async () => {
       wordDragging304 = null;
       const xy = toXY(m.getLatLng());   /* the anchor corner's % — walk it back to the bbox corner */
       const pw = rec.s[2] / 4763 * 100, ph = rec.s[3] / 3185 * 100;
@@ -1949,6 +2145,7 @@ setInterval(loadSharedEntries, 60000);
       repositionWord304(rec);
       const ok = await saveWords304();
       if (!ok) { setStatus("That move didn't save — drag it again or refresh."); loadWords304(true); }
+      }
     });
     m.on("contextmenu", async () => {
       if (!wordPos304[rec.id]) return;   /* already at its printed spot */
@@ -1964,7 +2161,7 @@ setInterval(loadSharedEntries, 60000);
     try {
       if (!wordsGroup304) return;
       const want = wordsOn293 && apoc293IsSplit();
-      if (want && !map.hasLayer(wordsGroup304)) wordsGroup304.addTo(map);
+      if (want && !map.hasLayer(wordsGroup304)) { wordsGroup304.addTo(map); for (const mm of wordMarkers304.values()) PointerMachine313.refreshMarker(mm); }   /* APOC-V313: word elements exist once the group is on the map — (re)bind the machine */
       if (!want && map.hasLayer(wordsGroup304)) map.removeLayer(wordsGroup304);
     } catch(e) {}
   }
@@ -2003,7 +2200,7 @@ setInterval(loadSharedEntries, 60000);
         const ik = wordIconSig304();
         const cur = wordNodeSig304.get(rec.id);
         if (!cur || cur.icon !== ik) { m.setIcon(wordIcon304(rec)); wordNodeSig304.set(rec.id, { pos: cur ? cur.pos : wordPosSig304(rec), icon: ik }); }
-        if (m.dragging) { if (isProjecting()) m.dragging.disable(); else m.dragging.enable(); }
+        PointerMachine313.refreshMarker(m);   /* APOC-V313: setIcon swapped the element — re-bind the machine (Leaflet dragging stays disabled; canDrag reads isProjecting() live at press time) */
       }
     }
   }
@@ -2019,6 +2216,7 @@ setInterval(loadSharedEntries, 60000);
       const cur = wordNodeSig304.get(rec.id);
       if (cur && cur.icon === ik) continue;
       m.setIcon(wordIcon304(rec));
+      PointerMachine313.refreshMarker(m);   /* APOC-V313: setIcon swapped the element — re-bind the machine */
       wordNodeSig304.set(rec.id, { pos: cur ? cur.pos : wordPosSig304(rec), icon: ik });
     }
   }
@@ -2105,87 +2303,26 @@ setInterval(loadSharedEntries, 60000);
     window.__apoc293.state = () => Object.assign(s293state(), { words304: window.__apoc304.state() });
   } catch(e) {}
   wordsBuild304();
-  /* APOC-V288 (2026-11-14): pin interaction contract — Shaun's order of
-     2026-11-14 11:11 MST, SUPERSEDING the APOC-V278 click-opens
-     contract above it in history:
-       - one press-and-drag drags the pin; release saves it once
-         (dragend, below);
-       - a DOUBLE click / double tap opens the pin's verbiage;
-       - a single click alone does NOTHING — no open, no move, no save;
-       - a double-click sequence never moves or saves the pin: micro-
-         drags (≤24px) snap back unsaved, and the two taps pair here.
-     v288Taps is keyed by marker id and lives OUTSIDE draw() so a
-     redraw landing between the two taps cannot lose the pairing. A
-     real drag (>24px) clears the record and marks its trailing click
-     suppressed, so that click can neither pair nor open.
-     Detection runs on TAP COMMITS, not raw clicks: a press on a pin
-     commits a tap when it ends without becoming a real drag, and the
-     commit can arrive by three routes — the marker's click (a clean
-     press), dragend within the 24px envelope (a jitter press; in
-     this Leaflet build the click after any drag is unreliable — the
-     same trap APOC-V278's recovery existed for), or the pointerup
-     recovery below for a press that produced neither. Two commits on
-     the same pin within 650ms and 24px pair into the double click /
-     double tap that opens the verbiage. A lone commit does nothing
-     and expires; a press that resolves to nothing does nothing.
-     (APOC-V289, further below: a lone MOUSE commit now arms that
-     pin's radial, which opens when the pairing window lapses
-     unpaired; a lone TOUCH commit still does nothing.) */
-  const v288Taps = {};
-  let v288Press = null;
-  function v288CommitTap(id, x, y, openFn, radialFn, ptype, downT){
-    const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-    const now = Date.now();
-    /* APOC-V302 (v3.02, 2026-11-15): GH-PHONE-DTAP-WINDOW — TOUCH taps
-       pair on their POINTERDOWN times, not their commit times. A touch
-       commit lands late and by a variable route (the marker click, the
-       dragend, or the +80ms pointerup recovery), so commit-to-commit
-       pairing put a cliff at ~550ms of human cadence: the 2026-11-15
-       phone check measured ≤450ms intervals opening 11/12 and ≥550ms
-       opening 0/12 — a deliberate double tap at ~0.6s silently did
-       nothing. The press's pointerdown time is route-independent, so
-       pairing touch presses on it (900ms window) makes a careful
-       double tap — up to ~700ms between presses — open every time,
-       while deliberate separate taps (seconds apart) still do nothing,
-       a single tap still does nothing, and touch still never arms the
-       radial. The MOUSE path below is byte-for-byte APOC-V288/V289:
-       commit times, the 650ms window, radial arming. */
-    if (ptype === "touch" || ptype === "pen") {
-      const d = (typeof downT === "number" && downT) ? downT : now;
-      if (st.dt && d - st.dt <= 900 && Math.hypot(x - st.tx, y - st.ty) <= 24) { st.dt = 0; v289CancelPending(); try { openFn(); } catch(e){} return; }
-      st.dt = d; st.tx = x; st.ty = y;
-      return;
-    }
-    /* 650ms pairing window: a human double tap's commits can land
-       ~500ms apart when the first press resolved by the recovery
-       route; two DELIBERATE separate taps sit seconds apart and each
-       does nothing, so the wider window costs nothing. */
-    if (st.t && now - st.t <= 650 && Math.hypot(x - st.x, y - st.y) <= 24) { st.t = 0; v289CancelPending(); try { openFn(); } catch(e){} return; }
-    st.t = now; st.x = x; st.y = y;
-    /* APOC-V289: a lone MOUSE commit arms the pin radial — it opens
-       when the pairing window lapses unpaired (v289ScheduleRadial,
-       below). Touch commits never arm it: the touch contract stays
-       exactly as APOC-V288 (double tap opens, single tap nothing). */
-    if (ptype === "mouse" && radialFn) v289ScheduleRadial(id, radialFn);
-  }
-  document.addEventListener("pointerup", ev => {
-    const p = v288Press;
-    if (!p) return;
-    if (Math.hypot(ev.clientX - p.x, ev.clientY - p.y) > 24) { v288Press = null; return; }
-    setTimeout(() => { if (v288Press === p) v288Press = null; if (!p.done) { p.done = true; p.commit(); } }, 80);
-  }, true);
-  document.addEventListener("pointercancel", () => { v288Press = null; }, true);
-  /* APOC-V289 (2026-11-14): pin radial — Shaun's order of 2026-11-14
-     12:43 MST: "I want the left mouse button to open up a radial for
-     different options." A single LEFT-click on a pin opens a radial
-     of that pin's own options around its dot. Built on the APOC-V288
-     tap commits: a lone MOUSE commit arms the radial and it opens
-     only when the 650ms pairing window lapses unpaired, so a double
-     click still goes straight to the verbiage and the radial never
-     flashes on its first click; a press that becomes a drag never
-     arms it; the touch contract is untouched (double tap opens, a
-     single tap does nothing). The options are the pin's real
-     existing actions only:
+  /* APOC-V313 (v3.13, 2026-11-16): the pin contract on the ONE
+     POINTER MACHINE (block above, before APOC-V304). Shaun's verbs,
+     unchanged: press-and-drag moves (release saves exactly once);
+     a paired second press opens the verbiage/place card (the
+     double-press sequence itself never moves or saves the pin);
+     an unpaired single MOUSE click opens the options radial once
+     the 650ms pairing window lapses unpaired and undragged; a
+     single TOUCH tap does nothing (the APOC-V288/V302 touch
+     contract, preserved verbatim); right-click on a pin opens its
+     card directly; a locked pin refuses drag inside the machine
+     but still opens by double-press and radial. Pairing is computed
+     by the machine from pointerdown times: 650ms mouse / 900ms
+     touch. The APOC-V288 tap-commit machinery, the APOC-V289
+     radial scheduler and the APOC-V302 touch pairing path that
+     stood here are DELETED — the machine owns every press. */
+  /* APOC-V289's radial component, kept: a single left-click on a
+     pin opens a radial of that pin's own options around its dot
+     (wired as the machine's unpaired-mouse outcome in
+     createKeyedMarker308). The options are the pin's real existing
+     actions only:
        - a READ pin (carries pictures): Open (its place card) and
          Lock position / Unlock position (the place card lock's own
          toggle, factored into togglePinLock below);
@@ -2196,30 +2333,23 @@ setInterval(loadSharedEntries, 60000);
      it, on Esc, on map pan/zoom, on any drag start, and whenever the
      verbiage or the editor opens. In the projecting / expanded
      presentations (where a pin's verbiage is the Leaflet popup) the
-     radial does not engage — those surfaces keep APOC-V288 exactly. */
+     radial does not engage. */
   let pinRadialEl = null;
-  let v289Pending = null;
-  function v289CancelPending(){ if (v289Pending) { clearTimeout(v289Pending.timer); v289Pending = null; } }
   function closePinRadial(){ if (pinRadialEl) { pinRadialEl.remove(); pinRadialEl = null; } }
-  function v289ScheduleRadial(id, radialFn){
-    v289CancelPending();
-    const rec = { id, timer: 0 };
-    rec.timer = setTimeout(() => { if (v289Pending === rec) { v289Pending = null; try { radialFn(); } catch(e){} } }, 650);
-    v289Pending = rec;
-  }
+  PointerMachine313.onAnyPress(() => closePinRadial());
   document.addEventListener("pointerdown", ev => {
     /* Any new press anywhere retires a pending radial (that press's
-       own commit re-decides) and closes an open one immediately —
+       own outcome re-decides) and closes an open one immediately —
        except a press on the radial's own buttons, which is a choice
        in progress, not a close. Capture phase: this runs before the
        pressed pin's own handlers, so pressing a second pin closes
        the first pin's radial before anything else happens. */
-    v289CancelPending();
+    PointerMachine313.cancelPendingRadial();
     if (pinRadialEl && !(ev.target && pinRadialEl.contains(ev.target))) closePinRadial();
   }, true);
   document.addEventListener("keydown", ev => { if (ev.key === "Escape") closePinRadial(); }, true);
-  map.on("zoomstart", () => { v289CancelPending(); closePinRadial(); });
-  map.on("movestart", () => { v289CancelPending(); closePinRadial(); });
+  map.on("zoomstart", () => { PointerMachine313.cancelPendingRadial(); closePinRadial(); });
+  map.on("movestart", () => { PointerMachine313.cancelPendingRadial(); closePinRadial(); });
   /* The pin lock toggle, shared by the place card's lock button and
      the radial's Lock/Unlock option: flip the pin's own locked
      field, save (that field is the ONLY change the write carries),
@@ -2566,7 +2696,7 @@ setInterval(loadSharedEntries, 60000);
     const liveMk = () => markers.find(x => x.id === id) || ent.mk || mk0;
     const kind = KINDS.includes(mk0.kind) ? mk0.kind : "place";
     const isLocked0 = !!mk0.locked;
-    const m = L.marker(toLatLng(mk0.x, mk0.y), { pane: "layerMap", draggable: !isProjecting() && !isLocked0, icon: iconFor(kind, mk0.name, false, mk0._under, isLocked0) });
+    const m = L.marker(toLatLng(mk0.x, mk0.y), { pane: "layerMap", draggable: false, icon: iconFor(kind, mk0.name, false, mk0._under, isLocked0) });   /* APOC-V313: Leaflet dragging disabled — the pointer machine moves this marker; ent.draggable below is the machine-era bookkeeping of the same value */
     ent.m = m;
     ent.x = mk0.x; ent.y = mk0.y; ent.rot = mapRot;
     ent.iconSig = kind + "|" + (mk0.name || "") + "|" + (mk0._under === 2 ? 2 : mk0._under ? 1 : 0) + "|" + (isLocked0 ? 1 : 0);
@@ -2584,36 +2714,37 @@ setInterval(loadSharedEntries, 60000);
       openEditor({ mode: "edit", mk });
     };
     const radialFn = () => openPinRadial(liveMk(), openMk);
-    let dragStartLL = null;
-    m.on("dragstart", () => { closePinRadial(); dragStartLL = m.getLatLng(); });
-    m.on("click", (e) => {
-      const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-      if (st.suppressPress && st.suppressPress === st.press) { st.suppressPress = null; if (st.press) st.press.done = true; return; }
-      if (st.press) { if (st.press.done) return; st.press.done = true; }
-      const oe = e && e.originalEvent;
-      const cx = oe && typeof oe.clientX === "number" ? oe.clientX : 0;
-      const cy = oe && typeof oe.clientY === "number" ? oe.clientY : 0;
-      v288CommitTap(id, cx, cy, openMk, radialFn, (st.press && st.press.ptype) || (oe && oe.pointerType) || "", (st.press && st.press.t0) || 0);
+    /* APOC-V313: the pin's presses belong to the pointer machine.
+       Leaflet marker dragging is disabled; the machine moves the
+       marker, the drop saves exactly once through the same
+       pinPatch/saveMarkers path the old dragend used, a paired
+       second press opens (openMk), an unpaired mouse click arms
+       the radial (radialFn), and a locked pin's canDrag reads the
+       LIVE record so the machine refuses its drag while its clicks
+       still pair and open. The <=24px snap-back is gone: under
+       10px is a click, over 10px is a drag (see the machine). */
+    PointerMachine313.bindMarker(m, {
+      key: "pin:" + id,
+      pairing: true,
+      canDrag: () => { const cur = liveMk(); return !isProjecting() && !(cur && cur.locked); },
+      onDragStart: () => { closePinRadial(); },
+      onPair: () => { openMk(); },
+      onUnpaired: () => { radialFn(); },
+      onDrop: async () => {
+        const mk = liveMk();
+        if (!mk || mk.locked) return;
+        if (isProjecting()) { loadMarkers(true); return; }
+        const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
+        m.setLatLng(toLatLng(mk.x, mk.y));   /* APOC-V308: snap off the raw drag latlng onto the canonical position for the saved coords — the keyed entry below claims these coords as applied, so the node must actually sit there */
+        ent.x = mk.x; ent.y = mk.y; ent.mk = mk;
+        pinPatch(mk, ["x", "y", "_under"]);
+        setStatus(`Saving ${mk.name}'s new position\u2026`);
+        const ok = await saveMarkers();
+        if (ok) setStatus(`${mk.name} moved \u2014 saved for everybody.`);
+        else { setStatus("That move didn't save \u2014 drag it again or refresh."); loadMarkers(true); }
+      }
     });
     const iconEl = m.getElement();
-    if (iconEl) iconEl.addEventListener("pointerdown", ev => {
-      if (ev.isPrimary === false) return;
-      if (ev.button !== undefined && ev.button !== 0) return;
-      const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-      const P = { id, x: ev.clientX, y: ev.clientY, ptype: ev.pointerType || "", t0: Date.now(), done: false, commit: () => v288CommitTap(id, P.x, P.y, openMk, radialFn, P.ptype, P.t0) };
-      st.press = P; v288Press = P;
-    }, { passive: true });
-    if (iconEl) {
-      /* APOC-V288 lock swallow, made live: the press is swallowed
-         exactly while the pin's CURRENT record is locked (the keyed
-         node survives lock toggles, so the check reads the record,
-         not the creation-time state). Only propagation stops; the
-         pin's own click and right-click still fire. */
-      const swallow = ev => { const cur = liveMk(); if (cur && cur.locked) ev.stopPropagation(); };
-      iconEl.addEventListener("pointerdown", swallow);
-      iconEl.addEventListener("mousedown", swallow);
-      iconEl.addEventListener("touchstart", swallow, { passive: true });
-    }
     if (iconEl) iconEl.addEventListener("dblclick", ev => { ev.stopPropagation(); });
     if (iconEl) iconEl.addEventListener("contextmenu", ev => {
       /* APOC-V279: a right-click anywhere on a READ pin's body opens
@@ -2627,35 +2758,6 @@ setInterval(loadSharedEntries, 60000);
       ev.preventDefault();
       ev.stopPropagation();
       openMk();
-    });
-    m.on("dragend", async () => {
-      const mk = liveMk();
-      if (dragStartLL) {
-        const startLL = dragStartLL; dragStartLL = null;
-        const pa = map.latLngToContainerPoint(startLL), pb = map.latLngToContainerPoint(m.getLatLng());
-        const dist = Math.hypot(pb.x - pa.x, pb.y - pa.y);
-        const st = v288Taps[id] || (v288Taps[id] = { t: 0, x: 0, y: 0, suppressPress: null, press: null });
-        if (dist <= 24) {
-          m.setLatLng(startLL);
-          st.suppressPress = st.press;
-          if (st.press) { if (st.press.done) return; st.press.done = true; }
-          const cr = map.getContainer().getBoundingClientRect();
-          v288CommitTap(id, pa.x + cr.left, pa.y + cr.top, openMk, radialFn, (st.press && st.press.ptype) || "", (st.press && st.press.t0) || 0);
-          return;
-        }
-        if (st.press) st.press.done = true;
-        st.suppressPress = st.press; st.t = 0; st.dt = 0;
-      }
-      if (mk.locked) return;
-      if (isProjecting()) { loadMarkers(true); return; }
-      const p = toXY(m.getLatLng()); mk.x = p.x; mk.y = p.y;
-      m.setLatLng(toLatLng(mk.x, mk.y));   /* APOC-V308: snap off the raw drag latlng onto the canonical position for the saved coords — the keyed entry below claims these coords as applied, so the node must actually sit there */
-      ent.x = mk.x; ent.y = mk.y; ent.mk = mk;
-      pinPatch(mk, ["x", "y", "_under"]);
-      setStatus(`Saving ${mk.name}'s new position\u2026`);
-      const ok = await saveMarkers();
-      if (ok) setStatus(`${mk.name} moved \u2014 saved for everybody.`);
-      else { setStatus("That move didn't save \u2014 drag it again or refresh."); loadMarkers(true); }
     });
     return m;
   }
@@ -2677,10 +2779,8 @@ setInterval(loadSharedEntries, 60000);
       keyedStats308.iconSets++; dirty = true;
     }
     const wantDrag = !isProjecting() && !isLocked;
-    if (ent.draggable !== wantDrag && ent.m.dragging) {
-      if (wantDrag) ent.m.dragging.enable(); else ent.m.dragging.disable();
-      ent.draggable = wantDrag; dirty = true;
-    }
+    if (ent.draggable !== wantDrag) { ent.draggable = wantDrag; dirty = true; }   /* APOC-V313: no Leaflet dragging to toggle — the machine reads the live record's lock at press time */
+    PointerMachine313.refreshMarker(ent.m);   /* APOC-V313: re-bind if setIcon swapped the element */
     if (dirty) keyedStats308.mutated++;
     ent.mk = mk;
   }
@@ -4001,39 +4101,18 @@ setInterval(loadSharedEntries, 60000);
      pin at the drop point through one merge-save. Esc, or a drop
      outside the map, cancels with no save at all. A plain click on
      an entry does nothing. */
-  let ptDrag = null;
-  pinsTrayListEl.addEventListener("pointerdown", (e) => {
-    const entry = e.target.closest(".pt-entry");
-    if (!entry || (e.pointerType === "mouse" && e.button !== 0)) return;
-    /* APOC-V303: an entry is identified by the (mapId, store, id)
-       triple it was rendered with — id alone is not an identity in
-       a universal tray. Resolution reads trayEntries303, the exact
-       list the last render produced. */
-    const ent = trayEntries303.find(en => en.mapId === entry.dataset.trayMap && en.store === entry.dataset.trayStore && en.rec.id === entry.dataset.pinId);
+  /* APOC-V313: tray drag-out rides the pointer machine (delegate
+     registration on the tray list; the 10px resistance replaces the
+     old 7px threshold — a plain click on an entry still does
+     nothing, Esc / right-press / pointercancel cancel through the
+     machine with no save at all). The drop commit below is the old
+     ptDragEnd body verbatim, fed the machine session's release
+     point: dropping back on the tray cancels, a drop outside the
+     map cancels, a foreign entry MOVES to the viewed map through
+     moveEntry312 (APOC-V312), a same-map place places through
+     placePatchKey, a same-map marker through pinPatch/saveMarkers. */
+  async function ptDropCommit313(ent, e){
     if (!ent) return;
-    ptDrag = { entry: ent, mk: ent.store === "markers" ? ent.rec : null, name: (typeof trayEntryName303 === "function") ? trayEntryName303(ent) : (ent.rec.name || ent.rec.n || "Pin"), sx: e.clientX, sy: e.clientY, active: false, ghost: null, cancelled: false };
-    try { entry.setPointerCapture(e.pointerId); } catch (err) {}
-    e.preventDefault();
-  });
-  pinsTrayListEl.addEventListener("pointermove", (e) => {
-    if (!ptDrag) return;
-    if (!ptDrag.active) {
-      if (Math.hypot(e.clientX - ptDrag.sx, e.clientY - ptDrag.sy) < 7) return;
-      ptDrag.active = true;
-      const ghost = document.createElement("div");
-      ghost.className = "pt-ghost";
-      ghost.textContent = ptDrag.name || "Pin";
-      document.body.appendChild(ghost);
-      ptDrag.ghost = ghost;
-    }
-    ptDrag.ghost.style.left = e.clientX + "px";
-    ptDrag.ghost.style.top = e.clientY + "px";
-  });
-  async function ptDragEnd(e, commit){
-    const d = ptDrag;
-    ptDrag = null;
-    if (d && d.ghost) d.ghost.remove();
-    if (!d || !d.active || !commit || d.cancelled) return;
     const mapEl = document.getElementById("apocMap");
     if (!mapEl || typeof map === "undefined" || !map) return;
     /* APOC-V302 (v3.02, 2026-11-15): GH-PHONE-TRAY-DRAG-CANCEL —
@@ -4047,27 +4126,12 @@ setInterval(loadSharedEntries, 60000);
     if (e.clientX >= tr.left && e.clientX <= tr.right && e.clientY >= tr.top && e.clientY <= tr.bottom) return;
     /* APOC-V312 (v3.12, 2026-11-16): a FOREIGN entry (its home map
        is not the map on screen) is MOVED to the viewed map at the
-       drop point — Shaun's ruling 2026-11-16, SUPERSEDING the
-       APOC-V303 restore-in-place rule. The drop must land inside
-       the viewed map's bounds (a drop outside the map, like a drop
-       back on the tray above, cancels with no write at all); the
-       move itself is moveEntry312 below: exactly one Store delete
-       from the home collection + exactly one Store put into the
-       viewed map's collection of the same kind (or, for a place
-       landing on Faerun — the one map with no places store — a
-       minimal translation into a Faerun marker). A pin must never
-       leave the tray without appearing on the viewed map: a case
-       that cannot be honoured REFUSES VISIBLY inside moveEntry312
-       (entry stays in the tray, record unmoved, zero writes). */
-    const ent = d.entry;
+       drop point — see moveEntry312. */
     const r = mapEl.getBoundingClientRect();
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
     const p = toXY(map.containerPointToLatLng(L.point(e.clientX - r.left, e.clientY - r.top)));
-    if (ent && ent.mapId !== currentMapId) { if (typeof moveEntry312 === "function") await moveEntry312(ent, p); return; }
-    if (ent && ent.store === "places") {
-      /* Same-map place: placed at the drop point like a pin, but
-         the write goes through placePatchKey — the places merge —
-         never the full-row savePlaces(). */
+    if (ent.mapId !== currentMapId) { if (typeof moveEntry312 === "function") await moveEntry312(ent, p); return; }
+    if (ent.store === "places") {
       const pl = ent.rec;
       const nx = Math.round(p.x * 100) / 100, ny = Math.round(p.y * 100) / 100;
       const okP = (typeof placePatchKey === "function") ? await placePatchKey(placesKey(), pl.id, { x: nx, y: ny, tray: false }) : false;
@@ -4076,11 +4140,11 @@ setInterval(loadSharedEntries, 60000);
       try { draw(); } catch (err) {}
       renderPinsTray();
       if (typeof loadTrayAll303 === "function") loadTrayAll303(true);
-      setStatus(okP ? `${pl.n || "Place"} placed — it works like any place now.` : "That place could not be placed — it is still in the tray; try again in a few seconds.");
+      setStatus(okP ? `${pl.n || "Place"} placed \u2014 it works like any place now.` : "That place could not be placed \u2014 it is still in the tray; try again in a few seconds.");
       if (!okP) loadPlaces(true);
       return;
     }
-    const mk = (ent && ent.store === "markers") ? (markers.find(m => m.id === ent.rec.id) || ent.rec) : d.mk;
+    const mk = (ent.store === "markers") ? (markers.find(m => m.id === ent.rec.id) || ent.rec) : null;
     if (!mk) return;
     mk.x = Math.round(p.x * 100) / 100;
     mk.y = Math.round(p.y * 100) / 100;
@@ -4090,14 +4154,35 @@ setInterval(loadSharedEntries, 60000);
     draw();
     renderPinsTray();
     if (typeof loadTrayAll303 === "function") loadTrayAll303(true);
-    setStatus(ok ? `${mk.name || "Marker"} placed — it works like any pin now.` : "That pin could not be placed — it is still in the tray; try again in a few seconds.");
+    setStatus(ok ? `${mk.name || "Marker"} placed \u2014 it works like any pin now.` : "That pin could not be placed \u2014 it is still in the tray; try again in a few seconds.");
     if (!ok) loadMarkers(true);
   }
-  pinsTrayListEl.addEventListener("pointerup", (e) => { ptDragEnd(e, true); });
-  pinsTrayListEl.addEventListener("pointercancel", (e) => { ptDragEnd(e, false); });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && ptDrag) { ptDrag.cancelled = true; if (ptDrag.ghost) { ptDrag.ghost.remove(); ptDrag.ghost = null; } ptDrag.active = false; }
-  }, true);
+  PointerMachine313.bindDelegate(pinsTrayListEl, ".pt-entry", (entry, e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return null;
+    /* APOC-V303: an entry is identified by the (mapId, store, id)
+       triple it was rendered with — id alone is not an identity in
+       a universal tray. Resolution reads trayEntries303, the exact
+       list the last render produced. */
+    const ent = trayEntries303.find(en => en.mapId === entry.dataset.trayMap && en.store === entry.dataset.trayStore && en.rec.id === entry.dataset.pinId);
+    if (!ent) return null;
+    const name = (typeof trayEntryName303 === "function") ? trayEntryName303(ent) : (ent.rec.name || ent.rec.n || "Pin");
+    let ghost = null;
+    return {
+      key: "tray:" + ent.mapId + "|" + ent.store + "|" + ent.rec.id,
+      canDrag: () => true,
+      onDragStart: (sess) => {
+        ghost = document.createElement("div");
+        ghost.className = "pt-ghost";
+        ghost.textContent = name || "Pin";
+        document.body.appendChild(ghost);
+        ghost.style.left = sess.lx + "px";
+        ghost.style.top = sess.ly + "px";
+      },
+      onMove: (sess) => { if (ghost) { ghost.style.left = sess.lx + "px"; ghost.style.top = sess.ly + "px"; } },
+      onCancel: () => { if (ghost) { ghost.remove(); ghost = null; } },
+      onDrop: async (sess) => { if (ghost) { ghost.remove(); ghost = null; } await ptDropCommit313(ent, { clientX: sess.lx, clientY: sess.ly }); }
+    };
+  });
   /* Tray panel move + resize (treatment rules; the lock holds both). */
   (function(){
     const head = pinsTrayEl.querySelector("#pinsTrayHead");
@@ -4329,30 +4414,34 @@ setInterval(loadSharedEntries, 60000);
     const id = p0.id;
     const livePl = () => places.find(x => x.id === id) || ent.p || p0;
     const level = placeBandCache308.levels.get(id);
-    const m = L.marker(toLatLng(p0.x, p0.y), { pane: "layerMap", draggable: !isProjecting() && effectiveGm(), icon: iconFor("place", p0.n, false, level === undefined ? placeBandLevel(p0) : level, false), keyboard: false });
+    const m = L.marker(toLatLng(p0.x, p0.y), { pane: "layerMap", draggable: false, icon: iconFor("place", p0.n, false, level === undefined ? placeBandLevel(p0) : level, false), keyboard: false });   /* APOC-V313: Leaflet dragging disabled — the pointer machine moves this marker */
     ent.m = m; ent.x = p0.x; ent.y = p0.y; ent.rot = mapRot;
     ent.iconSig = (p0.n || "") + "|" + (level === 2 ? 2 : level ? 1 : 0);
     ent.draggable = !isProjecting() && effectiveGm();
     ent.p = p0;
     placesLayer.addLayer(m);
     hoverBindPlace311(ent, id);   /* APOC-V311: hover wiring rides the keyed node from creation (places carry no imgs, so they resolve to no preview) */
-    m.on("click", () => {
-      const p = livePl();
-      if (!p) return;
-      if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
-      if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
-      if (typeof showPlaceCard303 === "function") { showPlaceCard303(p); return; }
-      showCard(p.n, "Place \u2014 this map", p.d || "", "");
-    });
-    m.on("dragend", async () => {
-      const p = livePl();
-      if (!p) return;
-      const xy = toXY(m.getLatLng()); p.x = xy.x; p.y = xy.y;
-      m.setLatLng(toLatLng(p.x, p.y));   /* APOC-V308: canonical snap, as on markers */
-      ent.x = p.x; ent.y = p.y; ent.p = p;
-      const ok = await savePlaces();
-      if (!ok) { setStatus("That move didn't save \u2014 drag it again or refresh."); loadPlaces(true); }
-      else setStatus(`${p.n} moved \u2014 saved for everybody.`);
+    PointerMachine313.bindMarker(m, {
+      key: "place:" + id,
+      canDrag: () => !isProjecting() && effectiveGm(),
+      onClick: () => {
+        const p = livePl();
+        if (!p) return;
+        if (isProjecting() || document.body.classList.contains("map-expanded")) { L.popup().setLatLng(toLatLng(p.x, p.y)).setContent(`<b>${esc(p.n)}</b>${p.d ? "<br>" + esc(p.d) : ""}`).openOn(map); return; }
+        if (effectiveGm()) { openPlaceEditor({ mode: "edit", p }); return; }
+        if (typeof showPlaceCard303 === "function") { showPlaceCard303(p); return; }
+        showCard(p.n, "Place \u2014 this map", p.d || "", "");
+      },
+      onDrop: async () => {
+        const p = livePl();
+        if (!p) return;
+        const xy = toXY(m.getLatLng()); p.x = xy.x; p.y = xy.y;
+        m.setLatLng(toLatLng(p.x, p.y));   /* APOC-V308: canonical snap, as on markers */
+        ent.x = p.x; ent.y = p.y; ent.p = p;
+        const ok = await savePlaces();
+        if (!ok) { setStatus("That move didn't save \u2014 drag it again or refresh."); loadPlaces(true); }
+        else setStatus(`${p.n} moved \u2014 saved for everybody.`);
+      }
     });
     return m;
   }
@@ -4374,10 +4463,8 @@ setInterval(loadSharedEntries, 60000);
       keyedPlStats308.iconSets++; dirty = true;
     }
     const wantDrag = !isProjecting() && effectiveGm();
-    if (ent.draggable !== wantDrag && ent.m.dragging) {
-      if (wantDrag) ent.m.dragging.enable(); else ent.m.dragging.disable();
-      ent.draggable = wantDrag; dirty = true;
-    }
+    if (ent.draggable !== wantDrag) { ent.draggable = wantDrag; dirty = true; }   /* APOC-V313: no Leaflet dragging to toggle — the machine reads its gates live at press time */
+    PointerMachine313.refreshMarker(ent.m);   /* APOC-V313: re-bind if setIcon swapped the element */
     if (dirty) keyedPlStats308.mutated++;
     ent.p = p;
   }
@@ -5270,37 +5357,38 @@ setInterval(loadSharedEntries, 60000);
       if (tk.gm && !effectiveGm()) continue;
       if ((tk.status || []).includes("invisible") && !effectiveGm()) continue;
       if (tk.light > 0 && !window.__apocLightOn) tokenLayer.addLayer(L.circle(toLatLng(tk.x, tk.y), { pane: "layerTokens", radius: tk.light / feetPerSquare * CELL, color: "#e8a33d", weight: 1, dashArray: "4 4", fillColor: "#e8a33d", fillOpacity: 0.08, interactive: false }));
-      const m = L.marker(toLatLng(tk.x, tk.y), { pane: "layerTokens", draggable: !tk.lock && !isProjecting(), icon: tokenIcon(tk) }).addTo(tokenLayer);
+      const m = L.marker(toLatLng(tk.x, tk.y), { pane: "layerTokens", draggable: false, icon: tokenIcon(tk) }).addTo(tokenLayer);   /* APOC-V313: Leaflet dragging disabled — the pointer machine moves this marker */
       tokenMarkers[tk.id] = m;
       if ((tk.status || []).includes("invisible") && effectiveGm()) { const el = m.getElement(); if (el) el.classList.add("tk-invis"); }
-      m.on("click", () => {
-        if (apocCondArmed()) { openCondPopup(tk, m); return; }
-        if (isProjecting() || document.body.classList.contains("map-expanded")) {
-          L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(tk.name)}</b>${tk.maxHp > 0 ? `<br>HP ${tk.hp || 0}/${tk.maxHp}` : ""}`).openOn(map);
-          return;
+      PointerMachine313.bindMarker(m, {
+        key: "token:" + tk.id,
+        canDrag: () => !tk.lock && !isProjecting(),
+        onClick: () => {
+          if (apocCondArmed()) { openCondPopup(tk, m); return; }
+          if (isProjecting() || document.body.classList.contains("map-expanded")) {
+            L.popup().setLatLng(m.getLatLng()).setContent(`<b>${esc(tk.name)}</b>${tk.maxHp > 0 ? `<br>HP ${tk.hp || 0}/${tk.maxHp}` : ""}`).openOn(map);
+            return;
+          }
+          openTokenEditor({ mode: "edit", tk });
+        },
+        onDrop: async () => {
+          if (isProjecting()) { drawTokens(); return; }
+          let p = toXY(m.getLatLng());
+          if (gridOn && gridType === "hex") {
+            const lng = p.x / 100 * MW, lat = MH * (1 - p.y / 100);
+            let best = null, bd = Infinity;
+            for (const c of hexCenters()) { const d = (c[0] - lng) * (c[0] - lng) + (c[1] - lat) * (c[1] - lat); if (d < bd) { bd = d; best = c; } }
+            if (best) p = { x: Math.round(best[0] / MW * 10000) / 100, y: Math.round((1 - best[1] / MH) * 10000) / 100 };
+          } else if (gridOn) {
+            const lngS = p.x / 100 * MW, latS = MH * (1 - p.y / 100);
+            const CS = cellNow(); const sxS = (Math.floor((lngS - gridOX) / CS) + 0.5) * CS + gridOX, syS = (Math.floor((latS - gridOY) / CS) + 0.5) * CS + gridOY;
+            p = { x: Math.round(sxS / MW * 10000) / 100, y: Math.round((1 - syS / MH) * 10000) / 100 };
+          }
+          tk.x = p.x; tk.y = p.y;
+          const ok = await saveTokens();
+          tokenStatusEl.textContent = ok ? `${tk.name} moved § saved for everybody.` : "That move didn't save § try again.";
+          if (!ok) loadTokens(true); else drawTokens();
         }
-        openTokenEditor({ mode: "edit", tk });
-      });
-      m.on("dragend", async () => {
-        if (isProjecting()) { drawTokens(); return; }         let p = toXY(m.getLatLng());
-        if (gridOn && gridType === "hex") {
-          const lng = p.x / 100 * MW, lat = MH * (1 - p.y / 100);
-          let best = null, bd = Infinity;
-          for (const c of hexCenters()) { const d = (c[0] - lng) * (c[0] - lng) + (c[1] - lat) * (c[1] - lat); if (d < bd) { bd = d; best = c; } }
-          if (best) p = { x: Math.round(best[0] / MW * 10000) / 100, y: Math.round((1 - best[1] / MH) * 10000) / 100 };
-        } else if (gridOn) {
-          /* V259: snap in lat space (cells counted from the drawn lines at
-             lat 0), not percent-from-top: from-top counting offsets the
-             rest point by MH mod CELL whenever the map height is not a
-             whole number of cells (Faerun 5 units, Saint James 27). */
-          const lngS = p.x / 100 * MW, latS = MH * (1 - p.y / 100);
-          const CS = cellNow(); const sxS = (Math.floor((lngS - gridOX) / CS) + 0.5) * CS + gridOX, syS = (Math.floor((latS - gridOY) / CS) + 0.5) * CS + gridOY;
-          p = { x: Math.round(sxS / MW * 10000) / 100, y: Math.round((1 - syS / MH) * 10000) / 100 };
-        }
-        tk.x = p.x; tk.y = p.y;
-        const ok = await saveTokens();
-        tokenStatusEl.textContent = ok ? `${tk.name} moved — saved for everybody.` : "That move didn't save — try again.";
-        if (!ok) loadTokens(true); else drawTokens();
       });
     }
   }
@@ -5652,28 +5740,37 @@ setInterval(loadSharedEntries, 60000);
     for (const it of tplItems) {
       const poly = L.polygon(tplPoints(it).map(([ux, uy]) => uToLatLng(ux, uy)), { pane: "layerTokens", color: "#e8a33d", weight: 2, fillColor: "#e8a33d", fillOpacity: 0.18, interactive: false });
       tplLayer.addLayer(poly); tplShapes[it.id] = poly;
-      const om = L.marker(toLatLng(it.x, it.y), { pane: "layerTokens", draggable: true, icon: L.divIcon({ className: "tpl-origin", html: '<span class="tpl-dot"></span>', iconSize: [13, 13], iconAnchor: [7, 7] }) }).addTo(tplLayer);
-      om.on("dragend", async () => {
-        let p = toXY(om.getLatLng());
-        const sn = rulerSnap(om.getLatLng()); if (sn) p = toXY(sn);
-        it.x = Math.round(p.x * 100) / 100; it.y = Math.round(p.y * 100) / 100;
-        const ok = await saveTemplates(); renderTemplates();
-        $("tplStatus").textContent = ok ? tplLabel(it) + " moved — saved for everybody." : "That move didn't save — try again.";
-        if (!ok) loadTemplates(true);
+      const om = L.marker(toLatLng(it.x, it.y), { pane: "layerTokens", draggable: false, icon: L.divIcon({ className: "tpl-origin", html: '<span class="tpl-dot"></span>', iconSize: [13, 13], iconAnchor: [7, 7] }) }).addTo(tplLayer);   /* APOC-V313: Leaflet dragging disabled — the pointer machine moves this marker */
+      PointerMachine313.bindMarker(om, {
+        key: "tpl-o:" + it.id,
+        canDrag: () => true,
+        onDrop: async () => {
+          let p = toXY(om.getLatLng());
+          const sn = rulerSnap(om.getLatLng()); if (sn) p = toXY(sn);
+          it.x = Math.round(p.x * 100) / 100; it.y = Math.round(p.y * 100) / 100;
+          const ok = await saveTemplates(); renderTemplates();
+          $("tplStatus").textContent = ok ? tplLabel(it) + " moved — saved for everybody." : "That move didn't save — try again.";
+          if (!ok) loadTemplates(true);
+        }
       });
       const [ox, oy] = toUnits({ x: it.x, y: it.y });
       const hr = (it.size + 0.7) * cellNow(), ha = (it.rot || 0) * Math.PI / 180;
-      const hm = L.marker(uToLatLng(ox + Math.cos(ha) * hr, oy + Math.sin(ha) * hr), { pane: "layerTokens", draggable: true, icon: L.divIcon({ className: "tpl-handle", html: '<span class="tpl-rot">&#8635;</span>', iconSize: [19, 19], iconAnchor: [9, 9] }) }).addTo(tplLayer);
-      hm.on("drag", () => {
-        const hp = toXY(hm.getLatLng()); const [ux, uy] = toUnits(hp);
-        let a = Math.atan2(uy - oy, ux - ox) * 180 / Math.PI; a = Math.round(a / 5) * 5;
-        it.rot = ((a % 360) + 360) % 360;
-        if (tplShapes[it.id]) tplShapes[it.id].setLatLngs(tplPoints(it).map(([px, py]) => uToLatLng(px, py)));
-      });
-      hm.on("dragend", async () => {
-        const ok = await saveTemplates(); renderTemplates();
-        $("tplStatus").textContent = ok ? tplLabel(it) + " — facing " + it.rot + "\u00b0, saved for everybody." : "That rotation didn't save — try again.";
-        if (!ok) loadTemplates(true);
+      const hm = L.marker(uToLatLng(ox + Math.cos(ha) * hr, oy + Math.sin(ha) * hr), { pane: "layerTokens", draggable: false, icon: L.divIcon({ className: "tpl-handle", html: '<span class="tpl-rot">&#8635;</span>', iconSize: [19, 19], iconAnchor: [9, 9] }) }).addTo(tplLayer);   /* APOC-V313: Leaflet dragging disabled — the pointer machine moves this marker */
+      PointerMachine313.bindMarker(hm, {
+        key: "tpl-h:" + it.id,
+        canDrag: () => true,
+        onMove: () => {
+          const hp = toXY(hm.getLatLng()); const [ux, uy] = toUnits(hp);
+          let a = Math.atan2(uy - oy, ux - ox) * 180 / Math.PI; a = Math.round(a / 5) * 5;
+          it.rot = ((a % 360) + 360) % 360;
+          if (tplShapes[it.id]) tplShapes[it.id].setLatLngs(tplPoints(it).map(([px, py]) => uToLatLng(px, py)));
+        },
+        onCancel: () => { renderTemplates(); },
+        onDrop: async () => {
+          const ok = await saveTemplates(); renderTemplates();
+          $("tplStatus").textContent = ok ? tplLabel(it) + " — facing " + it.rot + "\u00b0, saved for everybody." : "That rotation didn't save — try again.";
+          if (!ok) loadTemplates(true);
+        }
       });
     }
   }
@@ -11574,7 +11671,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-16-0708";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-16-1004";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -13402,26 +13499,10 @@ function floorConnected(L, cols, rows){
     if (window.__apocZoom) window.__apocZoom.sliderTo(v);
     else { var m = window.map; if (m) m.setZoom(v); }
   });
-  grip.addEventListener("pointerdown", function(e){
-    e.preventDefault();
-    var sx = e.clientX, sy = e.clientY, sl = bar.offsetLeft, st = bar.offsetTop; /* APOC-V305: the FreeLayout "zoombar" lock gate that silently vetoed this drag is removed — see the APOC-V305 block */
-    try { grip.setPointerCapture(e.pointerId); } catch(err) {}
-    function mv(ev){
-      var maxL = Math.max(0, stageW() - bar.offsetWidth);
-      var maxT = Math.max(0, side.clientHeight + 44 - bar.offsetHeight);
-      bar.style.left = Math.min(Math.max(0, sl + ev.clientX - sx), maxL) + "px";
-      bar.style.top = Math.min(Math.max(0, st + ev.clientY - sy), maxT) + "px";
-    }
-    function up(){
-      grip.removeEventListener("pointermove", mv);
-      grip.removeEventListener("pointerup", up);
-      grip.removeEventListener("pointercancel", up);
-      savePos({ l: bar.offsetLeft, t: bar.offsetTop });
-    }
-    grip.addEventListener("pointermove", mv);
-    grip.addEventListener("pointerup", up);
-    grip.addEventListener("pointercancel", up);
-  });
+  /* APOC-V313: the grip's own drag handler that stood here is
+     DELETED — the zoom bar's drag (grip included: the grip is bar
+     body, not a control) is a pointer-machine element session
+     registered by the APOC-V305 block at the end of the page. */
   new MutationObserver(function(){ sync(); }).observe(el, { attributes: true, attributeFilter: ["style"] });
   window.addEventListener("resize", sync);
   document.addEventListener("fullscreenchange", function(){ setTimeout(sync, 80); });
@@ -20375,88 +20456,55 @@ return module.exports; })();</script>
     } catch(e){}
     return false;
   }
-  var adrag = null;
+  /* APOC-V313: single-stamp drag rides the ONE pointer machine —
+     the duplicated mouse (mousedown/mousemove/mouseup) and touch
+     (pointerdown/pointermove/pointerup) adrag paths that stood
+     here are DELETED. One surface session serves both: a press on
+     an ungrouped stamp (coordinate hit-test, as before; grouped
+     stamps defer to the group-grab session) drags it with the
+     same 1.5%-step clamp and 0..100 board clamp; the drop saves
+     through vttDraw.reorder exactly as before; a machine cancel
+     restores the start point and saves nothing; a long-press
+     landing mid-drag (the group toggle) cancels the drag, as the
+     old touch path's lpAt guard did. */
   function bindAssetDrag(){
     if (!window.map || !window.map.on || bindAssetDrag.done) return;
+    if (!window.PointerMachine313) return;
     bindAssetDrag.done = true;
-    var mapEl = $("apocMap");
-        if (!mapEl) return;
-    mapEl.addEventListener("mousedown", function(e){
-      if (adrag || projecting() || toolArmed()) return;
-      if (e.button > 0) return;
-      if (e.ctrlKey || e.metaKey) return;       if (!window.toXY || !window.map.mouseEventToLatLng) return;
-      var p = window.toXY(window.map.mouseEventToLatLng(e));
-      var hit = hitStamp(p);
-      if (!hit) return;
-            try { var grp = window.__apocGroup ? window.__apocGroup() : []; if (grp.some(function(g){ return g === hit || (g.id && hit.id && g.id === hit.id); })) return; } catch(e){}
-            adrag = { it: hit, last: p, moved: false, fresh: true };
-      if (window.map.dragging) window.map.dragging.disable();
-      e.preventDefault();
-    }, true);
-    document.addEventListener("mousemove", function(e){
-      if (!adrag) return;
-      if (!window.toXY || !window.map.mouseEventToLatLng) return;
-      var p = window.toXY(window.map.mouseEventToLatLng(e));
-      var dx = p.x - adrag.last.x, dy = p.y - adrag.last.y;
-            if (adrag.fresh) { adrag.fresh = false; adrag.last = p; return; }       if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); }        if (dx || dy) {
-        adrag.it.x = Math.max(0, Math.min(100, adrag.it.x + dx));
-        adrag.it.y = Math.max(0, Math.min(100, adrag.it.y + dy));
-        adrag.last = p; adrag.moved = true;
-        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
-      }
-    }, true);
-    document.addEventListener("mouseup", function(){
-      if (!adrag) return;
-      var d = adrag; adrag = null;
-      if (window.map.dragging) window.map.dragging.enable();
-      if (d.moved && window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(d.it, 1);
-    }, true);
-        mapEl.addEventListener("pointerdown", function(e){
-      if (e.pointerType !== "touch" || projecting() || toolArmed()) return;
-            if (adrag && adrag.touch && e.pointerId !== adrag.pid) {
-        var sd = adrag; adrag = null;
-        if (window.map.dragging) window.map.dragging.enable();
-        if (sd.moved && window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(sd.it, 1);
-      }
-      if (adrag) return;
-      if (!window.toXY || !window.map.mouseEventToLatLng) return;
-      var p = window.toXY(window.map.mouseEventToLatLng(e));
-      var hit = hitStamp(p);
-      if (!hit) return;
-      try { var grp = window.__apocGroup ? window.__apocGroup() : []; if (grp.some(function(g){ return g === hit || (g.id && hit.id && g.id === hit.id); })) return; } catch(e){}
-            adrag = { it: hit, last: p, moved: false, fresh: true, touch: true, pid: e.pointerId, lpAt: window.__apocLpFired || 0 };
-      if (window.map.dragging) window.map.dragging.disable();
-    }, true);
-    document.addEventListener("pointermove", function(e){
-      if (!adrag || !adrag.touch || e.pointerType !== "touch") return;
-            if (window.__apocLpFired && adrag.lpAt !== window.__apocLpFired) { adrag = null; if (window.map.dragging) window.map.dragging.enable(); return; }
-      if (!window.toXY || !window.map.mouseEventToLatLng) return;
-            var evs = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];
-      for (var ci = 0; ci < evs.length; ci++) {
-      var ce = evs[ci];
-      var p = window.toXY(window.map.mouseEventToLatLng(ce));
-      var dx = p.x - adrag.last.x, dy = p.y - adrag.last.y;
-      if (adrag.fresh) { adrag.fresh = false; adrag.last = p; continue; }
-      if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); }       if (dx || dy) {
-        adrag.it.x = Math.max(0, Math.min(100, adrag.it.x + dx));
-        adrag.it.y = Math.max(0, Math.min(100, adrag.it.y + dy));
-        adrag.last = p; adrag.moved = true;
-        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
-      }
-      }
-    }, true);
-    document.addEventListener("pointerup", function(e){
-      if (!adrag || !adrag.touch) return;
-      var d = adrag; adrag = null;
-      if (window.map.dragging) window.map.dragging.enable();
-      if (d.moved && window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(d.it, 1);
-    }, true);
-    document.addEventListener("pointercancel", function(){
-      if (!adrag || !adrag.touch) return;
-            var d = adrag; adrag = null;
-      if (window.map.dragging) window.map.dragging.enable();
-      if (d.moved && window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(d.it, 1);
-    }, true);
+    if (!$("apocMap")) return;
+    window.PointerMachine313.registerSurface(function(e){
+      if (projecting() || toolArmed()) return null;
+      if (e.ctrlKey || e.metaKey) return null;
+      if (e.pointerType === "mouse" && typeof e.button === "number" && e.button !== 0) return null;
+      if (!window.toXY || !window.map || !window.map.mouseEventToLatLng) return null;
+      if (e.target && e.target.closest && e.target.closest(".leaflet-marker-icon")) return null;
+      var p0 = window.toXY(window.map.mouseEventToLatLng(e));
+      var hit = hitStamp(p0);
+      if (!hit) return null;
+      try { var grp = window.__apocGroup ? window.__apocGroup() : []; if (grp.some(function(g){ return g === hit || (g.id && hit.id && g.id === hit.id); })) return null; } catch (err) {}
+      var it = hit, last = p0, fresh = true, moved = false;
+      var orig = { x: it.x, y: it.y };
+      var lpAt = window.__apocLpFired || 0;
+      return {
+        key: "stamp-drag",
+        canDrag: function(){ return true; },
+        onMove: function(sess){
+          if (window.__apocLpFired && lpAt !== window.__apocLpFired) { window.PointerMachine313.cancelActive("longpress"); return; }
+          var p = window.toXY(window.map.mouseEventToLatLng({ clientX: sess.lx, clientY: sess.ly }));
+          var dx = p.x - last.x, dy = p.y - last.y;
+          if (fresh) { fresh = false; last = p; return; }
+          if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); }
+          if (dx || dy) {
+            it.x = Math.max(0, Math.min(100, it.x + dx));
+            it.y = Math.max(0, Math.min(100, it.y + dy));
+            last = p; moved = true;
+            if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+          }
+        },
+        onDrop: function(){ if (moved && window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(it, 1); },
+        onCancel: function(){ it.x = orig.x; it.y = orig.y; if (window.vttDraw && window.vttDraw.render) window.vttDraw.render(); }
+      };
+    });
   }
   var bindIv = setInterval(function(){ bindAssetDrag(); if (bindAssetDrag.done) clearInterval(bindIv); }, 800);
   setTimeout(function(){ clearInterval(bindIv); }, 120000); 
@@ -21465,7 +21513,7 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
     } catch(e){}
     return false;
   }
-    var gdrag = null, marq = null, lpTimer = null, lpPoint = null;
+    var marq = null, lpTimer = null, lpPoint = null;   /* APOC-V313: gdrag deleted — group grab is a pointer-machine surface session (in bind, below) */
   function bind(){
     if (!window.map || !window.map.on || bind.done) return;
     bind.done = true;
@@ -21505,32 +21553,15 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
       if (!window.toXY || !window.map.mouseEventToLatLng) return;
       var p = window.toXY(window.map.mouseEventToLatLng(e));
       var hit = hitStamp(p);
-      if (hit && inGroup(hit)) {
-        gdrag = { members: group.map(liveOf), last: p, moved: false, fresh: true };
-        if (window.map.dragging) window.map.dragging.disable();
-        return;
-      }
       if (!hit && window.__apocMarqueeArm) {
                 marq = { p0: p, cur: p, layer: null };
         if (window.map.dragging) window.map.dragging.disable();
       }
     });
     document.addEventListener("mousemove", function(e){
-      if (!gdrag && !marq) return;
+      if (!marq) return;   /* APOC-V313: gdrag deleted */
       if (!window.toXY || !window.map.mouseEventToLatLng) return;
       var p = window.toXY(window.map.mouseEventToLatLng(e));
-      if (gdrag) {
-        var dx = p.x - gdrag.last.x, dy = p.y - gdrag.last.y;
-        if (gdrag.fresh) { gdrag.fresh = false; gdrag.last = p; return; }         if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); }          if (dx || dy) {
-                    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;           gdrag.members.forEach(function(it){ minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x); minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y); });
-          var cdx = Math.max(-minX, Math.min(dx, 100 - maxX)), cdy = Math.max(-minY, Math.min(dy, 100 - maxY));
-          gdrag.members.forEach(function(it){ it.x += cdx; it.y += cdy; });
-          gdrag.last = p; gdrag.moved = true;
-          if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
-          refreshChip();
-        }
-        return;
-      }
       if (marq) {
         marq.cur = p;
         try {
@@ -21546,14 +21577,6 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
       }
     });
     function endAll(){
-      if (gdrag) {
-        var d = gdrag; gdrag = null;
-        if (window.map.dragging) window.map.dragging.enable();
-        if (d.moved && window.vttDraw && window.vttDraw.reorder) {
-                    d.members.forEach(function(it){ window.vttDraw.reorder(it, 1); });
-        }
-        return;
-      }
       if (marq) {
         var m = marq; marq = null;
         if (window.map.dragging) window.map.dragging.enable();
@@ -21570,37 +21593,53 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
     }
     document.addEventListener("mouseup", endAll, true);
     window.map.on("dragend", endAll);
-        mapEl.addEventListener("pointerdown", function(e){
-      if (e.pointerType !== "touch" || projecting() || toolArmed()) return;
-      if (!window.toXY || !window.map.mouseEventToLatLng) return;
-      if (gdrag && gdrag.touch && e.pointerId !== gdrag.pid) endAll();       var p = window.toXY(window.map.mouseEventToLatLng(e));
-      var hit = hitStamp(p);
-      if (hit && inGroup(hit)) {
-        gdrag = { members: group.map(liveOf), last: p, moved: false, fresh: true, touch: true, pid: e.pointerId };
-        if (window.map.dragging) window.map.dragging.disable();
-      }
+    /* APOC-V313: group grab rides the ONE pointer machine — the
+       duplicated mouse (mousedown/mousemove/mouseup) and touch
+       (pointerdown/pointermove/pointerup) gdrag paths that stood
+       here (and in the mousedown/mousemove/endAll handlers above)
+       are DELETED. One surface session serves both: a press on a
+       grouped stamp (coordinate hit-test, as before) drags every
+       member with the same 1.5%-step clamp and board clamp; the
+       drop saves each member through vttDraw.reorder exactly as
+       the old endAll did; a machine cancel (Esc / right press /
+       pointercancel / blur) restores every member's start point
+       and saves nothing. Marquee selection above is untouched. */
+    if (window.PointerMachine313) window.PointerMachine313.registerSurface(function(e){
+      if (projecting() || toolArmed()) return null;
+      if (e.ctrlKey || e.metaKey) return null;
+      if (e.pointerType === "mouse" && typeof e.button === "number" && e.button !== 0) return null;
+      if (window.__apocLpFired && Date.now() - window.__apocLpFired < 900) return null;
+      if (!window.toXY || !window.map || !window.map.mouseEventToLatLng) return null;
+      if (e.target && e.target.closest && e.target.closest(".leaflet-marker-icon")) return null;
+      var p0 = window.toXY(window.map.mouseEventToLatLng(e));
+      var hit = hitStamp(p0);
+      if (!hit || !inGroup(hit)) return null;
+      var members = group.map(liveOf);
+      var orig = members.map(function(it){ return { it: it, x: it.x, y: it.y }; });
+      var last = p0, fresh = true, moved = false;
+      return {
+        key: "group-grab",
+        canDrag: function(){ return true; },
+        onMove: function(sess){
+          var p = window.toXY(window.map.mouseEventToLatLng({ clientX: sess.lx, clientY: sess.ly }));
+          var dx = p.x - last.x, dy = p.y - last.y;
+          if (fresh) { fresh = false; last = p; return; }
+          if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); }
+          if (dx || dy) {
+            var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            members.forEach(function(it){ minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x); minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y); });
+            var cdx = Math.max(-minX, Math.min(dx, 100 - maxX)), cdy = Math.max(-minY, Math.min(dy, 100 - maxY));
+            members.forEach(function(it){ it.x += cdx; it.y += cdy; });
+            last = p; moved = true;
+            if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+            refreshChip();
+          }
+        },
+        onDrop: function(){ if (moved && window.vttDraw && window.vttDraw.reorder) members.forEach(function(it){ window.vttDraw.reorder(it, 1); }); },
+        onCancel: function(){ orig.forEach(function(o){ o.it.x = o.x; o.it.y = o.y; }); if (window.vttDraw && window.vttDraw.render) window.vttDraw.render(); refreshChip(); }
+      };
     });
-    document.addEventListener("pointermove", function(e){
-      if (!gdrag || !gdrag.touch || e.pointerType !== "touch") return;
-      if (!window.toXY || !window.map.mouseEventToLatLng) return;
-      var evs = (e.getCoalescedEvents && e.getCoalescedEvents().length) ? e.getCoalescedEvents() : [e];       for (var ci = 0; ci < evs.length; ci++) {
-      var ce = evs[ci];
-      var p = window.toXY(window.map.mouseEventToLatLng(ce));
-      var dx = p.x - gdrag.last.x, dy = p.y - gdrag.last.y;
-      if (gdrag.fresh) { gdrag.fresh = false; gdrag.last = p; continue; }
-      if (Math.abs(dx) > 1.5 || Math.abs(dy) > 1.5) { dx = Math.max(-1.5, Math.min(1.5, dx)); dy = Math.max(-1.5, Math.min(1.5, dy)); }       if (dx || dy) {
-        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        gdrag.members.forEach(function(it){ minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x); minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y); });
-        var cdx = Math.max(-minX, Math.min(dx, 100 - maxX)), cdy = Math.max(-minY, Math.min(dy, 100 - maxY));
-        gdrag.members.forEach(function(it){ it.x += cdx; it.y += cdy; });
-        gdrag.last = p; gdrag.moved = true;
-        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
-        refreshChip();
-      }
-      }
-    }, true);
-    document.addEventListener("pointerup", function(e){ if (gdrag && gdrag.touch) endAll(); }, true);
-    document.addEventListener("pointercancel", function(){ if (gdrag && gdrag.touch) endAll(); }, true);   }
+  }
   var iv = setInterval(function(){ try { chip(); } catch(e){} bind(); if (bind.done) clearInterval(iv); }, 800);
   setTimeout(function(){ clearInterval(iv); }, 120000); })();
 </script>
@@ -24377,33 +24416,31 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     return !!document.fullscreenElement || document.body.classList.contains("displaying") ||
       document.body.classList.contains("map-expanded") || document.body.classList.contains("map-fs");
   }
-  var drag = null;
-  bar.addEventListener("pointerdown", function(e){
-    if (drag) return;
-    if (typeof e.button === "number" && e.button !== 0) return;
-    if (bar.hidden || blocked305()) return;
-    var t = e.target;
-    if (!t || !bar.contains(t)) return;
-    if (t.closest && t.closest("button, input, select, textarea, label, a, .fp-lock")) return;
-    e.preventDefault(); e.stopPropagation();
-    drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, sl: bar.offsetLeft, st: bar.offsetTop };
-    try { bar.setPointerCapture(e.pointerId); } catch(err){}
-    bar.classList.add("zb-dragging305");
-  }, true);
-  bar.addEventListener("pointermove", function(e){
-    if (!drag || e.pointerId !== drag.id) return;
-    var p = clampPos(drag.sl + e.clientX - drag.sx, drag.st + e.clientY - drag.sy);
-    bar.style.left = p.l + "px"; bar.style.top = p.t + "px";
+  /* APOC-V313: the bar's frame drag that stood here (its own
+     pointerdown/pointermove/pointerup set) is DELETED — the drag
+     is a pointer-machine element session: press the bar's body
+     (frame, grip, readout) and drag; a press on a control (step
+     button, slider, Pinch label/checkbox) is excluded and never
+     starts a drag; the move clamps through clampPos exactly as
+     before; the drop ends with exactly one seat write, clamped
+     exactly as before; a machine cancel restores the start seat
+     and writes nothing. */
+  window.PointerMachine313.bindElement(bar, {
+    key: "float:zoombar", capture: true,
+    canPress: function(){ return !(bar.hidden || blocked305()); },
+    canDrag: function(){ return !(bar.hidden || blocked305()); },
+    exclude: function(t){ return !!(t && t.closest && t.closest("button, input, select, textarea, label, a, .fp-lock")); },
+    moveMode: "element",
+    getPos: function(){ return { l: bar.offsetLeft, t: bar.offsetTop }; },
+    setPos: function(l, t){ var p = clampPos(l, t); bar.style.left = p.l + "px"; bar.style.top = p.t + "px"; },
+    onDragStart: function(){ bar.classList.add("zb-dragging305"); },
+    onDrop: function(){
+      bar.classList.remove("zb-dragging305");
+      var p = clampPos(bar.offsetLeft, bar.offsetTop);
+      try { localStorage.setItem(phoneMq() ? PKEY : KEY, JSON.stringify(p)); } catch(err){}
+    },
+    onCancel: function(){ bar.classList.remove("zb-dragging305"); }
   });
-  function endDrag305(e){
-    if (!drag || (e && e.pointerId !== drag.id)) return;
-    drag = null;
-    bar.classList.remove("zb-dragging305");
-    var p = clampPos(bar.offsetLeft, bar.offsetTop);
-    try { localStorage.setItem(phoneMq() ? PKEY : KEY, JSON.stringify(p)); } catch(err){}
-  }
-  bar.addEventListener("pointerup", endDrag305);
-  bar.addEventListener("pointercancel", endDrag305);
 
   /* APOC-V305 default seat on PHONE: the seat chain's fallbacks
      (the desktop record, then the shared default {851,0} captured
