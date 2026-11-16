@@ -2716,22 +2716,14 @@ setInterval(loadSharedEntries, 60000);
      holds pinSaveActive so incoming loadMarkers refreshes defer
      until it drains, exactly as for a pin save. */
   function saveAtlasPins(records){
+    /* APOC-V306: the migration append rides the Store's serialized
+       per-collection queue and its append verb (re-read at write time,
+       append only ids not already present, ingest the written row) —
+       the old private saveChain upsert is deleted. pinSaveActive keeps
+       its exact old meaning: loadMarkers refreshes defer until this
+       append drains. */
     pinSaveActive++;
-    const job = saveChain.then(async () => {
-      try {
-        const key = markersKey();
-        const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
-        if (rerr) return false;
-        const arr = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers.slice() : [];
-        const have = new Set(arr.map(m => m && m.id));
-        let added = 0;
-        for (const rec of records) { if (!have.has(rec.id)) { arr.push(rec); have.add(rec.id); added++; } }
-        if (!added) return true;
-        const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value: { markers: arr }, updated_at: new Date().toISOString() }, { onConflict: "key" });
-        return !error;
-      } catch (e) { return false; }
-    });
-    saveChain = job.then(() => {}, () => {});
+    const job = Store.appendRecords(markersKey(), records);
     const settle = ok => { pinSaveActive--; if (!pinSaveActive && pinLoadDeferred) { pinLoadDeferred = false; loadMarkers(true); } return ok; };
     return job.then(settle, () => settle(false));
   }
@@ -2803,69 +2795,76 @@ setInterval(loadSharedEntries, 60000);
     finally { atlasMigrateBusy = false; }
   }
   async function loadMarkers(quiet){
-    /* In-flight guard (APOC-V292): while this page's own save is
-       unresolved, an incoming refresh is deferred, not applied — it
-       runs once the save chain drains (see saveMarkers). */
+    /* APOC-V306 (Stage 1, land323): marker reads advance by DIFF into
+       the Store cache (see the Store block below). While this page's
+       own save is unresolved, an incoming refresh is deferred, not
+       applied — it runs once the save queue drains (see saveMarkers). */
     if (pinSaveActive > 0) { pinLoadDeferred = true; return; }
     const key = markersKey();
     if (lastMarkersKey !== key) { pinDirty = new Map(); lastMarkersKey = key; }
     const { data, error } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
     if (error) { if (!quiet) setStatus("The shared markers could not be loaded — try again in a few seconds."); return; }
     const incoming = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers : [];
-    /* APOC-V292: GH-PIN-BLINK fix — the 60s poll, the markers-live
-       realtime channel and vtt-live all land here, and the old code
-       replaced the array and rebuilt all 120 marker elements even
-       when nothing had changed (measured: two full churns inside
-       68s of pure idle; every save strobed every other screen). If
-       the incoming array is canonically equal to the one in memory,
-       the DOM is not touched at all. A genuine change still renders
-       exactly once. */
-    if (markersCanonEq(incoming, markers)) { maybeBackfillGrp(); maybeMigrateAtlas(); return; }
-    markers = incoming;
+    /* Canonical diff gate, centralised in the Store: if the incoming
+       array is canonically equal to the cache, ingest produces zero
+       cache events and this load does zero DOM work — the GH-PIN-BLINK
+       discipline (APOC-V292), now a property of the Store rather than
+       of this one loader, and applied to EVERY marker collection
+       (Faerun and every map_markers_<id> alike). viewStale covers
+       the map-switch reset (markers=[] with a warm cache): the view
+       re-renders once from the cache even when the row is unchanged. */
+    const viewStale = !markersCanonEq(markers, Store.list(key));
+    const changed = Store.ingest(key, incoming);
+    if (!changed && !viewStale) { maybeBackfillGrp(); maybeMigrateAtlas(); return; }
+    markers = Store.list(key);
     draw();
     setStatus(markers.length ? `${markers.length} shared marker${markers.length === 1 ? "" : "s"} on the table's map — everybody sees the same map.` : "No markers yet — Add marker drops the first one.");
     maybeBackfillGrp();
     maybeMigrateAtlas();
   }
-  /* APOC-V292 (2026-11-14): GH-PIN-REVERT fix — merge-on-save.
-     saveMarkers() used to upsert the saving page's ENTIRE in-memory
-     markers array: every open page (main screen, Screen 2, TV) holds
-     its own copy, refreshed only by the 60s poll / realtime, so any
-     save from a staler page silently erased newer drags, locks and
-     edits written by fresher pages (hunt of 2026-11-14, probe429 +
-     probe428 P4: convicted on both the drag and the lock route —
-     DATA-LOSS class). Now every mutation site registers exactly what
-     IT changed (pinPatch / pinFull / pinDelete below), and a save
-     re-reads the CURRENT store row, applies only those changes onto
-     it by pin id, and upserts the merged array. A stale page can then
-     only overwrite the pins it actually touched. The {markers:[…]}
-     row shape is unchanged, so every reader (this page, The World at
-     Large, the tracker) is untouched. Saves are serialized on a
-     promise chain, and while any save from THIS page is unresolved,
-     incoming loadMarkers redraws are deferred (the in-flight guard)
-     and applied when the chain drains — a poll landing mid-save can
-     no longer swap the array out from under the saver. */
-  let pinDirty = new Map();
-  let saveChain = Promise.resolve();
-  let pinSaveActive = 0;
-  let pinLoadDeferred = false;
-  let lastMarkersKey = null;
-  function pinPatch(mk, keys){
-    if (!mk || !mk.id) return;
-    let e = pinDirty.get(mk.id);
-    if (e && (e.del || e.record)) return;
-    if (!e) { e = { patch: {} }; pinDirty.set(mk.id, e); }
-    for (const k of keys) e.patch[k] = mk[k];
-  }
-  function pinFull(mk){ if (mk && mk.id) pinDirty.set(mk.id, { record: mk }); }
-  function pinDelete(id){ if (id) pinDirty.set(id, { del: true }); }
-  function pinForget(id){ pinDirty.delete(id); }
-  /* Canonical deep-equal for marker arrays (GH-PIN-BLINK, below):
-     key order is normalized away (JSONB does not promise it), and
-     `_under` is EXCLUDED — it is derived data, recomputed from the
-     stored positions on every draw; the stored copy is dead (the
-     2026-11-14 hunt proved no render path reads it), and comparing
-     it would report a change on every poll forever. */
+  /* ================= APOC-V306 (v3.07, 2026-11-15): THE STORE — markers first =================
+     Stage 1 of the redesign (work/vtt-teardown/REDESIGN-BRIEF.md).
+     Objective, in plain words: a pin can never revert again.
+     Before this stage, every marker save re-read a whole
+     site_settings row and upserted a whole array (APOC-V292's
+     merge-on-save narrowed that to the saver's own changed fields,
+     applied onto a row re-read at save time — but the read side still
+     ingested whole rows as the basis of the in-memory array, other
+     marker writers (the atlas append, the tray's foreign-map keyed
+     merge) kept their own private chains, and nothing structural
+     stopped a future code path from writing the whole array blind).
+     Now ONE module — Store, below — is the ONLY way marker data is
+     written, for every marker collection (map_markers and every
+     map_markers_<id>):
+       - cache: each collection held once, as records by id;
+       - verbs: patch(collection, id, fields) applies exactly those
+         fields to exactly that record; put(collection, record) is a
+         whole-record upsert by id; del(collection, id) removes
+         exactly that record; appendRecords is the atlas migration's
+         append-only form of put;
+       - one serialized write queue PER COLLECTION: a write job
+         re-reads its row at write time (inside the queue), applies
+         ONLY its changes onto the freshest row by id — v2.92's
+         merge-on-save logic, generalised and made structural — and
+         upserts the merged array. The wire shape is UNCHANGED:
+         rows stay whole JSON arrays in site_settings with identical
+         keys and record shapes (zero data migration);
+       - reads: ingest(collection, incomingArray) applies a
+         per-record canonical (key-sorted) deep-compare diff to the
+         cache; unchanged data produces zero cache events and zero
+         downstream work, and a stale whole-row read can never again
+         be the basis of a write, because writes are computed from
+         (fresh row at write time + the named patch), never from a
+         previously ingested array.
+     The old marker writers are DELETED, not bypassed: saveMarkersNow
+     (the v2.92 whole-array merge writer), saveAtlasPins' private
+     upsert, and the tray's markerPatchKey303-via-mergePatchKey303
+     path no longer exist; saveMarkers / pinPatch / pinFull /
+     pinDelete survive only as thin adapters that register changes
+     into the Store queue, so every existing call site (drag save,
+     card edit, lock toggle, tray shelve/restore, take-all, tray
+     drag-out, atlas backfill, pin delete) writes through the Store
+     and nothing else in the page can write a markers row. */
   function markersCanonEq(a, b){
     if (a === b) return true;
     if (typeof a !== "object" || typeof b !== "object" || !a || !b) return false;
@@ -2884,7 +2883,22 @@ setInterval(loadSharedEntries, 60000);
     }
     return true;
   }
-  async function saveMarkersNow(key, changes){
+  const storeClone323 = v => v === undefined ? undefined : JSON.parse(JSON.stringify(v));
+  const storeCache323 = new Map();   /* key -> array of records (the cache; per-record identity is by id) */
+  const storeQueues323 = new Map();  /* key -> promise tail of that collection's serialized write queue */
+  const storeStats323 = { writes: 0, byKey: {}, ingests: 0, ingestChanges: 0 };
+  function storeEnqueue323(key, job){
+    const prev = storeQueues323.get(key) || Promise.resolve();
+    const run = prev.then(job, job);
+    storeQueues323.set(key, run.then(() => {}, () => {}));
+    return run;
+  }
+  /* The one write job: re-read the row NOW (inside the queue), apply
+     only `changes` (id -> {patch} | {record} | {del}) onto it by id,
+     upsert the merged array, then advance the cache by diffing the
+     written row in. This is v2.92's merge-on-save, verbatim in logic,
+     generalised to any marker collection and reachable only here. */
+  async function storeWriteJob323(key, changes){
     if (!changes.size) return true;
     try {
       const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
@@ -2895,27 +2909,117 @@ setInterval(loadSharedEntries, 60000);
       for (const [id, ch] of changes) {
         if (ch.del) { if (idx.has(id)) { arr[idx.get(id)] = null; idx.delete(id); } continue; }
         if (ch.record) {
-          if (idx.has(id)) arr[idx.get(id)] = ch.record; else arr.push(ch.record);
+          if (idx.has(id)) arr[idx.get(id)] = storeClone323(ch.record); else { arr.push(storeClone323(ch.record)); idx.set(id, arr.length - 1); }
           continue;
         }
-        if (idx.has(id)) Object.assign(arr[idx.get(id)], ch.patch);
-        else { const local = markers.find(m => m.id === id); if (local) arr.push(Object.assign({}, local)); }
+        if (idx.has(id)) Object.assign(arr[idx.get(id)], storeClone323(ch.patch));
+        else { const cached = (storeCache323.get(key) || []).find(m => m && m.id === id); if (cached) arr.push(storeClone323(cached)); }
       }
       const merged = arr.filter(Boolean);
       const { error } = await db.from(SETTINGS_TABLE).upsert(
         { key, value: { markers: merged }, updated_at: new Date().toISOString() },
         { onConflict: "key" }
       );
-      return !error;
+      if (error) return false;
+      storeStats323.writes++;
+      storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
+      Store.ingest(key, merged);
+      return true;
     } catch (e) { return false; }
   }
+  const Store = {
+    stats: storeStats323,
+    list(key){ return storeCache323.get(key) || []; },
+    get(key, id){ return (storeCache323.get(key) || []).find(m => m && m.id === id) || null; },
+    /* Per-record diff into the cache. Returns true iff the cache
+       actually changed; canonically-equal input is a strict no-op
+       (zero events, zero downstream work). */
+    ingest(key, incoming){
+      if (!Array.isArray(incoming)) return false;
+      storeStats323.ingests++;
+      const prev = storeCache323.get(key);
+      if (prev && markersCanonEq(incoming, prev)) return false;
+      storeCache323.set(key, storeClone323(incoming));
+      storeStats323.ingestChanges++;
+      if (key === markersKey()) markers = storeCache323.get(key);
+      return true;
+    },
+    /* Ingest for a NON-view collection read (the universal tray's
+       per-map scan): same diff gate; if the key happens to be the
+       viewed collection and the cache changed, the caller redraws. */
+    ingestKey(key, incoming){
+      const changed = Store.ingest(key, incoming);
+      if (changed && key === markersKey()) markers = Store.list(key);
+      return changed;
+    },
+    patch(key, id, fields){
+      if (!id) return Promise.resolve(false);
+      const changes = new Map([[id, { patch: storeClone323(fields) }]]);
+      return storeEnqueue323(key, () => storeWriteJob323(key, changes));
+    },
+    put(key, record){
+      if (!record || !record.id) return Promise.resolve(false);
+      const changes = new Map([[record.id, { record: storeClone323(record) }]]);
+      return storeEnqueue323(key, () => storeWriteJob323(key, changes));
+    },
+    del(key, id){
+      if (!id) return Promise.resolve(false);
+      const changes = new Map([[id, { del: true }]]);
+      return storeEnqueue323(key, () => storeWriteJob323(key, changes));
+    },
+    patchMany(key, changes){ return storeEnqueue323(key, () => storeWriteJob323(key, changes)); },
+    /* Atlas migration append: append only records whose ids are not
+       already in the freshest row; existing records are never
+       rewritten. Serialized on the same per-collection queue. */
+    appendRecords(key, records){
+      return storeEnqueue323(key, async () => {
+        try {
+          const { data, error: rerr } = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle();
+          if (rerr) return false;
+          const arr = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers.slice() : [];
+          const have = new Set(arr.map(m => m && m.id));
+          let added = 0;
+          for (const rec of records) { if (rec && rec.id && !have.has(rec.id)) { arr.push(storeClone323(rec)); have.add(rec.id); added++; } }
+          if (!added) { Store.ingest(key, arr); return true; }
+          const { error } = await db.from(SETTINGS_TABLE).upsert({ key, value: { markers: arr }, updated_at: new Date().toISOString() }, { onConflict: "key" });
+          if (error) return false;
+          storeStats323.writes++;
+          storeStats323.byKey[key] = (storeStats323.byKey[key] || 0) + 1;
+          Store.ingest(key, arr);
+          return true;
+        } catch (e) { return false; }
+      });
+    }
+  };
+  window.__apocStore323 = Store;
+  /* ---- APOC-V292 adapters, kept as the call-site vocabulary ----
+     Every mutation site still registers exactly what IT changed
+     (pinPatch / pinFull / pinDelete), but the save itself is now a
+     Store patchMany on the current collection's queue — there is no
+     other marker write path left in the page. While any save from
+     THIS page is unresolved, incoming loadMarkers redraws defer
+     (pinSaveActive / pinLoadDeferred, exactly as APOC-V292). */
+  let pinDirty = new Map();
+  let pinSaveActive = 0;
+  let pinLoadDeferred = false;
+  let lastMarkersKey = null;
+  function pinPatch(mk, keys){
+    if (!mk || !mk.id) return;
+    let e = pinDirty.get(mk.id);
+    if (e && (e.del || e.record)) return;
+    if (!e) { e = { patch: {} }; pinDirty.set(mk.id, e); }
+    for (const k of keys) e.patch[k] = storeClone323(mk[k]);
+  }
+  function pinFull(mk){ if (mk && mk.id) pinDirty.set(mk.id, { record: storeClone323(mk) }); }
+  function pinDelete(id){ if (id) pinDirty.set(id, { del: true }); }
+  function pinForget(id){ pinDirty.delete(id); }
   function saveMarkers(){
     const key = markersKey();
     const changes = pinDirty;
     pinDirty = new Map();
+    if (!changes.size) return Promise.resolve(true);
     pinSaveActive++;
-    const job = saveChain.then(() => saveMarkersNow(key, changes));
-    saveChain = job.then(() => {}, () => {});
+    const job = Store.patchMany(key, changes);
     return job.then(ok => {
       pinSaveActive--;
       if (!pinSaveActive && pinLoadDeferred) { pinLoadDeferred = false; loadMarkers(true); }
@@ -3730,6 +3834,11 @@ setInterval(loadSharedEntries, 60000);
         try {
           const { data } = await db.from(SETTINGS_TABLE).select("value").eq("key", trayMarkersKey303(m.id)).maybeSingle();
           const arr = (data && data.value && Array.isArray(data.value.markers)) ? data.value.markers : [];
+          /* APOC-V306: this marker read advances through the Store's
+             canonical diff gate like every other marker read — an
+             unchanged row produces zero cache events, and this scan
+             can never regress the cache or trigger marker work. */
+          if (Store.ingestKey(trayMarkersKey303(m.id), arr) && m.id === currentMapId) { try { draw(); } catch (e) {} }
           for (const rec of arr) if (rec && rec.tray) found.push({ mapId: m.id, mapName: m.name, store: "markers", rec });
         } catch (e) {}
         if (m.id !== "faerun") {
@@ -3776,7 +3885,7 @@ setInterval(loadSharedEntries, 60000);
     return job;
   }
   function placePatchKey(key, id, patch){ return mergePatchKey303(key, "places", id, patch); }
-  function markerPatchKey303(key, id, patch){ return mergePatchKey303(key, "markers", id, patch); }
+  function markerPatchKey303(key, id, patch){ return Store.patch(key, id, patch); } /* APOC-V306: foreign-map marker writes ride the Store queue for that collection — the old mergePatchKey303 marker path is deleted; mergePatchKey303 itself remains for places only */
   /* Shelve / restore routing by (store, home): the current map's
      markers ride pinPatch + saveMarkers exactly as before; every
      other write is a keyed merge against the HOME store. When the
@@ -10379,7 +10488,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-15-1900";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-15-2026";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
