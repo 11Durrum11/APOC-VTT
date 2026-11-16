@@ -111,6 +111,15 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .pin-radial-btn{position:absolute;transform:translate(-50%,-50%);pointer-events:auto;display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.4);background:rgba(10,12,16,.92);color:#f2e7c8;border-radius:999px;padding:5px 11px;min-height:30px;font-size:.78rem;font-weight:600;white-space:nowrap;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.6)}
 .pin-radial-btn:hover{background:#1e40af;color:#fff;border-color:#60a5fa}
 .pin-radial-btn.danger:hover{background:#7f1d1d;border-color:#f87171;color:#fff}
+/* APOC-V311 (v3.11, 2026-11-16): HOVER PIN PICTURES — ONE floating
+   preview element, reused for every pin, pointer-events:none so it
+   can never take part in a drag or a click. The picture fades in
+   when it arrives; the caption under it paints at dwell-end. */
+.pin-hover-preview311{position:fixed;left:0;top:0;z-index:1700;pointer-events:none;width:288px;background:rgba(10,12,16,.94);border:1px solid rgba(255,255,255,.28);border-radius:10px;padding:8px;box-shadow:0 14px 34px rgba(0,0,0,.55)}
+.pin-hover-preview311[hidden]{display:none}
+.pin-hover-preview311 .php-img311{display:block;width:100%;height:auto;border-radius:6px;opacity:0;transition:opacity .18s ease}
+.pin-hover-preview311 .php-img311.hp-on311{opacity:1}
+.pin-hover-preview311 .php-cap311{margin-top:6px;color:#f2e7c8;font-size:.8rem;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mk-city .mk-dot{background:#e8a33d}
 .mk-party .mk-dot{background:#58b368}
 .mk-place .mk-dot{background:#7aa2c4}
@@ -2280,6 +2289,248 @@ setInterval(loadSharedEntries, 60000);
   const newId = () => "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   window.map = map; window.toXY = toXY; window.newId = newId;
   function setStatus(msg){ statusEl.textContent = msg; }
+  /* ================= APOC-V311 (v3.11, 2026-11-16): HOVER PIN PICTURES =================
+     Shaun's order (2026-11-16): hovering the mouse over a pin — on
+     the board or in the Pins tray — shows that pin's picture floating
+     beside it, no click needed. A pin with no picture shows NOTHING:
+     no empty box, no broken frame.
+     Discipline:
+       - READ-ONLY. This block reads records already in memory and
+         sets one <img> src. It NEVER writes to the Store, never
+         patches a record, never migrates anything.
+       - PASSIVE OBSERVER. The single preview element is
+         pointer-events:none; hover wiring lives on the keyed nodes
+         (bound at creation in createKeyedMarker308 /
+         createKeyedPlace308 and RE-bound on the setIcon mutation
+         path in the update functions, because Leaflet swaps the
+         icon element there — a handler left on the old element
+         would strand, and binding twice would duplicate). Tray
+         entries are reached by delegation on the tray list, which
+         survives the tray's innerHTML re-renders by construction.
+       - MOUSE ONLY. Every arm checks pointerType === "mouse";
+         touch keeps its existing contract untouched (long-press is
+         Group Grab's, tap/drag are APOC-V288/V302's).
+       - DWELL. The preview appears only after ~300ms of rest on
+         one pin, so sweeps, pans and drags never flash it. Any
+         press (pointerdown anywhere) cancels the dwell and hides
+         the preview at once; pan/zoom hide it and suppress re-arm
+         until the mouse next moves with no button held (a fresh
+         dwell); mouse-out, a map switch, a tray close or a tray
+         re-render, a radial/card open (which always begins with a
+         press), and removal/mutation of the hovered record all
+         hide it too.
+       - SOURCE. The picture is the record's imgs[0], verbatim.
+         Tray entries resolve through trayEntries303 — the exact
+         list the tray rendered, each entry's record read from its
+         HOME store, foreign maps included. Board places carry no
+         imgs field, so they resolve to no picture and show
+         nothing, exactly like bare markers and atlas pins. */
+  let hoverEl311 = null, hoverImg311 = null, hoverCap311 = null;
+  let hoverTimer311 = 0, hoverTarget311 = null, hoverShown311 = false, hoverSuppress311 = false;
+  let lastTouch311 = 0;
+  /* mousemove is a MouseEvent — it carries NO pointerType (only
+     PointerEvents do), so the suppress-clearing move paths gate on
+     touch RECENCY instead: a compatibility mousemove burst lands
+     within a beat of a touch's end, a real mouse move does not ride
+     on a touch at all. */
+  function hoverTouchRecent311(){ return Date.now() - lastTouch311 < 1000; }
+  const hoverStats311 = { armed: 0, shown: 0 };
+  function hoverEnsure311(){
+    if (hoverEl311) return;
+    const el = document.createElement("div");
+    el.id = "pinHoverPreview311";
+    el.className = "pin-hover-preview311";
+    el.hidden = true;
+    el.setAttribute("aria-hidden", "true");
+    const im = document.createElement("img");
+    im.className = "php-img311";
+    im.alt = "";
+    const cap = document.createElement("div");
+    cap.className = "php-cap311";
+    el.appendChild(im);
+    el.appendChild(cap);
+    im.addEventListener("load", () => { if (!hoverShown311) return; im.classList.add("hp-on311"); hoverPlace311(); });
+    im.addEventListener("error", () => { if (hoverShown311) hoverHide311(); });
+    document.body.appendChild(el);
+    hoverEl311 = el; hoverImg311 = im; hoverCap311 = cap;
+  }
+  function hoverCancelTimer311(){ if (hoverTimer311) { clearTimeout(hoverTimer311); hoverTimer311 = 0; } }
+  function hoverHide311(){
+    hoverCancelTimer311();
+    hoverTarget311 = null;
+    hoverShown311 = false;
+    if (hoverEl311) hoverEl311.hidden = true;
+  }
+  function hoverPlace311(){
+    if (!hoverEl311 || !hoverTarget311) return;
+    const a = hoverTarget311.anchor();
+    if (!a) { hoverHide311(); return; }
+    const w = hoverEl311.offsetWidth, h = hoverEl311.offsetHeight;
+    const vw = window.innerWidth, vh = window.innerHeight, M = 8, G = 18;
+    let x;
+    if (a.x + G + w <= vw - M) x = a.x + G;
+    else if (a.x - G - w >= M) x = a.x - G - w;
+    else if (a.rect && a.rect.left - G - w >= M) x = a.rect.left - G - w;
+    else x = Math.max(M, Math.min(Math.max(M, vw - M - w), a.x + G));
+    let y = Math.max(M, Math.min(Math.max(M, vh - M - h), a.y - h / 2));
+    /* Never cover the hovered pin's own dot (or tray entry): if the
+       clamped seat still swallows the anchor, drop the preview
+       below the anchor, or above it when below cannot fit. */
+    const covers = a.rect
+      ? (x < a.rect.right && x + w > a.rect.left && y < a.rect.bottom && y + h > a.rect.top)
+      : (a.x >= x && a.x <= x + w && a.y >= y && a.y <= y + h);
+    if (covers) {
+      const below = a.y + 22;
+      if (below + h <= vh - M) y = below;
+      else { const above = a.y - 22 - h; if (above >= M) y = above; }
+    }
+    hoverEl311.style.left = x + "px";
+    hoverEl311.style.top = y + "px";
+  }
+  function hoverShow311(){
+    hoverTimer311 = 0;
+    if (!hoverTarget311) return;
+    let rec = null;
+    try { rec = hoverTarget311.resolve(); } catch (e) {}
+    if (!rec) { hoverTarget311 = null; return; }
+    const imgs = Array.isArray(rec.imgs) ? rec.imgs.filter(Boolean) : [];
+    if (!imgs.length) return;   /* no picture — no preview, ever */
+    hoverEnsure311();
+    const src = imgs[0];
+    hoverCap311.textContent = rec.name || "";
+    if (hoverImg311.getAttribute("src") !== src) {
+      hoverImg311.classList.remove("hp-on311");
+      hoverImg311.src = src;
+      if (hoverImg311.complete && hoverImg311.naturalWidth > 0) hoverImg311.classList.add("hp-on311");
+    } else if (hoverImg311.complete && hoverImg311.naturalWidth > 0) {
+      hoverImg311.classList.add("hp-on311");
+    }
+    hoverEl311.hidden = false;
+    hoverShown311 = true;
+    hoverStats311.shown++;
+    hoverPlace311();
+  }
+  function hoverArm311(t){
+    if (hoverSuppress311 || !t) return;
+    if (hoverTarget311 && hoverTarget311.key === t.key && (hoverTimer311 || hoverShown311)) return;
+    hoverCancelTimer311();
+    if (hoverShown311) { hoverShown311 = false; if (hoverEl311) hoverEl311.hidden = true; }
+    hoverTarget311 = t;
+    hoverStats311.armed++;
+    hoverTimer311 = setTimeout(hoverShow311, 300);
+  }
+  /* One binding per icon element. Leaflet's setIcon REPLACES the
+     element, so the update path re-calls the bind for its record:
+     a fresh element binds fresh; the same element only refreshes
+     its target factory — handlers can neither strand nor stack. */
+  function hoverBind311(el, makeTarget){
+    if (!el) return;
+    if (el.__hover311) { el.__hover311.make = makeTarget; return; }
+    const st = { make: makeTarget };
+    el.__hover311 = st;
+    el.addEventListener("pointerover", e => {
+      if (e.pointerType !== "mouse") return;
+      if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+      hoverArm311(st.make());
+    });
+    el.addEventListener("pointerout", e => {
+      if (e.pointerType !== "mouse") return;
+      if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+      const t = st.make();
+      if (hoverTarget311 && hoverTarget311.key === t.key) hoverHide311();
+    });
+    el.addEventListener("mousemove", e => {
+      if (hoverSuppress311 && e.buttons === 0 && !hoverTouchRecent311()) { hoverSuppress311 = false; hoverArm311(st.make()); }
+    });
+  }
+  function hoverMarkerAnchor311(ent){
+    return () => {
+      const m = ent.m;
+      if (!m || !m.getLatLng) return null;
+      const pt = map.latLngToContainerPoint(m.getLatLng());
+      const cr = map.getContainer().getBoundingClientRect();
+      return { x: cr.left + pt.x, y: cr.top + pt.y };
+    };
+  }
+  function hoverBindMarker311(ent, id){
+    hoverBind311(ent.m && ent.m.getElement ? ent.m.getElement() : null, () => ({
+      kind: "marker", id, key: "marker:" + id,
+      resolve: () => { const r = markers.find(x => x.id === id); return r ? { name: r.name || "", imgs: r.imgs } : null; },
+      anchor: hoverMarkerAnchor311(ent)
+    }));
+  }
+  function hoverBindPlace311(ent, id){
+    hoverBind311(ent.m && ent.m.getElement ? ent.m.getElement() : null, () => ({
+      kind: "place", id, key: "place:" + id,
+      resolve: () => { const r = places.find(x => x.id === id); return r ? { name: r.n || "", imgs: r.imgs } : null; },
+      anchor: hoverMarkerAnchor311(ent)
+    }));
+  }
+  function hoverTrayTarget311(en){
+    const mapId = en.dataset.trayMap, store = en.dataset.trayStore, id = en.dataset.pinId;
+    return {
+      kind: "tray", id, key: "tray:" + mapId + "|" + store + "|" + id,
+      resolve: () => {
+        const ent = trayEntries303.find(x => x.mapId === mapId && x.store === store && x.rec.id === id);
+        if (!ent) return null;
+        const nm = (typeof trayEntryName303 === "function") ? trayEntryName303(ent) : (ent.rec.name || ent.rec.n || "");
+        return { name: nm, imgs: ent.rec.imgs };
+      },
+      anchor: () => {
+        if (!en.isConnected) return null;
+        const r = en.getBoundingClientRect();
+        return { x: r.right, y: r.top + r.height / 2, rect: { left: r.left, top: r.top, right: r.right, bottom: r.bottom } };
+      }
+    };
+  }
+  /* Tray hover by delegation: the tray list re-renders through
+     innerHTML, so per-entry handlers would strand on every render;
+     delegated listeners on the document survive by construction.
+     The tray's own drag-out handlers are untouched — these are
+     passive observers that never preventDefault or stop anything. */
+  document.addEventListener("pointerover", e => {
+    if (e.pointerType !== "mouse") return;
+    const en = e.target && e.target.closest ? e.target.closest(".pt-entry") : null;
+    if (!en || typeof pinsTrayListEl === "undefined" || !pinsTrayListEl || !pinsTrayListEl.contains(en)) return;
+    if (e.relatedTarget && en.contains(e.relatedTarget)) return;
+    hoverArm311(hoverTrayTarget311(en));
+  });
+  document.addEventListener("pointerout", e => {
+    if (e.pointerType !== "mouse") return;
+    const en = e.target && e.target.closest ? e.target.closest(".pt-entry") : null;
+    if (!en) return;
+    if (e.relatedTarget && en.contains(e.relatedTarget)) return;
+    if (hoverTarget311 && hoverTarget311.kind === "tray" && hoverTarget311.id === en.dataset.pinId) hoverHide311();
+  });
+  document.addEventListener("mousemove", e => {
+    if (!hoverSuppress311 || e.buttons !== 0 || hoverTouchRecent311()) return;
+    const en = e.target && e.target.closest ? e.target.closest(".pt-entry") : null;
+    if (!en || typeof pinsTrayListEl === "undefined" || !pinsTrayListEl || !pinsTrayListEl.contains(en)) return;
+    hoverSuppress311 = false;
+    hoverArm311(hoverTrayTarget311(en));
+  });
+  /* A press anywhere retires the dwell and the preview at once —
+     the preview must never ride into a drag, a click, a radial or
+     a card. Capture phase, purely subtractive: it consumes
+     nothing and stops nothing. */
+  document.addEventListener("pointerdown", e => { if (e.pointerType === "touch" || e.pointerType === "pen") lastTouch311 = Date.now(); hoverHide311(); }, true);
+  document.addEventListener("pointerup", e => { if (e.pointerType === "touch" || e.pointerType === "pen") lastTouch311 = Date.now(); }, true);
+  document.addEventListener("pointercancel", () => { hoverHide311(); }, true);
+  /* Pan and zoom retire the preview and hold re-arming until the
+     mouse next moves freely over a pin (the mousemove paths above
+     and on the keyed elements) — a cursor merely RESTING on a pin
+     through a pan or zoom never re-shows it. */
+  map.on("movestart", () => { hoverSuppress311 = true; hoverHide311(); });
+  map.on("zoomstart", () => { hoverSuppress311 = true; hoverHide311(); });
+  window.addEventListener("resize", () => { hoverHide311(); });
+  /* APOC-V311: battery surface, mirroring __apoc308 — visibility is
+     asserted on the element's real rect, never on flags alone. */
+  window.__apoc311 = {
+    state: () => ({ visible: hoverShown311, name: hoverShown311 && hoverCap311 ? hoverCap311.textContent : null, src: hoverShown311 && hoverImg311 ? hoverImg311.getAttribute("src") : null, target: hoverTarget311 ? hoverTarget311.key : null, armed: !!hoverTimer311, suppressed: hoverSuppress311 }),
+    el: () => hoverEl311,
+    hide: () => hoverHide311(),
+    stats: () => Object.assign({}, hoverStats311)
+  };
   /* ================= APOC-V308 (v3.09, 2026-11-16): KEYED RENDERING — Stage 3 of the redesign =================
      Objective, in plain words: blink and churn become structurally
      impossible. Every pin on every map owns ONE persistent DOM node
@@ -2322,6 +2573,7 @@ setInterval(loadSharedEntries, 60000);
     ent.draggable = !isProjecting() && !isLocked0;
     ent.mk = mk0;
     layer.addLayer(m);
+    hoverBindMarker311(ent, id);   /* APOC-V311: hover wiring rides the keyed node from creation */
     const openMk = () => {
       const mk = liveMk();
       closePinRadial();
@@ -2419,6 +2671,8 @@ setInterval(loadSharedEntries, 60000);
     const iconSig = kind + "|" + (mk.name || "") + "|" + (mk._under === 2 ? 2 : mk._under ? 1 : 0) + "|" + (isLocked ? 1 : 0);
     if (ent.iconSig !== iconSig) {
       ent.m.setIcon(iconFor(kind, mk.name, false, mk._under, isLocked));
+      hoverBindMarker311(ent, mk.id);   /* APOC-V311: setIcon swapped the element — re-bind hover on the new one; if this pin's preview is up, its record just changed under it, so retire it */
+      if (hoverTarget311 && hoverTarget311.kind === "marker" && hoverTarget311.id === mk.id) hoverHide311();
       ent.iconSig = iconSig;
       keyedStats308.iconSets++; dirty = true;
     }
@@ -2528,7 +2782,7 @@ setInterval(loadSharedEntries, 60000);
       desired308.set(mk.id, mk);
     }
     for (const [id, ent] of [...keyedMk308]) {
-      if (!desired308.has(id)) { layer.removeLayer(ent.m); keyedMk308.delete(id); keyedStats308.removed++; }
+      if (!desired308.has(id)) { if (hoverTarget311 && hoverTarget311.kind === "marker" && hoverTarget311.id === id) hoverHide311(); layer.removeLayer(ent.m); keyedMk308.delete(id); keyedStats308.removed++; }
     }
     for (const [id, mk] of desired308) {
       const ent = keyedMk308.get(id);
@@ -3624,6 +3878,7 @@ setInterval(loadSharedEntries, 60000);
     pinsTabBtn.title = entries.length ? `Pins — ${entries.length} shelved` : "Pins";
     if (sig === pinsTrayLastSig && !pinsTrayEl.hidden) return;
     pinsTrayLastSig = sig;
+    if (hoverTarget311 && hoverTarget311.kind === "tray") hoverHide311();   /* APOC-V311: the tray list is about to re-render — a tray preview's entry element is going away */
     pinsTrayTitleEl.textContent = `Pins — ${entries.length} shelved`;
     /* Grouping: home map FIRST (a section per map, in tray-index
        order — Faerûn, then the other built-in, then registry
@@ -3709,6 +3964,7 @@ setInterval(loadSharedEntries, 60000);
     if (pinsTrayState.open) renderPinsTray();
   }
   function pinsTrayToggle(force){
+    hoverHide311();   /* APOC-V311: tray open/close retires any hover preview */
     pinsTrayState.open = typeof force === "boolean" ? force : !pinsTrayState.open;
     pinsTraySave();
     pinsTrayApply();
@@ -4072,6 +4328,7 @@ setInterval(loadSharedEntries, 60000);
     ent.draggable = !isProjecting() && effectiveGm();
     ent.p = p0;
     placesLayer.addLayer(m);
+    hoverBindPlace311(ent, id);   /* APOC-V311: hover wiring rides the keyed node from creation (places carry no imgs, so they resolve to no preview) */
     m.on("click", () => {
       const p = livePl();
       if (!p) return;
@@ -4104,6 +4361,8 @@ setInterval(loadSharedEntries, 60000);
     const iconSig = (p.n || "") + "|" + (lvl === 2 ? 2 : lvl ? 1 : 0);
     if (ent.iconSig !== iconSig) {
       ent.m.setIcon(iconFor("place", p.n, false, lvl, false));
+      hoverBindPlace311(ent, p.id);   /* APOC-V311: setIcon swapped the element — re-bind hover on the new one */
+      if (hoverTarget311 && hoverTarget311.kind === "place" && hoverTarget311.id === p.id) hoverHide311();
       ent.iconSig = iconSig;
       keyedPlStats308.iconSets++; dirty = true;
     }
@@ -4129,7 +4388,7 @@ setInterval(loadSharedEntries, 60000);
     const desired = new Map();
     for (const p of places) { if (p.tray) continue; desired.set(p.id, p); }
     for (const [id, ent] of [...keyedPl308]) {
-      if (!desired.has(id)) { placesLayer.removeLayer(ent.m); keyedPl308.delete(id); keyedPlStats308.removed++; }
+      if (!desired.has(id)) { if (hoverTarget311 && hoverTarget311.kind === "place" && hoverTarget311.id === id) hoverHide311(); placesLayer.removeLayer(ent.m); keyedPl308.delete(id); keyedPlStats308.removed++; }
     }
     for (const [id, p] of desired) {
       const ent = keyedPl308.get(id);
@@ -6227,6 +6486,7 @@ setInterval(loadSharedEntries, 60000);
   function switchMap(id){
     const def = MAPS[id];
     if (!def) return;
+    hoverHide311();   /* APOC-V311: a map switch retires any hover preview */
     currentMapId = id;
     mapRot = 0;     MW = def.w; MH = def.h; CELL = def.cell;
     bounds = [[0, 0], [MH, MW]];
@@ -11142,7 +11402,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-16-0248";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-16-0437";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
