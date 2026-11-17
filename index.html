@@ -12411,7 +12411,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-16-1459";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-17-0911";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -16321,8 +16321,77 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     if (!v || !v.c) return;
     restoring = true;
     try { m.setView(v.c, v.z, { animate: false }); } catch(e) {}
+    holdView = { id: id, c: [v.c[0], v.c[1]], z: v.z, until: Date.now() + 30000, n: 0 };   /* APOC-V315: the saved view is now on hold — authoritative until Shaun drives */
     setTimeout(function(){ restoring = false; }, 500);
   }
+  /* APOC-V315 (v3.15, land333) — VIEW-RESTORE STABILITY: the saved view is
+     authoritative after layout settle. Diagnosis of record (sweep,
+     2026-11-17): the eraser was innocent — the view CENTRE is not stable
+     across a reload. tryRestore above applies the saved view exactly
+     once (~1.2 s after the map id stabilises), but the boot settle keeps
+     moving the centre afterwards: fit(false) on base-image load /
+     body-class change / window resize resizes #apocMap and calls
+     invalidateSize({pan:false}) with no centre preservation, and the
+     zoom module's ResizeObserver defends only its "last settled centre"
+     — a value re-tracked from ANY moveend, shifts included — while its
+     one-shot 9.5 s boot re-assert refuses any saved view whose centre
+     sits more than 60 px from the current one, so the measured shifts
+     (up to ~2,914 map units) sail past every existing guard. saveView()
+     then persists whichever centre resulted. The hold below fences ALL
+     centre-setters at once instead of racing them one by one: while a
+     hold is live, any drift of centre/zoom away from the restored saved
+     view is corrected back to it. The hold releases the moment Shaun
+     drives the view himself (pointer/wheel on the map — the module's
+     own `interacted` — or on the zoom bar, or a keyboard zoom), on map
+     switch, after 30 s, or after 60 corrections. First-visit behaviour
+     is untouched: no saved view, no hold, the fit path runs as before.
+     Two stand-downs keep the hold from fighting DELIBERATE moves
+     (battery-caught: a programmatic centre-on-pin at a raised zoom was
+     reverted within 150 ms): a drift at a DIFFERENT zoom is a
+     deliberate re-zoom/centring — the settle family never changes the
+     zoom — so the hold releases; and a foreign movestart (any other
+     code path's setView/pan/flyTo — the settle path fires none) opens
+     a 1.2 s yield, judged at its landing: back on the saved view (the
+     zoom module's own re-assert lands exactly there) the hold
+     survives; anywhere else it stands down. A container resize landing
+     INSIDE an open yield poisons it (battery-caught: a friendly
+     re-assert's yield was consumed by the next settle shift, which
+     then stood uncorrected): a poisoned yield resolves by fencing the
+     drift, not by standing down. */
+  var holdView = null, holdT = null, holdYieldUntil = 0, holdYieldPoisoned = false;
+  function holdCheck(){
+    var h = holdView; if (!h) return;
+    var m = window.map; if (!m) return;
+    if (interacted || Date.now() > h.until || h.n > 60 || curMapId() !== h.id){ holdView = null; return; }
+    if (restoring) return;
+    var c, z;
+    try { c = m.getCenter(); z = m.getZoom(); } catch(e) { return; }
+    if (Math.abs(c.lat - h.c[0]) < 1e-9 && Math.abs(c.lng - h.c[1]) < 1e-9 && Math.abs(z - h.z) < 1e-9){ holdYieldUntil = 0; holdYieldPoisoned = false; return; }
+    if (Math.abs(z - h.z) > 1e-9){ holdView = null; return; }
+    if (holdYieldUntil > 0){
+      if (Date.now() < holdYieldUntil) return;
+      if (!holdYieldPoisoned){ holdView = null; return; }
+      holdYieldUntil = 0; holdYieldPoisoned = false;
+    }
+    h.n++;
+    restoring = true;
+    try { m.setView(h.c, h.z, { animate: false }); } catch(e) {}
+    setTimeout(function(){ restoring = false; }, 500);
+  }
+  document.addEventListener("pointerdown", function(e){
+    if (!holdView) return;
+    var t = e.target;
+    if (t && t.closest && (t.closest("#zoomBar") || t.closest("#apocMap"))) holdView = null;
+  }, true);
+  document.addEventListener("wheel", function(e){
+    if (!holdView) return;
+    var t = e.target;
+    if (t && t.closest && (t.closest("#zoomBar") || t.closest("#apocMap"))) holdView = null;
+  }, true);
+  document.addEventListener("keydown", function(e){
+    if (!holdView) return;
+    if (e.key === "ArrowUp" || e.key === "ArrowDown" || e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "PageUp" || e.key === "PageDown") holdView = null;
+  }, true);
   (function waitMap(){
     var m = window.map;
     if (m && m.on) {
@@ -16333,6 +16402,13 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
       }
       m.on("moveend zoomend", function(){ clearTimeout(saveT); saveT = setTimeout(saveView, 300); });
       setInterval(tryRestore, 700);
+      /* APOC-V315: hold enforcement — event-driven checks plus a 500 ms
+         sweep for the whole hold window, so a centre drift that fires no
+         moveend (an invalidateSize size change) is still corrected. */
+      m.on("moveend zoomend", function(){ clearTimeout(holdT); holdT = setTimeout(holdCheck, 90); });
+      m.on("movestart", function(){ if (!restoring && holdView){ holdYieldUntil = Date.now() + 1200; holdYieldPoisoned = false; } });
+      if (el && window.ResizeObserver) new ResizeObserver(function(){ if (holdView && Date.now() < holdYieldUntil) holdYieldPoisoned = true; clearTimeout(holdT); holdT = setTimeout(holdCheck, 90); }).observe(el);
+      setInterval(holdCheck, 500);
     } else setTimeout(waitMap, 150);
   })();
 
