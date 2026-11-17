@@ -59,7 +59,6 @@ button,select,input,textarea{color:var(--foreground)}
 button{cursor:pointer}
 :focus-visible{outline:3px solid var(--ring);outline-offset:2px}
 .page{width:min(1180px,100%);margin:0 auto;padding:0 16px 12px}
-.eyebrow{margin:0 0 4px;color:var(--primary);font-size:.78rem;letter-spacing:.18em;text-transform:uppercase}
 h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500;letter-spacing:.01em}
 .panel{
     background:hsla(222,20%,14%,0);border:1px solid var(--card-border);backdrop-filter:blur(3px);
@@ -71,13 +70,7 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .panel h3{font-weight:500}
 .muted{color:var(--muted-foreground)}
 .small{font-size:.9rem}
-.top-bubbles .panel,.top-bubbles .sky-panel{margin-top:0}
-.map-frame{margin-top:14px;border:1px solid var(--card-border);border-radius:10px;overflow:hidden;background:transparent}
-.map-frame iframe{display:block;width:100%;height:min(74vh,680px);min-height:380px;border:0}
-.map-note{margin-top:12px;border-left:3px solid var(--primary);padding:8px 12px}
 .map-actions{margin-top:12px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
-.map-open{display:inline-flex;align-items:center;min-height:44px;padding:10px 16px;border-radius:10px;background:transparent;color:var(--primary);border:1px solid var(--primary);text-decoration:none;font-weight:600}
-.map-sub{margin:22px 0 6px;font-size:1.05rem}
 .apoc-map{height:min(72vh,640px);min-height:380px;border:1px solid var(--card-border);border-radius:10px;overflow:hidden;background:transparent;z-index:0}
 .leaflet-container{font:inherit}
 .mk-icon{background:none;border:none}
@@ -127,7 +120,6 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .mk-note .mk-dot{background:#9a86c8}
 .mk-temp{opacity:.6}
 .marker-form{margin-top:12px;border:1px solid var(--card-border);border-radius:10px;padding:13px}
-.map-status{margin-top:9px}
 .map-tools{margin-top:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
 .map-tools .field{flex:1 1 240px;position:relative}
 .place-results{position:absolute;top:100%;left:0;right:0;z-index:80;margin-top:4px;background:hsl(222,20%,13%);border:1px solid var(--card-border);border-radius:10px;overflow:hidden;box-shadow:0 18px 42px rgba(0,0,0,.42)}
@@ -139,7 +131,6 @@ h1{font-size:clamp(2.2rem,5.5vw,3.6rem);line-height:.92;margin:0;font-weight:500
 .atlas-toggle{display:inline-flex;align-items:center;gap:8px;min-height:44px;font-size:.9rem;color:var(--accent-foreground)}
 .atlas-toggle input{width:20px;height:20px;min-height:20px}
 .atlas-icon{background:none;border:none}
-.atlas-dot{display:block;width:10px;height:10px;border-radius:50%;background:#e9e2cf;border:2px solid #22242c;box-shadow:0 1px 4px rgba(0,0,0,.6)}
 .place-card{margin:0 0 12px;border:1px solid var(--card-border);border-left:3px solid var(--primary);border-radius:10px;padding:12px 14px;background:hsl(222,20%,13%)}
 .place-card h4{margin:0 0 3px;font-size:1.02rem;cursor:move;touch-action:none}
 .place-card.floating{position:fixed;z-index:1200;margin:0;box-shadow:0 18px 42px rgba(0,0,0,.5)}
@@ -295,7 +286,6 @@ textarea{min-height:96px;resize:vertical}
 /* Shaun (2026-11-06): the dropdown menus rendered white on white —
    unreadable. Every select's opened list is black text on white. */
 select option,select optgroup{background:#ffffff;color:#000000}
-.button-row{display:flex;gap:9px;flex-wrap:wrap;margin-top:15px}
 .btn{
     border:1px solid var(--card-border);background:var(--secondary);color:var(--foreground);
     border-radius:9px;padding:10px 15px;min-height:44px;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:7px;
@@ -304,8 +294,6 @@ select option,select optgroup{background:#ffffff;color:#000000}
 .btn.primary{background:transparent;border-color:var(--primary);color:var(--primary);font-weight:700}
 .btn.danger{background:transparent;border-color:var(--destructive);color:#f0b1b1}
 .btn.danger:hover{background:transparent;color:#f0b1b1}
-.status-line{min-height:1.5em;margin:10px 0 0;color:var(--muted-foreground)}
-.warning{border-left:4px solid var(--primary);background:transparent;padding:10px 12px;margin-top:12px}
 .error{border:1px solid var(--destructive);background:transparent;padding:11px 13px;border-radius:9px;margin-top:14px}
 [hidden]{display:none !important}
 .actions .btn{min-height:38px;padding:7px 11px}
@@ -314,7 +302,7 @@ select option,select optgroup{background:#ffffff;color:#000000}
 .form-grid{grid-template-columns:1fr}
 .panel{padding:16px}
 }
-.panel,.sky-panel{backdrop-filter:none}
+.panel{backdrop-filter:none}
 
 /* ---- APOC VTT standalone shell additions ---- */
 .vtt-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:6px 0 2px}
@@ -377,8 +365,6 @@ input,select,textarea{font-size:16px}
 .wheel-rgb input[type="number"]{width:60px}
 .wheel-side label{font-size:.82rem;color:var(--muted-foreground);display:flex;align-items:center;gap:8px}
 .wheel-side input[type="range"]{flex:1 1 auto;min-width:110px}
-.pal-swatch{width:30px;height:30px;min-height:30px;border:1px solid hsl(222 18% 30%);border-radius:6px;padding:0;cursor:pointer}
-.pal-swatch[aria-pressed="true"]{outline:2px solid var(--primary);outline-offset:1px}
 .color-chip{display:inline-block;width:26px;height:26px;border-radius:6px;border:1px solid hsl(222 18% 30%);flex:none}
 .wheel-open-btn{display:inline-flex;align-items:center;gap:8px;min-height:34px}
 .lib-item{touch-action:none}
@@ -457,7 +443,6 @@ input,select,textarea{font-size:16px}
 .vtt-head{margin:0}
 #mapPanel{margin-top:2px}
 #mapPanel>p{margin-top:4px;margin-bottom:4px}
-.map-note{margin-top:6px}
 .map-tools{margin-top:14px}
 .map-stage{margin-top:6px}
 .marker-form{margin-top:12px}
@@ -486,7 +471,6 @@ body.displaying .vtt-panel,
 body.displaying .map-repo,
 body.displaying #repoTab,
 body.displaying .expand-exit-wrap,
-body.displaying .map-status,
 body.displaying #placeCard,
 body.displaying .leaflet-control-container{display:none !important}
 body.displaying #mapPanel{position:fixed;inset:0;width:100vw;height:100vh;margin:0;padding:0;border:0;border-radius:0;background:#000;overflow:hidden}
@@ -495,7 +479,6 @@ body.displaying .map-side{flex:1 1 auto;min-width:0;height:100%}
 body.displaying .apoc-map{height:100% !important;min-height:0}
 body.displaying .mk-label{font-size:1.12rem;padding:4px 12px}
 body.displaying .mk-dot{width:22px;height:22px}
-body.displaying .atlas-dot{width:14px;height:14px}
 body.displaying .tk-label{font-size:1.12rem;padding:4px 12px}
 body.displaying .draw-text{font-size:1.1rem}
 body.displaying .init-strip{font-size:1.05rem}
@@ -577,8 +560,6 @@ body.displaying .td-ui{display:none}
 #mapPanel .map-stage{margin-top:0}
 .apoc-map{height:min(88vh,980px)}
 #tdWrap{margin-top:0}
-.map-status{margin-top:0}
-#mapStatus:empty{display:none}
 
 /* ---- v1.63: header over the Art Library + closed page fits one screen
    (Shaun, voice call 2026-11-07 ~00:03-00:04; finished at his word
@@ -7945,11 +7926,6 @@ setInterval(loadSharedEntries, 60000);
   });
 
     let selItem = null, selDrag = null, selExtra = [], selRect = null;
-  function itemAnchor(it){
-    if (it.type === "line" || it.type === "poly") return it.pts[0];
-    if (it.type === "arrow") return it.a;
-    return [it.x, it.y];
-  }
   function itemTranslate(it, dx, dy){
     if (it.type === "line" || it.type === "poly") it.pts = it.pts.map(q => [q[0] + dx, q[1] + dy]);
     else if (it.type === "arrow") { it.a = [it.a[0] + dx, it.a[1] + dy]; it.b = [it.b[0] + dx, it.b[1] + dy]; }
@@ -11019,16 +10995,6 @@ function finish(typeKey, cols, rows, grid, roomAt, rooms, _unused, rng, extra){
   return { grid, roomAt, rooms, walls: segs, doors: [...doorEdges.values()], doorCells, clearing: extra.clearing || null, prison: !!extra.prison };
 }
 
-function floorConnected(L, cols, rows){
-  let start = null, total = 0;
-  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) if (L.grid[y][x] > 0) { total++; if (!start) start = [x, y]; }
-  if (!start) return false;
-  const seen = new Set([start.join(",")]); const q = [start];
-  while (q.length) { const [x, y] = q.pop();
-    for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) { const nx = x + dx, ny = y + dy, k = nx + "," + ny;
-      if (nx >= 0 && ny >= 0 && nx < cols && ny < rows && L.grid[ny][nx] > 0 && !seen.has(k)) { seen.add(k); q.push([nx, ny]); } } }
-  return seen.size === total;
-}
 
 
   const GEN_PX = 144;    const GEN_SIZES = { small: [14, 11], medium: [20, 15], large: [26, 19], huge: [32, 24] };
@@ -12499,7 +12465,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-17-1026";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-17-1132";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -15523,26 +15489,6 @@ function floorConnected(L, cols, rows){
   function register(){
     moveTitle(); gripInline(); watchSets();
     var rec = load();
-    function gripFor(el, id, makeGrip){
-      var anchor = el;
-      if (makeGrip && !el.querySelector(":scope > .fp-grip")) {
-        var g = document.createElement("span");
-        g.className = "fp-grip"; g.textContent = "\u283f"; g.title = "Drag to move";
-        el.insertBefore(g, el.firstChild);
-        makeDraggable(el, id, g);
-      }
-      addLock(el, id, anchor);
-      addHandles(el, id);
-      var r = rec[id];
-      if (r && typeof r.x === "number") {
-        detach(el, { left: clamp(r.x, -20, window.innerWidth - 60), top: clamp(r.y, 0, window.innerHeight - 26), width: r.w || el.getBoundingClientRect().width, height: r.h || el.getBoundingClientRect().height });
-        applyOrient(el);
-      } else if (r && (r.w || r.h)) {
-        if (r.w) el.style.width = r.w + "px"; if (r.h) el.style.height = r.h + "px";
-        applyOrient(el);
-      }
-      paintLock(el, id);
-    }
     var cr = document.querySelector(".ctl-row"); if (cr && !cr.dataset.fpDone) { cr.dataset.fpDone = "1"; var bar = cr.querySelector(".ctl-bar") || cr; if (!bar.querySelector(":scope > .fp-grip")) { var g2 = document.createElement("span"); g2.className = "fp-grip"; g2.textContent = "\u283f"; g2.title = "Drag to move"; bar.insertBefore(g2, bar.firstChild); makeDraggable(cr, "ctlrow", g2); } addLock(cr, "ctlrow", bar); addHandles(cr, "ctlrow"); var rr = rec.ctlrow; if (rr && typeof rr.x === "number") { detach(cr, { left: clamp(rr.x, -20, window.innerWidth - 60), top: clamp(rr.y, 0, window.innerHeight - 26), width: rr.w || cr.getBoundingClientRect().width, height: rr.h || cr.getBoundingClientRect().height }); applyOrient(cr); } paintLock(cr, "ctlrow"); }
     if (titleBubble && !titleBubble.dataset.fpDone) { titleBubble.dataset.fpDone = "1"; makeDraggable(titleBubble, "title", titleBubble); addLock(titleBubble, "title", titleBubble); addHandles(titleBubble, "title"); var rt = rec.title; if (rt && typeof rt.x === "number") { detach(titleBubble, { left: clamp(rt.x, -20, window.innerWidth - 60), top: clamp(rt.y, 0, window.innerHeight - 26), width: rt.w || titleBubble.getBoundingClientRect().width, height: rt.h || titleBubble.getBoundingClientRect().height }); } paintLock(titleBubble, "title"); }
     dockTitle();
@@ -16556,7 +16502,6 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
     return !!(b && b.getAttribute("aria-pressed") === "true");
   }
   function say(msg){ if (statusEl) statusEl.textContent = msg; }
-  function escS(s){ var f = G("esc"); return typeof f === "function" ? f(String(s)) : String(s).replace(/[&<>"]/g, ""); }
   var placeN = 0;
   function centre(){ var c = toXY(map.getCenter()); var off = (placeN++ % 5) * 1.5; return { x: Math.min(98, c.x + off), y: Math.min(98, c.y + off) }; }
 
@@ -17936,11 +17881,6 @@ body:not(.vtt-dm-edit) #zoomBarGrip{display:block!important;cursor:grab}
   })();
 </script>
 
-<style>
-/* APOC-V196 layers: the Map layer chip is a fixed label (the map itself,
-   always on) — not an activatable tab like the other three layers. */
-.layer-chip-map{cursor:default;opacity:.85}
-</style>
 
 <style id="APOC-V198">
 /* APOC-V198 (Shaun, 2026-11-07 ~23:43 — "my tile assets aren't
@@ -19368,8 +19308,6 @@ body select option,body select optgroup{background:#101216;color:#f5f5f5}
 .btn-picked{outline:2px solid #1e40af !important;outline-offset:1px}
 </style>
 <script>
-</script>
-<script>
 (function(){
   "use strict";
   if (new URLSearchParams(location.search).get("display")) return;
@@ -20646,8 +20584,6 @@ return module.exports; })();</script>
   }, true);
 })();
 </script>
-<script>
-</script>
 <style id="APOC-V247-CSS">
 /* APOC-V247 (Shaun, 2026-11-10 12:25-12:32) —
    (A/B) the bubble group bar under the bubble buttons; (C) the tucked
@@ -20751,11 +20687,6 @@ return module.exports; })();</script>
        ever again. */
   async function readRow(key){
     try { var r = await db.from(SETTINGS_TABLE).select("value").eq("key", key).maybeSingle(); return (r && r.data && r.data.value) || null; } catch(e){ return null; }
-  }
-  async function writeRow(key, row){
-    /* APOC-V307: no callers (dead helper) — rerouted through the
-       Store's mergeRow so no raw upsert survives outside the Store. */
-    await window.__apocStore323.mergeRow(key, row);
   }
 
     var DEFS = [
@@ -23972,7 +23903,6 @@ body.apoc-tabs254 .apoc-track{display:none!important}
    margin/divider rule above is dead once the button is out and is
    left in place only as the record of that attempt. */
 #layoutResetBtn{font-size:.72rem!important;padding:1px 8px!important;line-height:1.5!important;min-height:0!important;margin:6px 0 0 136px;vertical-align:top;align-self:flex-start}
-#layoutResetBtn.apoc-reset-float{position:fixed;z-index:1801;margin:0}
 </style>
 <script>
 /* APOC-V261 (Shaun, 2026-11-12 ~08:29): "nest Add Marker and Add
