@@ -2582,7 +2582,7 @@ setInterval(loadSharedEntries, 60000);
         endSession(s); return;
       }
       pairing.set(key, { t: s.downT, x: s.sx, y: s.sy });
-      if (s.ptype === "mouse" && opts.onUnpaired) {
+      if (opts.onUnpaired && !(s.ptype !== "mouse" && Date.now() - s.downT > 550)) {   /* APOC-V316: the unpaired outcome arms on TOUCH too (Shaun's ruling, 2026-11-16) — the delay below already reads winFor(s.ptype): 650 ms mouse / 900 ms touch. Was mouse-only through v3.15. One hold-out, same ruling: a non-mouse press HELD past 550 ms never arms — a held press is Group Grab's gesture class (its own long-press timer is 550 ms), not a tap; mouse behaviour is byte-identical. */
         cancelPendingRadial();
         const delay = Math.max(0, s.downT + w - Date.now());
         const rec = { key, timer: 0 };
@@ -3048,20 +3048,28 @@ setInterval(loadSharedEntries, 60000);
      unchanged: press-and-drag moves (release saves exactly once);
      a paired second press opens the verbiage/place card (the
      double-press sequence itself never moves or saves the pin);
-     an unpaired single MOUSE click opens the options radial once
-     the 650ms pairing window lapses unpaired and undragged; a
-     single TOUCH tap does nothing (the APOC-V288/V302 touch
-     contract, preserved verbatim); right-click on a pin opens its
-     card directly; a locked pin refuses drag inside the machine
+     an unpaired single click opens the options radial once its
+     pairing window lapses unpaired and undragged — 650ms mouse /
+     900ms touch. APOC-V316 (v3.16, 2026-11-17; Shaun's ruling
+     2026-11-16) arms the radial on TOUCH too, superseding the
+     APOC-V288/V302 "a single touch tap does nothing" line below in
+     the machine's history: a single touch tap now opens the radial
+     exactly as a mouse click does; a double-tap still pairs to the
+     card with the radial suppressed; a press-and-drag still drags;
+     long-press stays Group Grab's — its targets are stamps, and a
+     touch press held past Group Grab's own 550ms threshold never
+     arms the radial at all. Right-click on a pin opens its card
+     directly; a locked pin refuses drag inside the machine
      but still opens by double-press and radial. Pairing is computed
      by the machine from pointerdown times: 650ms mouse / 900ms
      touch. The APOC-V288 tap-commit machinery, the APOC-V289
      radial scheduler and the APOC-V302 touch pairing path that
      stood here are DELETED — the machine owns every press. */
-  /* APOC-V289's radial component, kept: a single left-click on a
+  /* APOC-V289's radial component, kept: a single click on a
      pin opens a radial of that pin's own options around its dot
-     (wired as the machine's unpaired-mouse outcome in
-     createKeyedMarker308). The options are the pin's real existing
+     (wired as the machine's unpaired outcome in
+     createKeyedMarker308 — mouse since V289, touch since
+     APOC-V316). The options are the pin's real existing
      actions only:
        - a READ pin (carries pictures): Open (its place card) and
          Lock position / Unlock position (the place card lock's own
@@ -3115,17 +3123,15 @@ setInterval(loadSharedEntries, 60000);
     if (!ok) { setStatus("That delete didn't go through — try again."); loadMarkers(true); return; }
     draw(); setStatus(`"${mk.name}" deleted for everybody.`);
   }
-  function openPinRadial(mk, openMk){
-    if (isProjecting() || document.body.classList.contains("map-expanded")) return;
-    closePinRadial();
-    const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || !!mk.atlas; /* APOC-V296: atlas pins take the place-pin set (Open / Lock) */
-    const opts = [{ id: "open", label: isRead ? "Open" : "Edit" }];
-    opts.push({ id: "lock", label: mk.locked ? "\u{1F513} Unlock position" : "\u{1F512} Lock position" });
-    if (!isRead || mk.atlas) opts.push({ id: "shelve", label: "Shelve" }); /* APOC-V303: a bare marker's individual shelve lives here, with its other actions — the marker editor has no shelve control; read pins shelve from their card instead */
-    if (!isRead || mk.atlas) opts.push({ id: "delete", label: "Delete", danger: true }); /* APOC-V296: an atlas pin also carries Delete — it is a bare record in map_markers, and the migration flag keeps a deleted one deleted */
-    const pt = map.latLngToContainerPoint(toLatLng(mk.x, mk.y));
+  /* APOC-V316 (v3.16, 2026-11-17): the radial ring itself, shared
+     by the pin radial and the template radial — one component, one
+     close path (pinRadialEl / closePinRadial above), one geometry:
+     the ring centres on the anchor's dot, shifted only as far as
+     the viewport edges force, every option fully on screen. */
+  function showRadial316(x, y, opts, onPick){
+    const pt = map.latLngToContainerPoint(toLatLng(x, y));
     const cr = map.getContainer().getBoundingClientRect();
-    /* Ring centre = the pin's dot, shifted only as far as the
+    /* Ring centre = the anchor's dot, shifted only as far as the
        viewport edges force: every option lands fully on screen. */
     let cx = cr.left + pt.x, cy = cr.top + pt.y;
     const RX = 122, RY = 82, vw = window.innerWidth, vh = window.innerHeight;
@@ -3146,15 +3152,27 @@ setInterval(loadSharedEntries, 60000);
       b.addEventListener("click", ev => {
         ev.stopPropagation();
         closePinRadial();
-        if (o.id === "open") { try { openMk(); } catch(e){} }
-        else if (o.id === "lock") { togglePinLock(mk); }
-        else if (o.id === "shelve") { if (typeof shelveMarker303 === "function") shelveMarker303(mk); }
-        else if (o.id === "delete") { deleteMarkerFlow(mk); }
+        try { onPick(o); } catch(e){}
       });
       el.appendChild(b);
     });
     document.body.appendChild(el);
     pinRadialEl = el;
+  }
+  function openPinRadial(mk, openMk){
+    if (isProjecting() || document.body.classList.contains("map-expanded")) return;
+    closePinRadial();
+    const isRead = !!(Array.isArray(mk.imgs) && mk.imgs.filter(Boolean).length) || !!mk.atlas; /* APOC-V296: atlas pins take the place-pin set (Open / Lock) */
+    const opts = [{ id: "open", label: isRead ? "Open" : "Edit" }];
+    opts.push({ id: "lock", label: mk.locked ? "\u{1F513} Unlock position" : "\u{1F512} Lock position" });
+    if (!isRead || mk.atlas) opts.push({ id: "shelve", label: "Shelve" }); /* APOC-V303: a bare marker's individual shelve lives here, with its other actions — the marker editor has no shelve control; read pins shelve from their card instead */
+    if (!isRead || mk.atlas) opts.push({ id: "delete", label: "Delete", danger: true }); /* APOC-V296: an atlas pin also carries Delete — it is a bare record in map_markers, and the migration flag keeps a deleted one deleted */
+    showRadial316(mk.x, mk.y, opts, o => {
+      if (o.id === "open") { try { openMk(); } catch(e){} }
+      else if (o.id === "lock") { togglePinLock(mk); }
+      else if (o.id === "shelve") { if (typeof shelveMarker303 === "function") shelveMarker303(mk); }
+      else if (o.id === "delete") { deleteMarkerFlow(mk); }
+    });
   }
   const newId = () => "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 7);
   window.map = map; window.toXY = toXY; window.newId = newId;
@@ -3458,8 +3476,9 @@ setInterval(loadSharedEntries, 60000);
        Leaflet marker dragging is disabled; the machine moves the
        marker, the drop saves exactly once through the same
        pinPatch/saveMarkers path the old dragend used, a paired
-       second press opens (openMk), an unpaired mouse click arms
-       the radial (radialFn), and a locked pin's canDrag reads the
+       second press opens (openMk), an unpaired click arms
+       the radial (radialFn) — mouse since V289, touch since
+       APOC-V316 (Shaun's ruling, 2026-11-16) — and a locked pin's canDrag reads the
        LIVE record so the machine refuses its drag while its clicks
        still pair and open. The <=24px snap-back is gone: under
        10px is a click, over 10px is a drag (see the machine). */
@@ -5077,10 +5096,24 @@ setInterval(loadSharedEntries, 60000);
     const q = searchInput.value.trim().toLowerCase();
     if (q.length < 2) { resultsBox.hidden = true; return; }
     const placeHits = currentPlaces().filter(p => p.n.toLowerCase().includes(q) || (p.alias && p.alias.toLowerCase().includes(q)));
-    const markerHits = markers.filter(mk => !mk.tray && (mk.name || "").toLowerCase().includes(q)); /* APOC-V303: shelved markers are screened from search, like shelved places */
+    const markerHits = markers.filter(mk => !mk.tray && (mk.name || "").toLowerCase().includes(q));
+    /* APOC-V316 (v3.16, 2026-11-17) — SEARCH REVERSAL (Shaun's word
+       via the hub, 2026-11-15): the APOC-V303 screening of shelved
+       records out of search is REVERSED. This map's shelved pins and
+       places are findable again, badged "In the tray", and choosing
+       one RESTORES it to this map through restoreEntry303 — the
+       tray's own Store writer (tray:false only, the exact inverse of
+       shelveEntry303). Shelved records still render on NO appearance
+       of any map; only search sees them. Live hits keep their exact
+       prior behaviour and order; shelved hits follow them. The World
+       at Large keeps its own search screening, untouched. */
+    const trayPlaceHits = currentMapId === "faerun" ? [] : places.filter(p => p.tray && (p.n.toLowerCase().includes(q) || (p.alias && p.alias.toLowerCase().includes(q))));
+    const trayMarkerHits = markers.filter(mk => mk.tray && (mk.name || "").toLowerCase().includes(q));
     const hits = [
       ...placeHits.map(p => ({ label: p.alias && p.n === "Bastion of Last Hope" ? `${p.n} (printed: ${p.alias})` : p.n, kind: p.t || "Place — this map", go: () => focusPlace(p.x, p.y, p.n, p.t || "Place — this map", p.d || "") })),
-      ...markerHits.map(mk => ({ label: mk.name, kind: "Shared marker — " + mk.kind, go: () => focusPlace(mk.x, mk.y, mk.name, "Shared marker — " + mk.kind, mk.note || "", "Tap the marker itself on the map to edit or move it.") }))
+      ...markerHits.map(mk => ({ label: mk.name, kind: "Shared marker — " + mk.kind, go: () => focusPlace(mk.x, mk.y, mk.name, "Shared marker — " + mk.kind, mk.note || "", "Tap the marker itself on the map to edit or move it.") })),
+      ...trayPlaceHits.map(p => ({ label: p.n, kind: "In the tray — tap to restore", go: async () => { resultsBox.hidden = true; await restoreEntry303({ mapId: currentMapId, mapName: currentMapId, store: "places", rec: p }); } })),
+      ...trayMarkerHits.map(mk => ({ label: mk.name, kind: "In the tray — tap to restore", go: async () => { resultsBox.hidden = true; await restoreEntry303({ mapId: currentMapId, mapName: currentMapId, store: "markers", rec: mk }); } }))
     ].slice(0, 8);
     if (!hits.length) {
       if (currentMapId !== "faerun" && !places.length) { resultsBox.innerHTML = `<div class="pr-empty">No places on this map yet${effectiveGm() ? " — the GM can add one with Add place" : ""}.</div>`; resultsBox.hidden = false; return; }
@@ -5111,7 +5144,7 @@ setInterval(loadSharedEntries, 60000);
   let editingPlace = null, tempPlacePin = null;
   const placesLayer = L.layerGroup().addTo(map);
   const placeForm = $("placeForm");
-  function currentPlaces(){ return currentMapId === "faerun" ? PLACES.filter(p => p.dot === false) : places.filter(p => !p.tray); } /* APOC-V296: the dotted atlas places are pins now and surface as marker hits; only the search-only residue stays here, so each migrated place is returned exactly once. APOC-V303: shelved places are screened out — a shelved record renders on no appearance of its map, search included */
+  function currentPlaces(){ return currentMapId === "faerun" ? PLACES.filter(p => p.dot === false) : places.filter(p => !p.tray); } /* APOC-V296: the dotted atlas places are pins now and surface as marker hits; only the search-only residue stays here, so each migrated place is returned exactly once. This is the LIVE list for search — shelved places stay out of it (and off every render), but since APOC-V316 the search handler adds them back as badged "In the tray" restore hits; the APOC-V303 search screening is reversed, the render screening is not. */
   /* APOC-V303 (v3.03, 2026-11-15): UNIVERSAL PIN LOOK — a place on a
      non-Faerun map takes its label band from the SAME beside-first
      rule (APOC-V292) in the SAME fixed reference space as draw():
@@ -6271,6 +6304,14 @@ setInterval(loadSharedEntries, 60000);
 
   /* Ruler: with Ruler on, drag on the map measures (map panning pauses). */
   let rulerOn = false, rulerLine = null, rulerTip = null, rulerStart = null;
+  /* APOC-V316 (v3.16, 2026-11-17): the ruler reads in FEET AND MILES
+     (Shaun, 2026-11-15: "Have the ruler measure in feet and miles") —
+     both units, always, computed from this map's own scale
+     (feetPerSquare): the overland reads its miles with the feet
+     beside them, a dungeon map reads its feet with the miles beside
+     them. One formatter feeds the straight ruler and the waypoint
+     path alike. */
+  function fmtFeetMiles316(feet){ return `${Math.round(feet).toLocaleString("en-US")} ft · ${(feet / 5280).toFixed(2)} mi`; }
   function rulerText(a, b){
     let cells;
     if (gridType === "hex") {
@@ -6286,8 +6327,7 @@ setInterval(loadSharedEntries, 60000);
       cells = Math.hypot(b.lng - a.lng, b.lat - a.lat) / cellNow();
     }
     const feet = cells * feetPerSquare;
-    const dist = scaleUnit === "mi" ? `${(feet / 5280).toFixed(2)} mi` : (feet >= 5280 ? `${(feet / 5280).toFixed(2)} mi` : `${Math.round(feet)} ft`);
-    return `${cells.toFixed(1)} ${gridType === "hex" ? "hex" : "sq"} · ${dist}`;
+    return `${cells.toFixed(1)} ${gridType === "hex" ? "hex" : "sq"} · ${fmtFeetMiles316(feet)}`;
   }
   function rulerSnap(ll){
     if (!gridOn) return ll;
@@ -6324,7 +6364,7 @@ setInterval(loadSharedEntries, 60000);
     if (rulerLine) map.removeLayer(rulerLine);
     if (rulerTip) map.removeLayer(rulerTip);
     rulerLine = L.polyline([rulerStart, rulerStart], { color: "#e8a33d", weight: 3, interactive: false }).addTo(map);
-    rulerTip = L.marker(rulerStart, { icon: L.divIcon({ className: "atlas-icon", html: '<span class="ruler-label">0.0 sq · 0 ft</span>', iconAnchor: [0, 0] }), interactive: false }).addTo(map);
+    rulerTip = L.marker(rulerStart, { icon: L.divIcon({ className: "atlas-icon", html: '<span class="ruler-label">0.0 sq · 0 ft · 0.00 mi</span>', iconAnchor: [0, 0] }), interactive: false }).addTo(map);
   });
   map.on("mousemove", e => {
     if (!rulerOn || !rulerStart || !rulerLine) return;
@@ -6356,8 +6396,7 @@ setInterval(loadSharedEntries, 60000);
   }
   function fmtCells(cells){
     const feet = cells * feetPerSquare;
-    const dist = scaleUnit === "mi" ? `${(feet / 5280).toFixed(2)} mi` : (feet >= 5280 ? `${(feet / 5280).toFixed(2)} mi` : `${Math.round(feet)} ft`);
-    return `${cells.toFixed(1)} ${gridType === "hex" ? "hex" : "sq"} · ${dist}`;
+    return `${cells.toFixed(1)} ${gridType === "hex" ? "hex" : "sq"} · ${fmtFeetMiles316(feet)}`;
   }
   function rulerTipText(end){
     if (!rulerPath.length || !rulerStart) return rulerText(rulerStart, end);
@@ -6483,7 +6522,8 @@ setInterval(loadSharedEntries, 60000);
       const om = L.marker(toLatLng(it.x, it.y), { pane: "layerTokens", draggable: false, icon: L.divIcon({ className: "tpl-origin", html: '<span class="tpl-dot"></span>', iconSize: [13, 13], iconAnchor: [7, 7] }) }).addTo(tplLayer);   /* APOC-V313: Leaflet dragging disabled — the pointer machine moves this marker */
       PointerMachine313.bindMarker(om, {
         key: "tpl-o:" + it.id,
-        canDrag: () => true,
+        canDrag: () => !it.locked,   /* APOC-V316: a locked template's origin refuses the drag (its radial still opens) */
+        onClick: () => openTplRadial316(it),   /* APOC-V316: single click opens the template options radial */
         onDrop: async () => {
           let p = toXY(om.getLatLng());
           const sn = rulerSnap(om.getLatLng()); if (sn) p = toXY(sn);
@@ -6499,6 +6539,7 @@ setInterval(loadSharedEntries, 60000);
       PointerMachine313.bindMarker(hm, {
         key: "tpl-h:" + it.id,
         canDrag: () => true,
+        onClick: () => openTplRadial316(it),   /* APOC-V316: the aim handle opens the same radial */
         onMove: () => {
           const hp = toXY(hm.getLatLng()); const [ux, uy] = toUnits(hp);
           let a = Math.atan2(uy - oy, ux - ox) * 180 / Math.PI; a = Math.round(a / 5) * 5;
@@ -6531,6 +6572,53 @@ setInterval(loadSharedEntries, 60000);
     return it;
   }
   for (const [bid, kind] of [["tplConeBtn", "cone"], ["tplCircleBtn", "circle"], ["tplLineBtn", "line"], ["tplSquareBtn", "square"]]) { const b = $(bid); if (b) b.addEventListener("click", () => placeTemplate(kind)); }
+
+  /* APOC-V316 (v3.16, 2026-11-17): TEMPLATE OPTIONS RADIAL (Shaun,
+     2026-11-15: "Put a options radial on every template. type.") —
+     every placed template (circle / cone / line / square) gets the
+     pin-style radial on a single click of its origin dot or its aim
+     handle, on the shared component (showRadial316: same ring, same
+     close conditions — option chosen, any press elsewhere, Esc, pan,
+     zoom, drag start). The verbs are the template's own existing
+     ones: Move (arms a one-shot map click that relocates the origin
+     under the drag drop's own snap rules), Lock position (the locked
+     origin refuses the machine's drag; the aim handle still turns
+     it), Bigger / Smaller (the Tools list's size steps, same 1..30
+     clamps), Aim +45° (the handle's verb in a fixed step), Delete
+     (the list's remove flow). Every verb saves through
+     saveTemplates — the Store path the list and the drags use. */
+  let tplMoveArm316 = null;
+  function openTplRadial316(it){
+    if (isProjecting() || document.body.classList.contains("map-expanded")) return;
+    closePinRadial();
+    const opts = [
+      { id: "move", label: "Move" },
+      { id: "lock", label: it.locked ? "\u{1F513} Unlock position" : "\u{1F512} Lock position" },
+      { id: "bigger", label: "Bigger +" },
+      { id: "smaller", label: "Smaller \u2212" },
+      { id: "aim", label: "Aim +45\u00b0" },
+      { id: "delete", label: "Delete", danger: true }
+    ];
+    showRadial316(it.x, it.y, opts, async o => {
+      if (o.id === "move") { tplMoveArm316 = it.id; $("tplStatus").textContent = "Tap the map where " + tplLabel(it) + " should go \u2014 Esc cancels."; }
+      else if (o.id === "lock") { it.locked = !it.locked; const ok = await saveTemplates(); renderTemplates(); $("tplStatus").textContent = ok ? tplLabel(it) + (it.locked ? " locked in place." : " unlocked \u2014 drag its dot to move it.") : "That lock change didn't save \u2014 try again."; if (!ok) loadTemplates(true); }
+      else if (o.id === "bigger") { it.size = Math.min(30, it.size + 1); const ok = await saveTemplates(); renderTemplates(); buildTplList(); $("tplStatus").textContent = ok ? tplLabel(it) : "That resize didn't save \u2014 try again."; if (!ok) loadTemplates(true); }
+      else if (o.id === "smaller") { it.size = Math.max(1, it.size - 1); const ok = await saveTemplates(); renderTemplates(); buildTplList(); $("tplStatus").textContent = ok ? tplLabel(it) : "That resize didn't save \u2014 try again."; if (!ok) loadTemplates(true); }
+      else if (o.id === "aim") { it.rot = (((it.rot || 0) + 45) % 360 + 360) % 360; const ok = await saveTemplates(); renderTemplates(); $("tplStatus").textContent = ok ? tplLabel(it) + " \u2014 facing " + it.rot + "\u00b0, saved for everybody." : "That rotation didn't save \u2014 try again."; if (!ok) loadTemplates(true); }
+      else if (o.id === "delete") { const lbl = tplLabel(it); tplItems = tplItems.filter(t => t.id !== it.id); const ok = await saveTemplates(); renderTemplates(); buildTplList(); $("tplStatus").textContent = ok ? lbl + " removed." : "That delete didn't save \u2014 try again."; if (!ok) loadTemplates(true); }
+    });
+  }
+  map.on("click", e => {
+    if (!tplMoveArm316) return;
+    const it = tplItems.find(t => t.id === tplMoveArm316);
+    tplMoveArm316 = null;
+    if (!it) return;
+    let p = toXY(e.latlng);
+    const sn = rulerSnap(e.latlng); if (sn) p = toXY(sn);
+    it.x = Math.round(p.x * 100) / 100; it.y = Math.round(p.y * 100) / 100;
+    saveTemplates().then(ok => { renderTemplates(); $("tplStatus").textContent = ok ? tplLabel(it) + " moved \u2014 saved for everybody." : "That move didn't save \u2014 try again."; if (!ok) loadTemplates(true); });
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && tplMoveArm316) { tplMoveArm316 = null; $("tplStatus").textContent = "Move cancelled."; } }, true);
 
   /* grid calibration: 3 clicks on the printed grid — a corner, the next
      corner along the top edge, the next corner down the side. */
@@ -6569,7 +6657,7 @@ setInterval(loadSharedEntries, 60000);
       applyCalib(cell, ((p1.x % cell) + cell) % cell, ((p1.y % cell) + cell) % cell);
     }
   });
-  window.__apocTplTest = { items: () => tplItems, place: placeTemplate, points: it => tplPoints(it), render: renderTemplates };
+  window.__apocTplTest = { items: () => tplItems, place: placeTemplate, points: it => tplPoints(it), render: renderTemplates, radial: openTplRadial316, moveArm: () => tplMoveArm316 };
   window.__apocCalibTest = { state: () => ({ cell: gridCellOverride, ox: gridOX, oy: gridOY }), centres: () => hexCenters().slice(0, 4), cellNow, snap: ll => { const sn = rulerSnap(ll); return sn ? { lat: sn.lat, lng: sn.lng } : null; } };
   loadTemplates();
 
@@ -12411,7 +12499,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-17-0911";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-17-1026";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
