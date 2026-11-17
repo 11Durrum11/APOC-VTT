@@ -1542,6 +1542,746 @@ body.map-expanded .stage-row{display:contents}
 </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+/* ================= APOC-V314 (v3.14, land327): ONE LAYOUT OWNER =================
+   Stage 5 of the redesign (REDESIGN-BRIEF Stage 5). OBJECTIVE: every
+   piece of geometry is written by ONE owner, clamped at write, so
+   seats, cards and stage can never disagree with each other or need
+   boot-time repair. All geometry flows through this module; nothing
+   else writes geometry unvalidated.
+
+   WHAT THE OWNER OWNS
+   (1) THE SEAT STORE — one per-device record, "apocVttLayoutV1":
+       { v:1, fam:{ <family>: <raw string exactly as the legacy key
+       holds it> } }. A ONE-TIME MIGRATION READ (below) converts the
+       live seats from the old per-family records into this store;
+       thereafter the old families are NEVER read as a source again —
+       at boot the legacy keys are re-materialized FROM the store
+       (so a poisoned or stale legacy record cannot poison anything),
+       and every later write to a legacy seat key is routed through
+       this owner's write gate: the value is clamped AT WRITE with
+       the family's own legal range (the APOC-V246 sanitizer ranges
+       and the seat systems' own clamp formulas), stored into the
+       owner store, and only then written to the legacy key the
+       consumers read. removeItem on a seat key deletes the family
+       from the store too, so a deliberate deletion (a dock home, a
+       layout reset) can never resurrect at the next boot.
+   (2) THE STAGE HEIGHT — the APOC-V284 computation lives here now
+       as the owner's core (computeTarget): one formula, one writer
+       of .map-stage's inline height. GH-V284-CLOSE-LAG: the old
+       owner deferred its recompute to rAF + a 350 ms timer, so a
+       set close settled ~0.4 s late (starvation-amplified). This
+       owner applies SYNCHRONOUSLY in the MutationObserver microtask
+       the moment a set / card / repo hidden-bit flips — the write
+       lands before the next paint, deterministically; the rAF and
+       timed passes remain only as idempotent backstops for late
+       chrome (fonts, boot settling).
+   (3) THE PLACE-CARD PRESENTATION DECISION — APOC-V285–V287's
+       evaluate() folds in whole: same dock/sheet outcomes, same
+       latch stack (verdicts latch per context; DOCK episode-sticky,
+       IN-FLOW context-scoped), but the decision is made HERE, and
+       the settle gate reads THIS owner's own target (stageTarget)
+       instead of a read-only replica of the formula. ownerTarget()
+       and all replica geometry math are DELETED — there is exactly
+       one implementation of the stage-height law.
+   (4) THE PHONE ZOOM-BAR DEFAULT SEAT — APOC-V305's boot poll that
+       reseated a defaulted phone bar bottom-left folds in as the
+       owner's default-seat duty (a genuine phone seat is never
+       touched; this fires only when the phone has no seat of its
+       own and the bar landed in the top chip band from the shared
+       desktop default).
+
+   DELETED AS DEAD CODE (boot-time repair): the APOC-V301 reseat
+   guard (v3.01) and the APOC-V305 boot seat poll (v3.06) — writes
+   are validated at write now, so there is nothing left to repair.
+   The zoom bar stays floating, draggable by its whole body via the
+   Stage-4 pointer machine, per-device — only its seat STORAGE
+   moved house (the APOC-V305 block's drop now writes through
+   Layout314.setSeat, as does APOC-V264's dockZoom rider).
+
+   MIGRATION MAP (legacy key -> owner family):
+     apocVttZoomBarV1        -> zoombar       (stage-clamped)
+     apocVttZoomBarPhoneV1   -> zoombarPhone  (stage-clamped)
+     apocVttPinsTrayV1       -> tray          (viewport-clamped, pinsTrayApply's own formula)
+     apocVttMapSizeV1        -> mapSize       (APOC-V246 sanMapSize ranges)
+     apocVttFreeLayoutV1     -> freeLayout    (APOC-V246 ranges; Shaun's title x:-20 stands)
+     apocVttPerimeterV2      -> perimeter     (APOC-V246 repo-float ranges)
+     apocVttBtnParkV1        -> btnPark       (APOC-V246 ranges)
+     apocVttPanelParkV1      -> panelPark     (APOC-V246 ranges)
+     apocVttLibSubOrderV1    -> libSubOrder   (APOC-V246 park ranges)
+     apocVttTuckV1           -> tuck          (verbatim — symbolic tab edges/orders)
+     apocVttTuckPhoneV1      -> tuckPhone     (verbatim)
+     apocVttInnerOrder255    -> innerOrder    (verbatim)
+     apocVttSharedDefaultV1  -> sharedDefault (zoomBar/mapSize subfields clamped)
+     apocvtt:placecard-pos   -> cardPos       (the card float's own [0, IW-60]x[0, IH-40])
+     apocVttLibBoxH          -> libBoxH       (verbatim string)
+     apocVttLibPhoneW        -> libPhoneW     (verbatim string)
+     apocVttFsFloatV1        -> fsFloat       (verbatim)
+   Migration is LOSSLESS for every seat Shaun actually has: values
+   are stored as their raw strings, and the migration clamp is the
+   identity on every in-range record (his zoom {l:0,t:285} — whose
+   grabbed string is tail-corrupted in the seed — is repaired to
+   exactly that seat; his tray {148,64,304,520}, his tab seats and
+   his layout records carry over byte-for-byte). */
+(function(){
+  "use strict";
+  if (new URLSearchParams(location.search).get("display")) return;
+  var LS = null;
+  try { LS = window.localStorage; if (!LS) return; } catch(e){ return; }
+  var _get = Storage.prototype.getItem, _set = Storage.prototype.setItem, _del = Storage.prototype.removeItem;
+  function rawGet(k){ try { return _get.call(LS, k); } catch(e){ return null; } }
+  function rawSet(k, v){ try { _set.call(LS, k, v); } catch(e){} }
+  function clampN(v, lo, hi){ return Math.max(lo, Math.min(hi, v)); }
+  function num(v){ return typeof v === "number" && isFinite(v); }
+
+  var stats = { migrated: false, gateWrites: 0, gateClamps: 0, removals: 0, stageWrites: 0, cardDocks: 0 };
+
+  /* bootPhase: from page start until the stage's width has been
+     observed STABLE across two boot passes (hard cap 6 s), the
+     stage's clientWidth is TRANSIENT — the panel has not reached
+     its settled width — so pricing a zoom seat against the live
+     stage formula in that window corrupts legal seats (convicted
+     in the land327 battery, probe454 L6: the shared-default zoom
+     seat {851,0} came back {833,0} after a boot-time write was
+     priced against a 1217px-wide transient stage; the corrupting
+     writes are the main script's own early default/restore writes,
+     not just the migration). During bootPhase, zoom seats clamp
+     to the window fallback bounds only — APOC-V246's own boot
+     ranges. The stage formula governs every write after the
+     stage is observed settled. */
+  var bootPhase = true;
+
+  /* APOC-V314 FIX 2 (land327 re-proof, probe459 conviction — the
+     drag shield): while a pointer is down on the map, the owner
+     writes NO geometry at all — applyStage() and cardEvaluate()
+     defer to pointerup. Proven on the candidate under load: a draw
+     drag that normally spans ~1 s stretches to 6–17 s of page time,
+     and any owner-originated stage write (which resizes the map
+     container) or view write landing inside that window kills the
+     in-progress creation — the drag's mouseup meets moved geometry,
+     the item never reaches saveDraw, and it is absent from the
+     store (the probe reports it as id=null; the v3.10 id machinery
+     is untouched and every item that IS created carries its id).
+     land326 has no owner writing geometry in this window and is
+     clean under the same load. With the shield, the geometry a
+     drag starts against is the geometry it ends against, by
+     construction — at any point after boot, under any load. */
+  var dragActive314 = false, deferred314 = false, dragShieldTimer314 = 0;
+
+  /* ---------------- geometry sources (the seat systems' own) ---------------- */
+  function zoomBounds(){
+    var IW = window.innerWidth || 1366, IH = window.innerHeight || 768;
+    var fb = { maxL: Math.max(0, IW), maxT: Math.max(0, IH + 400) }; /* APOC-V246 sanZoom window bound — the fallback while stage geometry is not live yet */
+    if (bootPhase) return fb;
+    var bar = document.getElementById("zoomBar"), el = document.getElementById("apocMap");
+    if (!bar || !el || !el.parentElement) return fb;
+    var side = el.parentElement, st = side.parentElement;
+    var sw = st ? st.clientWidth : 0;
+    if (!sw || !bar.offsetWidth) return fb;
+    return { maxL: Math.max(0, sw - bar.offsetWidth), maxT: Math.max(0, side.clientHeight + 44 - bar.offsetHeight) };
+  }
+  function clampZoomRec(rec){
+    if (!rec || typeof rec !== "object" || !num(rec.l) || !num(rec.t)) return { v: rec, changed: false };
+    var b = zoomBounds();
+    var l = Math.round(clampN(rec.l, 0, b.maxL)), t = Math.round(clampN(rec.t, 0, b.maxT));
+    if (l === rec.l && t === rec.t) return { v: rec, changed: false };
+    var out = {}; for (var k in rec) out[k] = rec[k]; out.l = l; out.t = t;
+    return { v: out, changed: true };
+  }
+  function clampTrayRec(rec){
+    if (!rec || typeof rec !== "object") return { v: rec, changed: false };
+    var vw = window.innerWidth || 1366, vh = window.innerHeight || 768;
+    var out = null;
+    function ch(field, nv){ if (num(rec[field]) && rec[field] !== nv){ if (!out){ out = {}; for (var k in rec) out[k] = rec[k]; } out[field] = nv; } }
+    var w = num(rec.w) ? Math.min(rec.w, vw) : rec.w;
+    var h = num(rec.h) ? Math.min(rec.h, vh) : rec.h;
+    ch("w", w); ch("h", h);
+    var ew = num(w) ? w : 304, eh = num(h) ? h : 520;
+    if (num(rec.l)) ch("l", Math.round(clampN(rec.l, 0, Math.max(0, vw - ew))));
+    if (num(rec.t)) ch("t", Math.round(clampN(rec.t, 0, Math.max(0, vh - eh))));
+    return out ? { v: out, changed: true } : { v: rec, changed: false };
+  }
+  function clampMapSizeRec(ms){
+    if (!ms || typeof ms !== "object") return { v: ms, changed: false };
+    var out = null;
+    function ch(field, nv){ if (num(ms[field]) && ms[field] !== nv){ if (!out){ out = {}; for (var k in ms) out[k] = ms[k]; } out[field] = nv; } }
+    if (num(ms.w)) ch("w", Math.round(clampN(ms.w, 320, 2600)));
+    if (num(ms.h) && ms.h >= 380) ch("h", Math.round(clampN(ms.h, 380, 1600)));
+    if (num(ms.l)) ch("l", Math.round(clampN(ms.l, 0, 1200)));
+    if (num(ms.t)) ch("t", Math.round(clampN(ms.t, 0, 1200)));
+    return out ? { v: out, changed: true } : { v: ms, changed: false };
+  }
+  function clampFreeLayoutRec(f){
+    if (!f || typeof f !== "object") return { v: f, changed: false };
+    var changed = false, out = {};
+    Object.keys(f).forEach(function(id){
+      var r = f[id];
+      if (!r || typeof r !== "object"){ out[id] = r; return; }
+      var o = {};
+      Object.keys(r).forEach(function(k2){
+        var v = r[k2];
+        if (k2 === "x" && num(v)){ o.x = Math.round(clampN(v, -2000, 4000)); if (o.x !== v) changed = true; }
+        else if (k2 === "y" && num(v)){ o.y = Math.round(clampN(v, 0, 4000)); if (o.y !== v) changed = true; }
+        else if (k2 === "w" && num(v)){ o.w = Math.round(clampN(v, 0, 2600)); if (o.w !== v) changed = true; }
+        else if (k2 === "h" && num(v)){ o.h = Math.round(clampN(v, 0, 1600)); if (o.h !== v) changed = true; }
+        else if (k2 === "x" || k2 === "y" || k2 === "w" || k2 === "h"){ changed = true; }
+        else o[k2] = v;
+      });
+      out[id] = o;
+    });
+    return { v: out, changed: changed };
+  }
+  function clampPerimeterRec(p){
+    if (!p || typeof p !== "object") return { v: p, changed: false };
+    var changed = false, out = {};
+    Object.keys(p).forEach(function(k){
+      var park = p[k];
+      if (k === "repo" && park && park.float && num(park.float.x) && num(park.float.y)){
+        var w0 = num(park.float.w) ? Math.round(clampN(park.float.w, 72, 2600)) : 224;
+        var x0 = Math.round(clampN(Math.round(park.float.x), -2000, 4000));
+        var y0 = Math.round(clampN(park.float.y, 0, 4000));
+        if (x0 !== park.float.x || y0 !== park.float.y || w0 !== park.float.w) changed = true;
+        out.repo = { float: { x: x0, y: y0, w: w0 } };
+      } else out[k] = park;
+    });
+    return { v: out, changed: changed };
+  }
+  function clampBtnParkRec(s){
+    if (!s || typeof s !== "object") return { v: s, changed: false };
+    var changed = false, out = {};
+    Object.keys(s).forEach(function(k){
+      var r = s[k];
+      if (!r || typeof r !== "object"){ changed = true; return; }
+      if (("x" in r) || ("y" in r)){
+        if (!num(r.x) || !num(r.y) || Math.abs(r.x) > 5000 || Math.abs(r.y) > 5000){ changed = true; return; }
+        var nx = Math.round(clampN(r.x, -500, 5000)), ny = Math.round(clampN(r.y, -500, 5000));
+        if (nx !== r.x || ny !== r.y) changed = true;
+        var c = {}; for (var kk in r) c[kk] = r[kk]; c.x = nx; c.y = ny; out[k] = c;
+      } else out[k] = r;
+    });
+    return { v: out, changed: changed };
+  }
+  function clampPanelParkRec(s){
+    if (!s || typeof s !== "object") return { v: s, changed: false };
+    var changed = false, out = {};
+    Object.keys(s).forEach(function(k){
+      var r = s[k];
+      if (!r || !num(r.dx) || !num(r.dy) || Math.abs(r.dx) > 3000 || Math.abs(r.dy) > 3000){ changed = true; return; }
+      var ndx = Math.round(clampN(r.dx, -3000, 3000)), ndy = Math.round(clampN(r.dy, -3000, 3000));
+      if (ndx !== r.dx || ndy !== r.dy) changed = true;
+      out[k] = { dx: ndx, dy: ndy };
+    });
+    return { v: out, changed: changed };
+  }
+  function clampLibSubRec(s){
+    if (!s || typeof s !== "object") return { v: s, changed: false };
+    var changed = false;
+    try {
+      if (s.parks) Object.keys(s.parks).forEach(function(ck){
+        var m = s.parks[ck]; if (!m || typeof m !== "object") return;
+        Object.keys(m).forEach(function(uid){
+          var r = m[uid];
+          if (!r || !num(r.x) || !num(r.y) || Math.abs(r.x) > 5000 || Math.abs(r.y) > 5000){ delete m[uid]; changed = true; }
+          else { var nx = Math.round(clampN(r.x, -500, 5000)), ny = Math.round(clampN(r.y, -500, 5000)); if (nx !== r.x || ny !== r.y) changed = true; r.x = nx; r.y = ny; }
+        });
+      });
+    } catch(e){}
+    return { v: s, changed: changed };
+  }
+  function clampCardPosRec(rec){
+    if (!rec || typeof rec !== "object" || !num(rec.x) || !num(rec.y)) return { v: rec, changed: false };
+    var IW = window.innerWidth || 1366, IH = window.innerHeight || 768;
+    var x = Math.round(clampN(rec.x, 0, Math.max(0, IW - 60))), y = Math.round(clampN(rec.y, 0, Math.max(0, IH - 40)));
+    if (x === rec.x && y === rec.y) return { v: rec, changed: false };
+    var out = {}; for (var k in rec) out[k] = rec[k]; out.x = x; out.y = y;
+    return { v: out, changed: true };
+  }
+  function clampSharedDefaultRec(c){
+    if (!c || typeof c !== "object") return { v: c, changed: false };
+    var changed = false, out = {}; for (var k in c) out[k] = c[k];
+    if (out.zoomBar){ var z = clampZoomRec(out.zoomBar); if (z.changed){ out.zoomBar = z.v; changed = true; } }
+    if (out.mapSize){ var m = clampMapSizeRec(out.mapSize); if (m.changed){ out.mapSize = m.v; changed = true; } }
+    return { v: out, changed: changed };
+  }
+  var CLAMPS = { zoom: clampZoomRec, tray: clampTrayRec, mapSize: clampMapSizeRec, freeLayout: clampFreeLayoutRec,
+    perimeter: clampPerimeterRec, btnPark: clampBtnParkRec, panelPark: clampPanelParkRec, libSub: clampLibSubRec,
+    cardPos: clampCardPosRec, sharedDefault: clampSharedDefaultRec, raw: null, rawstr: null };
+  var FAMS = {
+    zoombar:      { key: "apocVttZoomBarV1",       kind: "zoom" },
+    zoombarPhone: { key: "apocVttZoomBarPhoneV1",  kind: "zoom" },
+    tray:         { key: "apocVttPinsTrayV1",      kind: "tray" },
+    mapSize:      { key: "apocVttMapSizeV1",       kind: "mapSize" },
+    freeLayout:   { key: "apocVttFreeLayoutV1",    kind: "freeLayout" },
+    perimeter:    { key: "apocVttPerimeterV2",     kind: "perimeter" },
+    btnPark:      { key: "apocVttBtnParkV1",       kind: "btnPark" },
+    panelPark:    { key: "apocVttPanelParkV1",     kind: "panelPark" },
+    libSubOrder:  { key: "apocVttLibSubOrderV1",   kind: "libSub" },
+    tuck:         { key: "apocVttTuckV1",          kind: "raw" },
+    tuckPhone:    { key: "apocVttTuckPhoneV1",     kind: "raw" },
+    innerOrder:   { key: "apocVttInnerOrder255",   kind: "raw" },
+    sharedDefault:{ key: "apocVttSharedDefaultV1", kind: "sharedDefault" },
+    cardPos:      { key: "apocvtt:placecard-pos",  kind: "cardPos" },
+    libBoxH:      { key: "apocVttLibBoxH",         kind: "rawstr" },
+    libPhoneW:    { key: "apocVttLibPhoneW",       kind: "rawstr" },
+    fsFloat:      { key: "apocVttFsFloatV1",       kind: "raw" }
+  };
+  var KEY2FAM = {};
+  Object.keys(FAMS).forEach(function(n){ KEY2FAM[FAMS[n].key] = n; });
+
+  /* ---------------- the seat store + one-time migration read ---------------- */
+  var STORE_KEY = "apocVttLayoutV1";
+  var store = null;
+  function saveStore(){ if (store) rawSet(STORE_KEY, JSON.stringify(store)); }
+  function repairParse(str){
+    try { return JSON.parse(str); } catch(e){}
+    if (typeof str !== "string") return undefined;
+    var s = str.replace(/[\uFFFD\s]+$/g, "");
+    try { return JSON.parse(s); } catch(e){}
+    var openB = (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
+    var openA = (s.match(/\[/g) || []).length - (s.match(/\]/g) || []).length;
+    var t = s;
+    while (openA-- > 0) t += "]";
+    while (openB-- > 0) t += "}";
+    try { return JSON.parse(t); } catch(e){}
+    return undefined;
+  }
+  function migrateString(famName, raw){
+    var kind = FAMS[famName].kind;
+    if (kind === "rawstr" || raw == null) return raw;
+    var parsed = repairParse(raw);
+    if (parsed === undefined) return raw; /* unparseable stays verbatim — the consumers' own failure mode, unchanged */
+    var clampFn = CLAMPS[kind];
+    var res = clampFn ? clampFn(parsed) : { v: parsed, changed: false };
+    var rawParses = true; try { JSON.parse(raw); } catch(e){ rawParses = false; }
+    if (res.changed || !rawParses) return JSON.stringify(res.v);
+    return raw; /* in-range and intact: byte-for-byte carry-over */
+  }
+  function materialize(){
+    if (!store) return;
+    Object.keys(store.fam).forEach(function(n){
+      if (FAMS[n]) rawSet(FAMS[n].key, store.fam[n]);
+    });
+  }
+  (function initStore(){
+    var existing = null;
+    try { var s = rawGet(STORE_KEY); if (s){ var o = JSON.parse(s); if (o && typeof o === "object" && o.fam && typeof o.fam === "object") existing = o; } } catch(e){}
+    if (existing){ store = existing; materialize(); return; }
+    store = { v: 1, fam: {} };
+    Object.keys(FAMS).forEach(function(n){
+      var raw = rawGet(FAMS[n].key);
+      if (raw != null) store.fam[n] = migrateString(n, raw);
+    });
+    stats.migrated = true;
+    saveStore();
+    materialize();
+  })();
+
+  /* ---------------- the write gate: clamp-at-write for every seat writer ---------------- */
+  var inGate = false;
+  Storage.prototype.setItem = function(k, v){
+    if (this !== LS || inGate || typeof k !== "string" || !KEY2FAM[k]) return _set.apply(this, arguments);
+    var famName = KEY2FAM[k], kind = FAMS[famName].kind, str = String(v), out = str;
+    if (kind !== "rawstr"){
+      var p; try { p = JSON.parse(str); } catch(e){ p = undefined; }
+      if (p !== undefined && p && typeof p === "object" && CLAMPS[kind]){
+        var c = CLAMPS[kind](p);
+        if (c.changed){ out = JSON.stringify(c.v); stats.gateClamps++; }
+      }
+    }
+    inGate = true;
+    try { _set.call(LS, k, out); if (store){ store.fam[famName] = out; saveStore(); } stats.gateWrites++; }
+    finally { inGate = false; }
+  };
+  Storage.prototype.removeItem = function(k){
+    if (this !== LS || inGate || typeof k !== "string" || !KEY2FAM[k]) return _del.apply(this, arguments);
+    inGate = true;
+    try { _del.call(LS, k); if (store && (KEY2FAM[k] in store.fam)){ delete store.fam[KEY2FAM[k]]; saveStore(); } stats.removals++; }
+    finally { inGate = false; }
+  };
+
+  /* ---------------- stage height: the owner's core (APOC-V284's computation) ---------------- */
+  var panel = document.getElementById("mapPanel");
+  var stage = panel ? panel.querySelector(".map-stage") : null;
+  var owned = false, lastTarget = null;
+  function stoodDown(){
+    return !!document.fullscreenElement ||
+      document.body.classList.contains("map-expanded") ||
+      document.body.classList.contains("map-fs") ||
+      document.body.classList.contains("displaying");
+  }
+  function chromeH(){
+    var sum = 0;
+    var els = [document.getElementById("titleBubble"), document.getElementById("ctlRow"), panel.querySelector(".map-tools")];
+    for (var i = 0; i < els.length; i++){
+      var el = els[i]; if (!el) continue;
+      var cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.position === "absolute" || cs.position === "fixed") continue;
+      var r = el.getBoundingClientRect(); if (!r.height) continue;
+      sum += r.height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+    }
+    return sum;
+  }
+  function computeTarget(){
+    if (!panel || !stage) return null;
+    var panelH = panel.clientHeight; if (!panelH) return null;
+    var pcs = getComputedStyle(panel);
+    var scs = getComputedStyle(stage);
+    var gap = (parseFloat(pcs.paddingTop) || 0) + (parseFloat(pcs.paddingBottom) || 0)
+      + (parseFloat(scs.marginTop) || 0) + (parseFloat(scs.marginBottom) || 0);
+    var target = panelH - chromeH() - gap;
+    var fl = panelH >= 480 ? 320 : 200;
+    return Math.round(target < fl ? fl : target);
+  }
+  function stageTarget(){ var h = computeTarget(); if (h != null) lastTarget = h; return h; }
+  function applyStage(){
+    if (!panel || !stage) return;
+    if (dragActive314){ deferred314 = true; return; } /* drag shield: no geometry writes mid-drag */
+    if (stoodDown()){
+      if (owned){ stage.style.removeProperty("height"); stage.style.removeProperty("flex"); owned = false; }
+      return;
+    }
+    var h = computeTarget(); if (h == null) return;
+    lastTarget = h;
+    if (!owned){ stage.style.setProperty("flex", "0 0 auto", "important"); owned = true; }
+    if (stage.style.height !== h + "px"){
+      stage.style.height = h + "px"; stats.stageWrites++;
+      try { if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false }); } catch(e) {}
+    }
+  }
+  var stageRaf = 0;
+  function scheduleStage(){ if (!stageRaf) stageRaf = requestAnimationFrame(function(){ stageRaf = 0; applyStage(); }); }
+
+  /* ---------------- place-card presentation: APOC-V285–V287 folded in ---------------- */
+  var card = document.getElementById("placeCard");
+  var CLS = "apoc-dock285";
+  var docked = false, cardRaf = 0;
+  var verdict = null, verdictSig = null;
+  function ctxSig(){
+    var s = "";
+    document.querySelectorAll(".ctl-set").forEach(function(st){ s += st.hidden ? "0" : "1"; });
+    var repo = document.querySelector(".map-repo");
+    s += (repo && repo.hidden) ? "0" : "1";
+    s += "|" + window.innerWidth + "x" + window.innerHeight + "|" + Math.round(card.getBoundingClientRect().height);
+    return s;
+  }
+  function undock(){
+    verdict = null; verdictSig = null;
+    if (!docked) return;
+    docked = false;
+    card.classList.remove(CLS);
+    card.style.left = ""; card.style.width = ""; card.style.bottom = "";
+  }
+  function panelBox(){
+    var pr = panel.getBoundingClientRect();
+    if (!pr.width) return null;
+    var cs = getComputedStyle(panel);
+    var il = (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0);
+    var ir = (parseFloat(cs.borderRightWidth) || 0) + (parseFloat(cs.paddingRight) || 0);
+    var w = pr.width - il - ir;
+    return w > 0 ? { left: pr.left + il, width: w } : null;
+  }
+  function dock(){
+    var pb = panelBox();
+    if (!pb) return;
+    card.classList.add(CLS);
+    card.style.left = Math.round(pb.left) + "px";
+    card.style.width = Math.round(pb.width) + "px";
+    card.style.bottom = "10px";
+    docked = true; stats.cardDocks++;
+    verdict = "dock"; verdictSig = null;
+  }
+  function cardEvaluate(fromSync){
+    cardRaf = 0;
+    if (!card || !panel) return;
+    if (dragActive314){ deferred314 = true; return; } /* drag shield: a dock/undock is a geometry write too */
+    if (card.hidden || card.classList.contains("floating") || stoodDown()){ undock(); return; }
+    var sig = ctxSig();
+    if (verdict === "flow" && sig !== verdictSig) verdict = null;
+    if (docked){
+      var pb = panelBox();
+      if (pb){ card.style.left = Math.round(pb.left) + "px"; card.style.width = Math.round(pb.width) + "px"; }
+      return;
+    }
+    if (verdict === "flow") return;
+    var r = card.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    if (fromSync === true){
+      /* Mutation-time pass (APOC-V286's no-dip engager, APOC-V287's
+         dock-only rule): decide on the owner's own predicted settled
+         height — stageTarget() IS the owner's computation, not a
+         replica. (This owner's stage pass runs first in the same
+         microtask checkpoint, so the prediction and the settled
+         height normally already agree.) */
+      if (card.parentElement && card.parentElement.id === "ctlRow"){
+        var th = stageTarget();
+        if (th != null){
+          var shNow = stage.getBoundingClientRect().height;
+          var predTop = r.top - (shNow - th);
+          var predVisH = Math.min(predTop + r.height, window.innerHeight) - Math.max(predTop, 0);
+          if (predVisH < Math.min(r.height, 200) - 2) dock();
+        }
+      }
+      return;
+    }
+    /* Deferred pass (APOC-V287 settle gate): render a verdict only
+       on SETTLED geometry — the stage height equal to this owner's
+       own target. */
+    var th2 = stageTarget();
+    if (th2 == null) return;
+    if (Math.abs(stage.getBoundingClientRect().height - th2) > 0.6) return;
+    var visH = Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0);
+    if (visH < Math.min(r.height, 200) - 2){ dock(); return; }
+    verdict = "flow"; verdictSig = sig;
+  }
+  function scheduleCard(){
+    if (!cardRaf) cardRaf = requestAnimationFrame(function(){ cardEvaluate(false); });
+    [150, 450, 900, 1600].forEach(function(ms){ setTimeout(function(){ cardEvaluate(false); }, ms); });
+  }
+
+  /* ---------------- wiring: stage + card observers (stage first) ----------------
+     The .ctl-set elements are created by the main script AFTER this
+     owner runs, so set observation attaches lazily: attachSets()
+     runs now, again when the card wiring lands, on every body
+     childList batch (set creation included), and on the boot
+     passes — a set is observed by both observers from the moment
+     it exists, before any hidden flip can reach it. */
+  var moStage = null, moCard = null;
+  function attachSets(){
+    document.querySelectorAll(".ctl-set").forEach(function(st){
+      if (moStage && !st.dataset.l314s){ st.dataset.l314s = "1"; try { moStage.observe(st, { attributes: true, attributeFilter: ["hidden"] }); } catch(e){} }
+      if (moCard && !st.dataset.l314c){ st.dataset.l314c = "1"; try { moCard.observe(st, { attributes: true, attributeFilter: ["hidden"] }); } catch(e){} }
+    });
+  }
+  if (panel && stage){
+    try {
+      /* APOC-V314 FIX (land327 re-proof, probe459 conviction): while
+         bootPhase lasts, mutation-driven stage passes are COALESCED
+         through the rAF backstop instead of writing synchronously in
+         the microtask. The owner's synchronous microtask writes during
+         the boot mutation storm (the main script flipping hidden bits
+         as it builds) re-priced the stage at a cadence the base never
+         produced (APOC-V284 coalesced every pass through rAF), and
+         each write's invalidateSize + layout shift fed the map-size
+         watch / size-truth re-centre cascade while the saved-view
+         restore was still settling. The timed boot passes below still
+         apply directly, exactly as V284's did. The moment bootPhase
+         ends, this observer applies synchronously again — the
+         GH-V284-CLOSE-LAG behaviour is untouched post-boot.
+         APOC-V314 FIX 2 (the same conviction, re-proven under load)
+         completes this at the drag itself: the drag shield (see
+         dragActive314 above and the shield wiring at the boot
+         passes) plus the deletion of the owner's boot view-settle
+         apparatus — the item loss was owner geometry/view traffic
+         landing inside a load-stretched drag, not the id machinery
+         (byte-identical to the base; every created item carries its
+         minted id). */
+      moStage = new MutationObserver(function(){ if (bootPhase) scheduleStage(); else applyStage(); });
+      if (card) moStage.observe(card, { attributes: true, attributeFilter: ["hidden"] });
+      var repoS = document.querySelector(".map-repo"); if (repoS) moStage.observe(repoS, { attributes: true, attributeFilter: ["hidden"] });
+      attachSets();
+      /* APOC-V314 (convicted in the land327 battery, probe463-diag):
+         APOC-V282 re-homes the place card into #ctlRow as a childList
+         MOVE in a MutationObserver registered after this owner's —
+         so at the card's hidden flip the owner's stage pass still
+         prices the card in its old home, and after the move nothing
+         re-triggered a recompute: the stage never priced the in-flow
+         card, the card decision's settle gate then blocked every
+         verdict, and the card sat below the fold undocked forever
+         (ctlRow 394 -> 521, card bottom 874 in a 768 viewport,
+         stable 3 s; land326 docks it — its V282 observer is
+         registered BEFORE V284/V287, so its sync pass sees the
+         re-homed card). The owner therefore also watches childList:
+         when a batch moves the card, the card's sync decision runs
+         FIRST (the APOC-V286 prediction, on the re-homed card —
+         a dock leaves the flow before the stage is priced, exactly
+         as on land326), and the stage pass prices what remains. */
+      new MutationObserver(function(muts){
+        if (!card) return;
+        var cardMoved = false, setsTouched = false;
+        for (var i = 0; i < muts.length; i++){
+          var mu = muts[i];
+          if (mu.target && (mu.target === card.parentElement || mu.target.id === "ctlRow")) cardMoved = true;
+          var lists = [mu.addedNodes, mu.removedNodes];
+          for (var j = 0; j < 2; j++) for (var k = 0; k < lists[j].length; k++){
+            var nd = lists[j][k];
+            if (nd === card) cardMoved = true;
+            /* APOC-V314 FIX 2 (boot tax): attachSets() ran a full
+               querySelectorAll on EVERY childList batch of the boot
+               mutation storm — pure main-thread tax in the window
+               where the first draw lands. It now runs only when a
+               batch can actually contain a set: the node is a
+               .ctl-set, is #placeCard/#ctlRow, or contains one. */
+            if (!setsTouched && nd && nd.nodeType === 1){
+              if (nd.classList && (nd.classList.contains("ctl-set") || nd.id === "placeCard" || nd.id === "ctlRow")) setsTouched = true;
+              else if (nd.querySelector && nd.querySelector(".ctl-set")) setsTouched = true;
+            }
+          }
+        }
+        if (setsTouched || cardMoved) attachSets();
+        if (cardMoved){ cardEvaluate(true); if (bootPhase) scheduleStage(); else applyStage(); scheduleCard(); } /* bootPhase coalescing: see the moStage note above */
+      }).observe(document.body, { childList: true, subtree: true });
+    } catch(e) {}
+    document.addEventListener("click", function(){ scheduleStage(); setTimeout(scheduleStage, 350); }, true);
+    window.addEventListener("resize", function(){ applyStage(); scheduleStage(); });
+    document.addEventListener("fullscreenchange", function(){ setTimeout(applyStage, 80); });
+    /* APOC-V314 FIX 2, second half (same probe459 conviction): the
+       drag shield's wiring, REPLACING this owner's earlier boot
+       view-settle apparatus (settleView314 — repeated setView
+       re-asserts at the late boot passes, at 6 s, at 9.8 s, and on a
+       ResizeObserver trailing edge up to 20 s). That apparatus was
+       itself owner-originated view traffic inside the first-draw
+       window: measured centres at first-draw time on the candidate
+       random-walked thousands of units off the saved view
+       ([5533.9, 1383.2], [5692.6, 1383.2], [-2153, 1383] vs the saved
+       [2546.3, 1383.2]) while the base, whose only re-assert is the
+       page's own one-shot 9.5 s settle, sits at or near the saved
+       view — and a setView landing inside a load-stretched drag is
+       one of the writes that can kill the creation. The apparatus
+       is DELETED: the page's own 9.5 s boot settle (present on the
+       base, untouched) is again the only view re-assert, exactly as
+       on land326. What stands here instead is the shield: a
+       pointerdown on the map raises it, pointerup/pointercancel/
+       blur lowers it and flushes whatever geometry work deferred
+       while it was up, and a 45 s safety timer guarantees the
+       shield can never stick. */
+    (function(){
+      var mel = document.getElementById("apocMap"); if (!mel) return;
+      function flush314(){
+        dragActive314 = false;
+        if (dragShieldTimer314){ clearTimeout(dragShieldTimer314); dragShieldTimer314 = 0; }
+        if (deferred314){ deferred314 = false; applyStage(); scheduleCard(); }
+      }
+      mel.addEventListener("pointerdown", function(){
+        dragActive314 = true;
+        if (dragShieldTimer314) clearTimeout(dragShieldTimer314);
+        dragShieldTimer314 = setTimeout(flush314, 45000); /* safety: never stick */
+      }, true);
+      /* The flush is deferred one task so the pointer's own mouseup
+         (the event the draw creation handlers key off) is always
+         delivered against the shielded geometry first. */
+      function queueFlush314(){ setTimeout(flush314, 0); }
+      window.addEventListener("pointerup", queueFlush314, true);
+      window.addEventListener("pointercancel", queueFlush314, true);
+      window.addEventListener("blur", queueFlush314);
+    })();
+    function endBootPhase(){ bootPhase = false; }
+    var lastStageW = 0;
+    [350, 1100, 2400, 4800].forEach(function(ms){ setTimeout(function(){
+      attachSets(); applyStage();
+      var w = stage ? stage.clientWidth : 0;
+      if (w > 0 && w === lastStageW) endBootPhase(); /* stage width stable across two passes: settled */
+      lastStageW = w;
+    }, ms); });
+    setTimeout(function(){ endBootPhase(); }, 6000); /* hard cap */
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", applyStage); else applyStage();
+  }
+  if (card && panel){
+    document.addEventListener("click", scheduleCard, true);
+    window.addEventListener("resize", scheduleCard);
+    document.addEventListener("fullscreenchange", function(){ setTimeout(function(){ cardEvaluate(false); }, 80); });
+    try {
+      moCard = new MutationObserver(function(){ cardEvaluate(true); scheduleCard(); });
+      moCard.observe(card, { attributes: true, attributeFilter: ["hidden"] });
+      var repoC = document.querySelector(".map-repo"); if (repoC) moCard.observe(repoC, { attributes: true, attributeFilter: ["hidden"] });
+      attachSets();
+    } catch(e) {}
+    try {
+      if (window.ResizeObserver) new ResizeObserver(function(){ if (!docked && !cardRaf) cardRaf = requestAnimationFrame(function(){ cardEvaluate(false); }); }).observe(card);
+    } catch(e) {}
+    document.addEventListener("pointerdown", function(ev){
+      if (!docked || !ev.target || !card.contains(ev.target)) return;
+      if (!ev.target.closest || !ev.target.closest("h4") || ev.target.closest("button")) return;
+      var r = card.getBoundingClientRect();
+      undock();
+      card.classList.add("floating");
+      card.style.left = Math.round(r.left) + "px";
+      card.style.top = Math.round(r.top) + "px";
+      card.style.width = Math.round(r.width) + "px";
+    }, true);
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scheduleCard); else scheduleCard();
+  }
+
+  /* ---------------- phone zoom-bar default seat (APOC-V305's duty, folded in) ---------------- */
+  (function phoneDefault(){
+    var bar = document.getElementById("zoomBar");
+    if (!bar) return;
+    var phoneRecAtLoad = (store && store.fam.zoombarPhone != null) ? store.fam.zoombarPhone : null;
+    function phoneMq(){ return window.matchMedia("(max-width: 820px)").matches; }
+    function blocked(){
+      return !!document.fullscreenElement || document.body.classList.contains("displaying") ||
+        document.body.classList.contains("map-expanded") || document.body.classList.contains("map-fs");
+    }
+    function sharedZoomSeat(){
+      try {
+        var raw = (store && store.fam.sharedDefault != null) ? store.fam.sharedDefault : rawGet("apocVttSharedDefaultV1");
+        var sd = JSON.parse(raw || "null");
+        if (sd && sd.layout){ var t = JSON.parse(sd.layout); if (t && t.zoomBar && typeof t.zoomBar.l === "number") return t.zoomBar; }
+      } catch(err){}
+      return null;
+    }
+    var poll = setInterval(function(){
+      try {
+        if (!phoneMq() || blocked() || !bar.offsetWidth || !bar.style.left) return;
+        clearInterval(poll);
+        var fromDefault;
+        if (phoneRecAtLoad === null) fromDefault = true;
+        else {
+          var sz = sharedZoomSeat(), pr = null;
+          try { pr = JSON.parse(phoneRecAtLoad); } catch(err){}
+          fromDefault = !!(sz && pr && pr.l === sz.l && pr.t === sz.t);
+        }
+        if (!fromDefault) return;
+        if (bar.offsetTop >= 100) return;
+        var el = document.getElementById("apocMap"); if (!el || !el.parentElement) return;
+        var sideH = el.parentElement.clientHeight;
+        var t = Math.max(0, sideH - bar.offsetHeight - 12);
+        bar.style.left = "0px"; bar.style.top = t + "px";
+        LS.setItem("apocVttZoomBarPhoneV1", JSON.stringify({ l: 0, t: t }));
+      } catch(err){}
+    }, 200);
+    setTimeout(function(){ clearInterval(poll); }, 6000);
+  })();
+
+  /* ---------------- the owner's public face ---------------- */
+  window.Layout314 = {
+    version: "APOC-V314",
+    storeKey: STORE_KEY,
+    families: Object.keys(FAMS),
+    stats: stats,
+    getSeat: function(famName){
+      if (!FAMS[famName]) return null;
+      var raw = (store && store.fam[famName] != null) ? store.fam[famName] : rawGet(FAMS[famName].key);
+      if (raw == null) return null;
+      try { return JSON.parse(raw); } catch(e){ return null; }
+    },
+    getSeatRaw: function(famName){
+      if (!FAMS[famName]) return null;
+      return (store && store.fam[famName] != null) ? store.fam[famName] : rawGet(FAMS[famName].key);
+    },
+    setSeat: function(famName, val){
+      if (!FAMS[famName]) return false;
+      LS.setItem(FAMS[famName].key, typeof val === "string" ? val : JSON.stringify(val));
+      return true;
+    },
+    removeSeat: function(famName){
+      if (!FAMS[famName]) return false;
+      LS.removeItem(FAMS[famName].key);
+      return true;
+    },
+    clampSeat: function(famName, rec){
+      if (!FAMS[famName]) return rec;
+      var fn = CLAMPS[FAMS[famName].kind];
+      return fn ? fn(rec).v : rec;
+    },
+    ownerStore: function(){ return store; },
+    stageTarget: stageTarget,
+    stageHeight: function(){ return lastTarget; },
+    applyStage: applyStage,
+    cardEvaluate: function(){ cardEvaluate(false); },
+    cardDocked: function(){ return docked; }
+  };
+})();
+</script>
+<script>
 "use strict";
 
 const SUPABASE_URL = "https://gjvebpbxggmumtslidej.supabase.co";
@@ -11671,7 +12411,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-16-1004";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-16-1459";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -13519,53 +14259,7 @@ function floorConnected(L, cols, rows){
 })();
 </script>
 
-<script>
-/* APOC-V301 (v3.01, 2026-11-15): GH-NEGCOORD-STATE — restore-time reseat
-   of the ZoomBar's saved seat. Shaun's saved seat record has repeatedly
-   been found outside the seat system's own legal range (l:-713 at the
-   2026-11-14 19:04 grab — wholly off the left edge; the boot sanitizer
-   only bounds it against the WINDOW, l up to innerWidth and t up to
-   innerHeight+400, which still leaves seats the stage can never show).
-   This block is the seat owner's own repair, run at layout restore: it
-   reads the active seat record (desktop / phone key, the same mq switch
-   loadPos/savePos use), computes the legal range from the seat system's
-   own geometry — the same stageW / side-height authorities sync() and
-   savePos() clamp against — shifts an out-of-range seat the minimum
-   distance back inside (saved top/edge character kept wherever it is
-   already legal), and writes the corrected seat back through the same
-   per-device record the drag system persists to, so the repair is
-   one-time and sticky: an in-range record is never rewritten, and no
-   per-load fight follows. Scope is the ZoomBar seat only; the zoom
-   engine, the perimeter/track system, and view restore are untouched. */
-(function(){
-  "use strict";
-  if (new URLSearchParams(location.search).get("display")) return;
-  var ZK_D = "apocVttZoomBarV1", ZK_P = "apocVttZoomBarPhoneV1";
-  function phoneMq(){ return window.matchMedia("(max-width: 820px)").matches; }
-  function reseat301(){
-    var bar = document.getElementById("zoomBar");
-    var el = document.getElementById("apocMap");
-    if (!bar || !el || !el.parentElement) return;
-    var key = phoneMq() ? ZK_P : ZK_D;
-    var rec = null;
-    try { rec = JSON.parse(localStorage.getItem(key) || "null"); } catch(e){}
-    if (!rec || typeof rec.l !== "number" || typeof rec.t !== "number" || !isFinite(rec.l) || !isFinite(rec.t)) return;
-    var side = el.parentElement;
-    var st = side.parentElement;
-    var stageW = st ? st.clientWidth : side.clientWidth;
-    if (!stageW) return;
-    var maxL = Math.max(0, stageW - (bar.offsetWidth || 0));
-    var maxT = Math.max(0, side.clientHeight + 44 - (bar.offsetHeight || 0));
-    var nl = Math.min(Math.max(0, Math.round(rec.l)), maxL);
-    var nt = Math.min(Math.max(0, Math.round(rec.t)), maxT);
-    if (nl === rec.l && nt === rec.t) return;
-    try { localStorage.setItem(key, JSON.stringify({ l: nl, t: nt })); } catch(e){}
-    if (bar.parentElement === side) { bar.style.left = nl + "px"; bar.style.top = nt + "px"; }
-  }
-  [450, 1600, 4200].forEach(function(ms){ setTimeout(reseat301, ms); });
-  window.addEventListener("resize", function(){ setTimeout(reseat301, 350); });
-})();
-</script>
+<!-- APOC-V314: the APOC-V301 boot reseat guard that stood here is DELETED as dead code — seats are clamped at write by the Layout owner (APOC-V314 block before the main script); there is nothing left to repair at boot. -->
 
 <script>
 (function(){
@@ -23296,7 +23990,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
       var elDk = document.getElementById("apocMap"), sideDk = elDk && elDk.parentElement, stDk = sideDk && sideDk.parentElement;
       if (stDk) { var maxLDk = Math.max(0, stDk.clientWidth - zb.offsetWidth); nl = Math.min(Math.max(0, nl), maxLDk); }
     } catch(e){}
-    try { localStorage.setItem(key, JSON.stringify({ l: nl, t: curT })); } catch(e){}
+    try { if (window.Layout314) window.Layout314.setSeat(key === ZK_P ? "zoombarPhone" : "zoombar", { l: nl, t: curT }); else localStorage.setItem(key, JSON.stringify({ l: nl, t: curT })); } catch(e){} /* APOC-V314: the dock rider writes through the Layout owner (clamp-at-write) */
     zb.style.left = nl + "px";
   }
   [7000, 11000].forEach(function(ms){ setTimeout(dockZoom, ms); });
@@ -23838,66 +24532,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
 <style>
 #mapPanel .map-stage{min-height:200px!important}
 </style>
-<script>
-(function(){
-  "use strict";
-  if (new URLSearchParams(location.search).get("display")) return;
-  var panel = document.getElementById("mapPanel");
-  var stage = panel ? panel.querySelector(".map-stage") : null;
-  if (!panel || !stage) return;
-  var owned = false, raf = 0;
-  function stoodDown(){
-    return !!document.fullscreenElement ||
-      document.body.classList.contains("map-expanded") ||
-      document.body.classList.contains("map-fs") ||
-      document.body.classList.contains("displaying");
-  }
-  function chromeH(){
-    var sum = 0;
-    var els = [document.getElementById("titleBubble"), document.getElementById("ctlRow"), panel.querySelector(".map-tools")];
-    for (var i = 0; i < els.length; i++){
-      var el = els[i]; if (!el) continue;
-      var cs = getComputedStyle(el);
-      if (cs.display === "none" || cs.position === "absolute" || cs.position === "fixed") continue;
-      var r = el.getBoundingClientRect(); if (!r.height) continue;
-      sum += r.height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
-    }
-    return sum;
-  }
-  function apply(){
-    raf = 0;
-    if (stoodDown()){
-      if (owned){ stage.style.removeProperty("height"); stage.style.removeProperty("flex"); owned = false; }
-      return;
-    }
-    var panelH = panel.clientHeight; if (!panelH) return;
-    var pcs = getComputedStyle(panel);
-    var scs = getComputedStyle(stage);
-    var gap = (parseFloat(pcs.paddingTop) || 0) + (parseFloat(pcs.paddingBottom) || 0)
-      + (parseFloat(scs.marginTop) || 0) + (parseFloat(scs.marginBottom) || 0);
-    var target = panelH - chromeH() - gap;
-    var fl = panelH >= 480 ? 320 : 200;
-    var h = Math.round(target < fl ? fl : target);
-    if (!owned){ stage.style.setProperty("flex", "0 0 auto", "important"); owned = true; }
-    if (stage.style.height !== h + "px"){
-      stage.style.height = h + "px";
-      try { if (window.map && window.map.invalidateSize) window.map.invalidateSize({ pan: false }); } catch(e) {}
-    }
-  }
-  function schedule(){ if (!raf) raf = requestAnimationFrame(apply); }
-  document.addEventListener("click", function(){ schedule(); setTimeout(schedule, 350); }, true);
-  window.addEventListener("resize", schedule);
-  document.addEventListener("fullscreenchange", function(){ setTimeout(schedule, 80); });
-  try {
-    var mo = new MutationObserver(schedule);
-    document.querySelectorAll(".ctl-set").forEach(function(st){ mo.observe(st, { attributes: true, attributeFilter: ["hidden"] }); });
-    var card = document.getElementById("placeCard"); if (card) mo.observe(card, { attributes: true, attributeFilter: ["hidden"] });
-    var repo = document.querySelector(".map-repo"); if (repo) mo.observe(repo, { attributes: true, attributeFilter: ["hidden"] });
-  } catch(e) {}
-  [350, 1100, 2400, 4800].forEach(function(ms){ setTimeout(schedule, ms); });
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", schedule); else schedule();
-})();
-</script>
+<!-- APOC-V314: the APOC-V284 stage-height owner script that stood here is FOLDED INTO the Layout owner (APOC-V314 block before the main script) — same computation, one writer, applied synchronously at mutation time (GH-V284-CLOSE-LAG). The floor CSS above stands. -->
 
 <!-- APOC-V285 (2026-11-13): GH-CARD-BELOW-FOLD — the place card must
      open INSIDE THE VIEWPORT. On v2.84 the card renders correctly
@@ -23970,162 +24605,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
 <style>
 #placeCard.apoc-dock285{position:fixed;z-index:1250;margin:0;max-height:320px;overflow-y:auto;box-shadow:0 18px 42px rgba(0,0,0,.5)}
 </style>
-<script>
-(function(){
-  "use strict";
-  if (new URLSearchParams(location.search).get("display")) return;
-  var card = document.getElementById("placeCard");
-  var panel = document.getElementById("mapPanel");
-  if (!card || !panel) return;
-  var CLS = "apoc-dock285";
-  var docked = false, raf = 0;
-  var verdict = null, verdictSig = null;
-  function ctxSig(){
-    var s = "";
-    document.querySelectorAll(".ctl-set").forEach(function(st){ s += st.hidden ? "0" : "1"; });
-    var repo = document.querySelector(".map-repo");
-    s += (repo && repo.hidden) ? "0" : "1";
-    s += "|" + window.innerWidth + "x" + window.innerHeight + "|" + Math.round(card.getBoundingClientRect().height);
-    return s;
-  }
-  function stoodDown(){
-    return !!document.fullscreenElement ||
-      document.body.classList.contains("map-expanded") ||
-      document.body.classList.contains("map-fs") ||
-      document.body.classList.contains("displaying");
-  }
-  function undock(){
-    verdict = null; verdictSig = null;
-    if (!docked) return;
-    docked = false;
-    card.classList.remove(CLS);
-    card.style.left = ""; card.style.width = ""; card.style.bottom = "";
-  }
-  function panelBox(){
-    var pr = panel.getBoundingClientRect();
-    if (!pr.width) return null;
-    var cs = getComputedStyle(panel);
-    var il = (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.paddingLeft) || 0);
-    var ir = (parseFloat(cs.borderRightWidth) || 0) + (parseFloat(cs.paddingRight) || 0);
-    var w = pr.width - il - ir;
-    return w > 0 ? { left: pr.left + il, width: w } : null;
-  }
-  function dock(){
-    var pb = panelBox();
-    if (!pb) return;
-    card.classList.add(CLS);
-    card.style.left = Math.round(pb.left) + "px";
-    card.style.width = Math.round(pb.width) + "px";
-    card.style.bottom = "10px";
-    docked = true;
-    verdict = "dock"; verdictSig = null;
-  }
-  function ownerTarget(){
-    /* Read-only prediction of APOC-V284's next stage write, from
-       V284's own formula over the CURRENT chrome (at mutation time
-       the in-flow card already inflates #ctlRow). Writes nothing. */
-    var stage = panel.querySelector(".map-stage");
-    var panelH = panel.clientHeight;
-    if (!stage || !panelH) return null;
-    var sum = 0;
-    var els = [document.getElementById("titleBubble"), document.getElementById("ctlRow"), panel.querySelector(".map-tools")];
-    for (var i = 0; i < els.length; i++){
-      var el = els[i]; if (!el) continue;
-      var cs = getComputedStyle(el);
-      if (cs.display === "none" || cs.position === "absolute" || cs.position === "fixed") continue;
-      var r = el.getBoundingClientRect(); if (!r.height) continue;
-      sum += r.height + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
-    }
-    var pcs = getComputedStyle(panel);
-    var scs = getComputedStyle(stage);
-    var gap = (parseFloat(pcs.paddingTop) || 0) + (parseFloat(pcs.paddingBottom) || 0)
-      + (parseFloat(scs.marginTop) || 0) + (parseFloat(scs.marginBottom) || 0);
-    var target = panelH - sum - gap;
-    var fl = panelH >= 480 ? 320 : 200;
-    return { h: Math.round(target < fl ? fl : target), stage: stage };
-  }
-  function evaluate(fromSync){
-    raf = 0;
-    if (card.hidden || card.classList.contains("floating") || stoodDown()){ undock(); return; }
-    var sig = ctxSig();
-    if (verdict === "flow" && sig !== verdictSig) verdict = null;
-    if (docked){
-      var pb = panelBox();
-      if (pb){ card.style.left = Math.round(pb.left) + "px"; card.style.width = Math.round(pb.width) + "px"; }
-      return;
-    }
-    if (verdict === "flow") return;
-    var r = card.getBoundingClientRect();
-    if (!r.width || !r.height) return; /* 0x0: V282's re-home lands first; a later pass measures the real rect */
-    if (fromSync === true){
-      /* Synchronous (mutation-time) pass: the stage still wears its
-         pre-card height, so the live rect is not the settled rect.
-         The card rides 1:1 with the stage's pending shrink, so its
-         settled visible height is the live one shifted by that
-         shrink — decide on the prediction, which is the dock
-         trigger's real question (V286). V287: this pass is DOCK-ONLY.
-         A sync "visible" prediction is not a verdict and never
-         latches — the settled passes below are the single authority
-         on the in-flow side, so the two can no longer disagree. */
-      if (card.parentElement && card.parentElement.id === "ctlRow"){
-        var ot = ownerTarget();
-        if (ot){
-          var shNow = ot.stage.getBoundingClientRect().height;
-          var predTop = r.top - (shNow - ot.h);
-          var predVisH = Math.min(predTop + r.height, window.innerHeight) - Math.max(predTop, 0);
-          if (predVisH < Math.min(r.height, 200) - 2) dock();
-        }
-      }
-      return;
-    }
-    /* Deferred pass (V287 settle gate): render this context's
-       verdict only on SETTLED geometry — APOC-V284's stage height
-       equal to its own predicted target over the current chrome.
-       Before the owner settles, the live rect is the pre-settle
-       state (in the clean state the card reads ~9px visible) and a
-       verdict taken from it races the owner's rAF: that was
-       GH-DOCK-CLEAN-NONDET. Once settled, the original V285 measured
-       test decides, and the verdict latches for the context. */
-    var ot2 = ownerTarget();
-    if (!ot2) return;
-    if (Math.abs(ot2.stage.getBoundingClientRect().height - ot2.h) > 0.6) return;
-    var visH = Math.min(r.bottom, window.innerHeight) - Math.max(r.top, 0);
-    if (visH < Math.min(r.height, 200) - 2){ dock(); return; }
-    verdict = "flow"; verdictSig = sig;
-  }
-  function schedule(){
-    if (!raf) raf = requestAnimationFrame(evaluate);
-    [150, 450, 900, 1600].forEach(function(ms){ setTimeout(evaluate, ms); });
-  }
-  document.addEventListener("click", schedule, true);
-  window.addEventListener("resize", schedule);
-  document.addEventListener("fullscreenchange", function(){ setTimeout(evaluate, 80); });
-  try {
-    var mo = new MutationObserver(function(){ evaluate(true); schedule(); });
-    document.querySelectorAll(".ctl-set").forEach(function(st){ mo.observe(st, { attributes: true, attributeFilter: ["hidden"] }); });
-    mo.observe(card, { attributes: true, attributeFilter: ["hidden"] });
-    var repo = document.querySelector(".map-repo"); if (repo) mo.observe(repo, { attributes: true, attributeFilter: ["hidden"] });
-  } catch(e) {}
-  try {
-    if (window.ResizeObserver) new ResizeObserver(function(){ if (!docked && !raf) raf = requestAnimationFrame(evaluate); }).observe(card);
-  } catch(e) {}
-  /* Drag handoff: grabbing a docked card's title gives it to the
-     card's own drag-float at the very rect it is docked at — the
-     card's pointerdown listener (registered earlier, fires after
-     this capture pass) then drags it as a user float. */
-  document.addEventListener("pointerdown", function(ev){
-    if (!docked || !ev.target || !card.contains(ev.target)) return;
-    if (!ev.target.closest || !ev.target.closest("h4") || ev.target.closest("button")) return;
-    var r = card.getBoundingClientRect();
-    undock();
-    card.classList.add("floating");
-    card.style.left = Math.round(r.left) + "px";
-    card.style.top = Math.round(r.top) + "px";
-    card.style.width = Math.round(r.width) + "px";
-  }, true);
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", schedule); else schedule();
-})();
-</script>
+<!-- APOC-V314: the APOC-V285-V287 card-dock script that stood here is FOLDED INTO the Layout owner (APOC-V314 block before the main script) — same outcomes, same latch stack, one decision-maker; ownerTarget() and the replica stage math are DELETED (the decision now reads the owner's own stageTarget()). The dock CSS above stands. -->
 <script>
 /* ================= APOC-V291 — FLUID ZOOM ENGINE (land304 / v2.91) =================
    Shaun's order 2026-11-14: "a more accurate fluid zoom configuration."
@@ -24437,7 +24917,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
     onDrop: function(){
       bar.classList.remove("zb-dragging305");
       var p = clampPos(bar.offsetLeft, bar.offsetTop);
-      try { localStorage.setItem(phoneMq() ? PKEY : KEY, JSON.stringify(p)); } catch(err){}
+      try { if (window.Layout314) window.Layout314.setSeat(phoneMq() ? "zoombarPhone" : "zoombar", p); else localStorage.setItem(phoneMq() ? PKEY : KEY, JSON.stringify(p)); } catch(err){} /* APOC-V314: the drop writes through the Layout owner */
     },
     onCancel: function(){ bar.classList.remove("zb-dragging305"); }
   });
@@ -24453,33 +24933,7 @@ body.apoc-tabs254 .apoc-track{display:none!important}
      the bar has landed in that band, seat it bottom-left, fully
      on-stage, and write the phone record so it sticks. A genuine
      phone seat (e.g. the {0,280} fallback) is never touched. */
-  var phoneRecAtLoad = null;
-  try { phoneRecAtLoad = localStorage.getItem(PKEY); } catch(err){}
-  function sharedZoomSeat() {
-    try { var sd = JSON.parse(localStorage.getItem("apocVttSharedDefaultV1") || "null"); if (sd && sd.layout) { var t = JSON.parse(sd.layout); if (t && t.zoomBar && typeof t.zoomBar.l === "number") return t.zoomBar; } } catch(err){}
-    return null;
-  }
-  var seatPoll305 = setInterval(function () {
-    try {
-      if (!phoneMq() || blocked305() || !bar.offsetWidth || !bar.style.left) return;
-      clearInterval(seatPoll305);
-      var fromDefault;
-      if (phoneRecAtLoad === null) fromDefault = true;
-      else {
-        var sz = sharedZoomSeat(), pr = null;
-        try { pr = JSON.parse(phoneRecAtLoad); } catch(err){}
-        fromDefault = !!(sz && pr && pr.l === sz.l && pr.t === sz.t);
-      }
-      if (!fromDefault) return;
-      if (bar.offsetTop >= 100) return;
-      var el = document.getElementById("apocMap"); if (!el || !el.parentElement) return;
-      var sideH = el.parentElement.clientHeight;
-      var t = Math.max(0, sideH - bar.offsetHeight - 12);
-      bar.style.left = "0px"; bar.style.top = t + "px";
-      try { localStorage.setItem(PKEY, JSON.stringify({ l: 0, t: t })); } catch(err){}
-    } catch(err){}
-  }, 200);
-  setTimeout(function () { clearInterval(seatPoll305); }, 6000);
+  /* APOC-V314: the APOC-V305 phone default-seat boot poll that stood here is FOLDED INTO the Layout owner (its phoneDefault duty — same conditions, same bottom-left seat, same formula); a genuine phone seat is never touched. */
 })();
 </script>
 </body>
