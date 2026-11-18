@@ -5869,6 +5869,7 @@ setInterval(loadSharedEntries, 60000);
   const tokenStatusEl = $("tokenStatus");
     window.tokenStatusEl = tokenStatusEl;
   window.loadTokens = loadTokens; window.saveTokens = saveTokens; window.drawTokens = drawTokens;
+  window.__apocTokenMarkers = tokenMarkers;   /* APOC-V318: satellite blocks (the Group Grab sweep) reach the rendered token markers through here — tokenMarkers itself stays module-scope */
   Object.defineProperty(window, "tokens", { configurable: true, get(){ return tokens; }, set(v){ tokens = v; } });
   const tokenForm = $("tokenForm");
   let editingToken = null, draftStatus = [];
@@ -6117,6 +6118,9 @@ setInterval(loadSharedEntries, 60000);
       PointerMachine313.bindMarker(m, {
         key: "token:" + tk.id,
         canDrag: () => !tk.lock && !isProjecting(),
+        onDragStart: () => { if (window.__apocGroupDrag) window.__apocGroupDrag.start(tk); },   /* APOC-V318: if this token sits in the Group Grab group, the drag is a GROUP drag — the group block owns the verbs */
+        onMove: (s, ll) => { if (window.__apocGroupDrag) window.__apocGroupDrag.move(tk, ll, m); },
+        onCancel: () => { if (window.__apocGroupDrag) window.__apocGroupDrag.cancel(tk); },
         onClick: () => {
           if (apocCondArmed()) { openCondPopup(tk, m); return; }
           if (isProjecting() || document.body.classList.contains("map-expanded")) {
@@ -6139,6 +6143,12 @@ setInterval(loadSharedEntries, 60000);
             p = { x: Math.round(sxS / MW * 10000) / 100, y: Math.round((1 - syS / MH) * 10000) / 100 };
           }
           tk.x = p.x; tk.y = p.y;
+          if (window.__apocGroupDrag && window.__apocGroupDrag.member(tk)) {   /* APOC-V318: a grouped token's drop settles the WHOLE group at the leader's snapped delta and saves it — the solo save below is not the group's */
+            const okG = await window.__apocGroupDrag.drop(tk);
+            tokenStatusEl.textContent = okG ? `${tk.name} moved § saved for everybody.` : "That move didn't save § try again.";
+            if (!okG) loadTokens(true); else drawTokens();
+            return;
+          }
           const ok = await saveTokens();
           tokenStatusEl.textContent = ok ? `${tk.name} moved § saved for everybody.` : "That move didn't save § try again.";
           if (!ok) loadTokens(true); else drawTokens();
@@ -12465,7 +12475,7 @@ function finish(typeKey, cols, rows, grid, roomAt, rooms, _unused, rng, extra){
 })();
 </script>
 <script>
-                var BUILD_STAMP = "2026-11-17-1132";         fetch("version.json", { cache: "no-store" })
+                var BUILD_STAMP = "2026-11-17-1552";         fetch("version.json", { cache: "no-store" })
           .then(function (r) { return r.ok ? r.json() : null; })
           .then(function (d) {
             var el = document.getElementById("siteVersion");
@@ -22198,6 +22208,7 @@ return module.exports; })();</script>
    (drawn on the stamp's own img/box in its icon) — dark-blue treatment
    chrome stays for controls; the outline is selection state only. */
 .stamp-icon .apoc-grp-sel{outline:2px dashed #e8a33d;outline-offset:1px;border-radius:4px}
+.tk-icon.apoc-grp-tok .tk-disc{outline:2px dashed #e8a33d;outline-offset:1px}
 #apocGrpChip{position:fixed;left:8px;bottom:8px;z-index:1400;display:none;align-items:center;gap:8px;background:rgba(10,12,16,.92);border:1px solid #1e40af;border-radius:8px;color:#f5f5f5;font-size:.8rem;padding:4px 8px}
 #apocGrpChip.on{display:inline-flex}
 #apocGrpChip button{font:inherit;font-size:.78rem;padding:2px 8px;border-radius:6px;border:1px solid #1e40af;background:rgba(30,64,175,.25);color:#fff;cursor:pointer;min-height:0}
@@ -22233,6 +22244,19 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
   function projecting(){ return document.body.classList.contains("displaying"); }
   var group = [];
   window.__apocGroup = function(){ return group.slice(); };
+  /* APOC-V318: the contextmenu guard for the right-drag sweep (in
+     bind(), below). Registered at IIFE scope so it stands early in
+     the document's capture order. It eats exactly ONE contextmenu —
+     the one a completed (or Esc-cancelled) sweep's release
+     generates, flagged by timestamp at the sweep's end. Any other
+     right-click passes through untouched, exactly as before. */
+  window.__apocSweepSuppressAt = 0;
+  document.addEventListener("contextmenu", function(e){
+    if (window.__apocSweepSuppressAt && Date.now() - window.__apocSweepSuppressAt < 1000) {
+      window.__apocSweepSuppressAt = 0;
+      e.preventDefault(); e.stopImmediatePropagation();
+    }
+  }, true);
   function chip(){
     var c = $("apocGrpChip");
     if (!c) {
@@ -22252,6 +22276,72 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
     c.classList.toggle("on", group.length > 0 || !!window.__apocMarqueeArm);
     var n = $("apocGrpN"); if (n) n.textContent = group.length ? (group.length + " grouped — drag any one to move all") : "";
     markIcons();
+    markTokens();
+  }
+  /* APOC-V318: tokens are group members too — the pickable set is
+     placed assets AND tokens, in the ONE Group Grab group. A token
+     entry in the group is the live token record itself; isTok
+     recognises it against the live tokens array (window.tokens is
+     the app's own getter). Locked tokens never join: a locked
+     token's drag is refused everywhere, so it cannot be swept or
+     Ctrl+clicked into a move group. */
+  function tokMarkers(){ return window.__apocTokenMarkers || {}; }
+  /* The % -> latlng converter lives module-scope in the main script
+     and is NOT exported; satellite blocks work from the exported
+     toXY plus Leaflet's own conversion pair. llForPct anchors on a
+     marker's CURRENT latlng (whose % toXY reports) and derives the
+     local units-per-% empirically from the map's conversion pair,
+     so it is exact at rotation 0 on any map without touching the
+     frame constants. */
+  function llForPct(mm, x, y){
+    if (!mm || !window.map || !window.toXY || !window.L) return null;
+    var ll = mm.getLatLng();
+    var cur = window.toXY(ll);
+    var dx = x - cur.x, dy = y - cur.y;
+    if (!dx && !dy) return ll;
+    try {
+      var cp = window.map.latLngToContainerPoint(ll);
+      var llX = window.map.containerPointToLatLng(window.L.point(cp.x + 100, cp.y));
+      var llY = window.map.containerPointToLatLng(window.L.point(cp.x, cp.y + 100));
+      var dXp = window.toXY(llX).x - cur.x, dYp = window.toXY(llY).y - cur.y;
+      var perX = dXp ? (llX.lng - ll.lng) / dXp : 0;
+      var perY = dYp ? (llY.lat - ll.lat) / dYp : 0;
+      return window.L.latLng(ll.lat + dy * perY, ll.lng + dx * perX);
+    } catch (e) { return null; }
+  }
+  function isTok(it){
+    var ts = window.tokens;
+    if (!ts || !it || !it.id) return false;
+    for (var i = 0; i < ts.length; i++) if (ts[i] === it || ts[i].id === it.id) return true;
+    return false;
+  }
+  function syncMember(it){
+    if (!isTok(it)) return;
+    var mm = tokMarkers()[it.id];
+    var ll = mm ? llForPct(mm, it.x, it.y) : null;
+    if (mm && ll) { try { mm.setLatLng(ll); } catch(e){} }
+  }
+  function markTokens(){
+    var tm = tokMarkers(), ids = {};
+    group.forEach(function(g){ if (isTok(g)) ids[g.id] = 1; });
+    for (var id in tm) { var mm = tm[id]; var el = mm && mm.getElement ? mm.getElement() : null; if (el) el.classList.toggle("apoc-grp-tok", !!ids[id]); }
+  }
+  function hitToken(e){
+    var ts = window.tokens;
+    if (!ts || !window.map || !window.map.mouseEventToLatLng) return null;
+    var tm = tokMarkers();
+    var cpE = window.map.latLngToContainerPoint(window.map.mouseEventToLatLng(e));
+    for (var i = ts.length - 1; i >= 0; i--) {
+      var tk = ts[i];
+      if (tk.lock) continue;
+      var mm = tm[tk.id];
+      if (!mm || !mm.getElement) continue;
+      var el = mm.getElement(); if (!el) continue;
+      var c = window.map.latLngToContainerPoint(mm.getLatLng());
+      var r = Math.max(10, (el.offsetWidth || 28) / 2);
+      if (Math.hypot(cpE.x - c.x, cpE.y - c.y) <= r) return tk;
+    }
+    return null;
   }
   function markIcons(){
     if (!window.map || !window.map.eachLayer || !window.toXY) return;
@@ -22262,6 +22352,7 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
       if (!rec || !rec.eachLayer) return;
       rec.eachLayer(function(l){
         if (!l || !l._icon || !l.getLatLng) return;
+        if (l._icon.classList && l._icon.classList.contains("tk-icon")) return;   /* APOC-V318: token icons wear the group mark via markTokens (by id), not this position match */
         var cls = l._icon.querySelector && l._icon.querySelector("img, span");
         if (!cls) return;
         var p = window.toXY(l.getLatLng());
@@ -22314,6 +22405,7 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
       var ll = window.map.mouseEventToLatLng(e);
       var p = window.toXY(ll);
       var hit = hitStamp(p);
+      if (!hit) hit = hitToken(e);   /* APOC-V318: Ctrl+click composes tokens into the same group the sweep builds */
       e.preventDefault(); e.stopPropagation();
       if (hit) toggle(hit);
     }, true);
@@ -22418,16 +22510,226 @@ select,input[type="text"],input[type="number"]{background:#0d1017;color:#eef2fb;
             var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
             members.forEach(function(it){ minX = Math.min(minX, it.x); maxX = Math.max(maxX, it.x); minY = Math.min(minY, it.y); maxY = Math.max(maxY, it.y); });
             var cdx = Math.max(-minX, Math.min(dx, 100 - maxX)), cdy = Math.max(-minY, Math.min(dy, 100 - maxY));
-            members.forEach(function(it){ it.x += cdx; it.y += cdy; });
+            members.forEach(function(it){ it.x += cdx; it.y += cdy; syncMember(it); });
             last = p; moved = true;
             if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
             refreshChip();
           }
         },
-        onDrop: function(){ if (moved && window.vttDraw && window.vttDraw.reorder) members.forEach(function(it){ window.vttDraw.reorder(it, 1); }); },
-        onCancel: function(){ orig.forEach(function(o){ o.it.x = o.x; o.it.y = o.y; }); if (window.vttDraw && window.vttDraw.render) window.vttDraw.render(); refreshChip(); }
+        onDrop: function(){ if (!moved) return; var hasTok = false; members.forEach(function(it){ if (isTok(it)) { hasTok = true; return; } if (window.vttDraw && window.vttDraw.reorder) window.vttDraw.reorder(it, 1); }); if (hasTok && window.saveTokens) window.saveTokens(); },   /* APOC-V318: stamps save through the reorder path as always; token members save in ONE saveTokens */
+        onCancel: function(){ orig.forEach(function(o){ o.it.x = o.x; o.it.y = o.y; syncMember(o.it); }); if (window.vttDraw && window.vttDraw.render) window.vttDraw.render(); refreshChip(); }
       };
     });
+
+    /* APOC-V318: token-led group drag. A press on a grouped TOKEN is
+       claimed by the token's own pointer-machine binding (its icon
+       is a marker element; the stamp surfaces never see it), so the
+       binding delegates here: start() snapshots the group, move()
+       follows the leader's board-clamped delta, drop() settles
+       every member at the leader's final (grid-snapped) delta and
+       saves — stamps through the same reorder path the stamp-led
+       drop uses, tokens through ONE saveTokens — and cancel()
+       restores. The group, the chip and the selection stay the ONE
+       Group Grab group; only the drag verb arrives by a second door. */
+    var gDrag318 = null;
+    function clampDelta318(orig, dx, dy){
+      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      orig.forEach(function(o){ minX = Math.min(minX, o.x); maxX = Math.max(maxX, o.x); minY = Math.min(minY, o.y); maxY = Math.max(maxY, o.y); });
+      return { dx: Math.max(-minX, Math.min(dx, 100 - maxX)), dy: Math.max(-minY, Math.min(dy, 100 - maxY)) };
+    }
+    window.__apocGroupDrag = {
+      member: function(tk){ return inGroup(tk); },
+      start: function(tk){
+        if (!inGroup(tk)) { gDrag318 = null; return; }
+        var members = group.map(liveOf);
+        gDrag318 = { leader: tk, orig: members.map(function(it){ return { it: it, x: it.x, y: it.y }; }) };
+      },
+      move: function(tk, ll, m){
+        if (!gDrag318 || gDrag318.leader !== tk || !window.toXY) return;
+        var lead0 = null;
+        gDrag318.orig.forEach(function(o){ if (o.it === tk) lead0 = o; });
+        if (!lead0) return;
+        var p = window.toXY(ll);
+        var d = clampDelta318(gDrag318.orig, p.x - lead0.x, p.y - lead0.y);
+        gDrag318.orig.forEach(function(o){ if (o.it === tk) return; o.it.x = o.x + d.dx; o.it.y = o.y + d.dy; syncMember(o.it); });
+        var ll2 = m ? llForPct(m, lead0.x + d.dx, lead0.y + d.dy) : null;
+        if (m && ll2) { try { m.setLatLng(ll2); } catch(e){} }
+        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+      },
+      drop: async function(tk){
+        if (!gDrag318 || gDrag318.leader !== tk) return true;
+        var g = gDrag318; gDrag318 = null;
+        var lead0 = null;
+        g.orig.forEach(function(o){ if (o.it === tk) lead0 = o; });
+        if (!lead0) return true;
+        var d = clampDelta318(g.orig, tk.x - lead0.x, tk.y - lead0.y);
+        g.orig.forEach(function(o){ if (o.it === tk) return; o.it.x = o.x + d.dx; o.it.y = o.y + d.dy; syncMember(o.it); });
+        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+        var ok = true, hasTok = false;
+        for (var i = 0; i < g.orig.length; i++) {
+          var it = g.orig[i].it;
+          if (isTok(it)) { hasTok = true; continue; }
+          if (window.vttDraw && window.vttDraw.reorder) { var r = await window.vttDraw.reorder(it, 1); if (!r) ok = false; }
+        }
+        if (hasTok && window.saveTokens) { var okT = await window.saveTokens(); if (!okT) ok = false; }
+        return ok;
+      },
+      cancel: function(tk){
+        if (!gDrag318 || gDrag318.leader !== tk) return;
+        gDrag318.orig.forEach(function(o){ o.it.x = o.x; o.it.y = o.y; syncMember(o.it); });
+        gDrag318 = null;
+        if (window.vttDraw && window.vttDraw.render) window.vttDraw.render();
+      }
+    };
+
+    /* APOC-V318 (Shaun, 2026-11-17): RIGHT-DRAG SWEEP PICK — "I want
+       to be able to right click, drag over something and pick it.
+       And as many things as there are to pick." Hold the RIGHT mouse
+       button and drag across the map: every placed asset (stamp) and
+       token the sweep rectangle touches joins the Group Grab group —
+       live, highlighted as the rectangle crosses it, no count limit.
+       The pick REPLACES the group (the marquee's established
+       semantics for rectangle selection in this block); Ctrl+click
+       and long-press keep composing on the same group afterwards.
+       Picking writes NOTHING — selection is session state; the first
+       write is the group move's, exactly as Group Grab has always
+       worked.
+       Gesture discipline, mirroring the pointer machine: the sweep
+       arms only past the same 10 px resistance; a right-press
+       released under it is a plain right-click and nothing here has
+       run but a coordinate note — the pin card, the word reset, the
+       geometric right-click menu and the chip menus all still fire
+       from the contextmenu event exactly as before. A sweep that DID
+       arm owns its release: the contextmenu it generates is
+       swallowed once (the capture-phase guard at IIFE scope), so no
+       card, reset or menu can fire off the back of a sweep. Esc
+       mid-sweep cancels — the pre-sweep group is restored and the
+       release's menu is still swallowed. A left press mid-sweep
+       cancels it the same way a right press cancels a machine drag.
+       Touch has no right button: nothing here binds touch, and the
+       long-press Group Grab above is untouched. While a draw tool is
+       armed, or while projecting, or with Ctrl held (the Ctrl+click
+       toggle above owns Ctrl+press), or while a pointer-machine
+       session is live, the sweep does not arm. */
+    var sweep318 = null;
+    function sweepRectPct(){
+      var a = sweep318.p0, b = sweep318.cur;
+      return { x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x), y0: Math.min(a.y, b.y), y1: Math.max(a.y, b.y) };
+    }
+    function sweepCircleHit(cx, cy, r, R){
+      var nx = Math.max(R.x0, Math.min(cx, R.x1)), ny = Math.max(R.y0, Math.min(cy, R.y1));
+      return Math.hypot(cx - nx, cy - ny) <= r;
+    }
+    function rPctOf(it){ return Math.max(1.8, Math.max(it.fw || 0, it.fh || 0, it.size || 1) * 5 * 0.62); }   /* hitStamp's radius formula, shared with the Ctrl+click pick */
+    function sweepPick(){
+      var picked = [];
+      /* stamps: tested in % space, exactly the marquee's convention —
+         the sweep rect is the press/current points through the page's
+         own toXY, item centres are the records, the radius is
+         hitStamp's. No container-point conversion is involved, so
+         nothing here can desync from the map's render. */
+      var R = sweepRectPct();
+      if (window.vttDraw && window.vttDraw.items) {
+        window.vttDraw.items().forEach(function(it){
+          if (it.type !== "stamp") return;
+          if (it.gm && !gmOn()) return;
+          if (sweepCircleHit(it.x, it.y, rPctOf(it), R)) picked.push(it);
+        });
+      }
+      /* tokens: tested in container points, but every point comes
+         from Leaflet's own conversion pair applied to the events'
+         latlngs and the markers' latlngs — one consistent space. */
+      var ts = window.tokens || [], tm = tokMarkers();
+      if (ts.length && window.map && window.map.latLngToContainerPoint) {
+        var ca = window.map.latLngToContainerPoint(sweep318.ll0), cb = window.map.latLngToContainerPoint(sweep318.ll1);
+        var RC = { x0: Math.min(ca.x, cb.x), x1: Math.max(ca.x, cb.x), y0: Math.min(ca.y, cb.y), y1: Math.max(ca.y, cb.y) };
+        for (var i = 0; i < ts.length; i++) {
+          var tk = ts[i];
+          if (tk.lock) continue;
+          var mm = tm[tk.id];
+          if (!mm || !mm.getElement) continue;
+          var el = mm.getElement(); if (!el) continue;
+          var c2 = window.map.latLngToContainerPoint(mm.getLatLng());
+          if (sweepCircleHit(c2.x, c2.y, Math.max(10, (el.offsetWidth || 28) / 2), RC)) picked.push(tk);
+        }
+      }
+      setGroup(picked);
+    }
+    function sweepDrawRect(){
+      if (!window.L) return;
+      try {
+        if (sweep318.layer) sweep318.layer.setBounds([sweep318.ll0, sweep318.ll1]);
+        else sweep318.layer = window.L.rectangle([sweep318.ll0, sweep318.ll1], { color: "#e8a33d", weight: 1, dashArray: "5 4", fillColor: "#e8a33d", fillOpacity: 0.08, interactive: false }).addTo(window.map);
+      } catch (err) {}
+    }
+    function sweepVisualEnd(){
+      if (!sweep318) return;
+      if (sweep318.layer) { try { window.map.removeLayer(sweep318.layer); } catch (e) {} sweep318.layer = null; }
+      if (sweep318.dragOff && window.map.dragging) { try { window.map.dragging.enable(); } catch (e) {} sweep318.dragOff = false; }
+    }
+    function sweepCancel(){
+      if (!sweep318) return;
+      var g0 = sweep318.group0, seen = sweep318.cmSeen;
+      sweepVisualEnd();
+      if (!seen) window.__apocSweepSuppressAt = Date.now();
+      sweep318 = null;
+      setGroup(g0);
+    }
+    /* Platform guard: on down-fired-contextmenu platforms (Linux —
+       Shaun's machines are Windows, where it fires on release) the
+       contextmenu arrives at PRESS, before anyone knows the press
+       will become a drag, and if the native menu is allowed to open
+       it kills the pointer stream mid-drag (Leaflet's marker paths
+       stop the DOM event before the map's own preventDefault can
+       run — a sweep starting over a word died exactly that way).
+       While a sweep candidate exists, preventDefault the event —
+       ONLY that: every page handler still receives it exactly as
+       today (the pin card, the word reset and the geometric menu
+       all still fire on a plain press), but the native menu never
+       opens, so the drag survives on either platform. cmSeen then
+       tells the finalize path the gesture already delivered its
+       contextmenu, so no release-swallow is armed for it. */
+    document.addEventListener("contextmenu", function(e){
+      if (sweep318) { sweep318.cmSeen = true; e.preventDefault(); }
+    }, true);
+    mapEl.addEventListener("pointerdown", function(e){
+      if (sweep318) { if (e.button === 0) { if (sweep318.active) sweepCancel(); else sweep318 = null; } return; }
+      if (projecting() || toolArmed()) return;
+      if (e.button !== 2 || e.pointerType !== "mouse") return;
+      if (e.ctrlKey || e.metaKey) return;
+      if (window.__apoc313 && window.__apoc313.state().active) return;
+      if (!window.toXY || !window.map || !window.map.mouseEventToLatLng) return;
+      var ll0 = window.map.mouseEventToLatLng(e);
+      sweep318 = { id: e.pointerId, active: false, layer: null, dragOff: false, cmSeen: false,
+        cx0: e.clientX, cy0: e.clientY,
+        ll0: ll0, ll1: ll0,
+        p0: window.toXY(ll0), cur: null, group0: group.slice() };
+      sweep318.cur = sweep318.p0;
+    }, true);
+    mapEl.addEventListener("pointermove", function(e){
+      if (!sweep318 || e.pointerId !== sweep318.id) return;
+      if (!sweep318.active) {
+        if (Math.hypot(e.clientX - sweep318.cx0, e.clientY - sweep318.cy0) <= 10) return;
+        if (window.__apoc313 && window.__apoc313.state().active) { sweep318 = null; return; }
+        sweep318.active = true;
+        if (window.map.dragging && window.map.dragging.enabled()) { window.map.dragging.disable(); sweep318.dragOff = true; }
+        try { mapEl.setPointerCapture(e.pointerId); } catch (err) {}
+      }
+      sweep318.ll1 = window.map.mouseEventToLatLng(e);
+      sweep318.cur = window.toXY(sweep318.ll1);
+      sweepDrawRect();
+      sweepPick();
+    }, true);
+    mapEl.addEventListener("pointerup", function(e){
+      if (!sweep318 || e.pointerId !== sweep318.id || e.button !== 2) return;
+      var was = sweep318.active, seen = sweep318.cmSeen;
+      sweepVisualEnd();
+      sweep318 = null;
+      if (was) { if (!seen) window.__apocSweepSuppressAt = Date.now(); refreshChip(); }
+    }, true);
+    mapEl.addEventListener("pointercancel", function(e){ if (sweep318 && e.pointerId === sweep318.id) { if (sweep318.active) sweepCancel(); else sweep318 = null; } }, true);
+    document.addEventListener("keydown", function(e){ if (e.key === "Escape" && sweep318 && sweep318.active) sweepCancel(); }, true);
+    window.addEventListener("blur", function(){ if (sweep318 && sweep318.active) sweepCancel(); else sweep318 = null; });
   }
   var iv = setInterval(function(){ try { chip(); } catch(e){} bind(); if (bind.done) clearInterval(iv); }, 800);
   setTimeout(function(){ clearInterval(iv); }, 120000); })();
